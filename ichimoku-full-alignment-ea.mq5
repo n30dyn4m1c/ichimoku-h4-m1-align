@@ -13,9 +13,13 @@ input int    Tenkan    = 9;
 input int    Kijun     = 26;
 input int    SenkouB   = 52;
 input double FullLots  = 0.20;  // Lot size per position (Full MN-M1)
+input int    FullCount = 3;     // Number of positions (Full MN-M1)
 input double H4Lots    = 0.10;  // Lot size per position (H4-M1)
+input int    H4Count   = 3;     // Number of positions (H4-M1)
 input double H1Lots    = 0.10;  // Lot size per position (H1-M1)
+input int    H1Count   = 1;     // Number of positions (H1-M1)
 input double M30Lots   = 0.05;  // Lot size per position (M30-M1)
+input int    M30Count  = 1;     // Number of positions (M30-M1)
 input int    Slippage  = 30;    // Max slippage in points
 
 input double BuyTP1    = 0;     // Buy TP for position 1
@@ -39,8 +43,8 @@ ENUM_TIMEFRAMES TFs[TF_COUNT] = {
 // Exit TF index per tier: Full=M15(6), H4=M5(7), H1=M1(8), M30=M1(8)
 int ExitTFIndex[TIER_COUNT] = {6, 7, 8, 8};
 
-// Positions per tier: Full=3, H4=3, H1=1, M30=1
-int PositionsPerTier[TIER_COUNT] = {3, 3, 1, 1};
+// Positions per tier — populated from inputs in OnInit
+int PositionsPerTier[TIER_COUNT];
 
 // Magic numbers per tier
 int MAGIC_FULL = 20260301;
@@ -95,6 +99,11 @@ int OnInit()
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
+
+   PositionsPerTier[0] = FullCount;
+   PositionsPerTier[1] = H4Count;
+   PositionsPerTier[2] = H1Count;
+   PositionsPerTier[3] = M30Count;
 
    trade.SetDeviationInPoints(Slippage);
 
@@ -284,7 +293,7 @@ bool OpenPositions(string sym, bool isBuy, int tier)
    bool ok = true;
    for(int i = 0; i < count; i++)
    {
-      double tp = tps[i];
+      double tp = (i < 3) ? tps[i] : 0;
       if(isBuy)
       {
          if(!trade.Buy(lots, sym, ask, 0, tp, cmnt))
