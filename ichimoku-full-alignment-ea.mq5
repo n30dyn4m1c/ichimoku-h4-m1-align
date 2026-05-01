@@ -333,12 +333,12 @@ bool OpenRevPositions(string sym, bool isBuy)
    {
       if(isBuy)
       {
-         if(!trade.Buy(RevLots, sym, ask, 0, 0, "Reversion"))
+         if(!trade.Buy(RevLots, sym, ask, 0, 0, "Reversion-H4"))
             ok = false;
       }
       else
       {
-         if(!trade.Sell(RevLots, sym, bid, 0, 0, "Reversion"))
+         if(!trade.Sell(RevLots, sym, bid, 0, 0, "Reversion-H4"))
             ok = false;
       }
    }
