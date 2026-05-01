@@ -35,8 +35,8 @@ ENUM_TIMEFRAMES TFs[TF_COUNT] = {
    PERIOD_M15, PERIOD_M5, PERIOD_M1
 };
 
-// Exit TF index per tier: Full=M15(6), H4=M5(7), H1=M1(8)
-int ExitTFIndex[TIER_COUNT] = {6, 7, 8};
+// Exit TF index per tier: Full=M15(6), H4=M15(6), H1=M1(8)
+int ExitTFIndex[TIER_COUNT] = {6, 6, 8};
 
 // Positions per tier — populated from inputs in OnInit
 int PositionsPerTier[TIER_COUNT];
