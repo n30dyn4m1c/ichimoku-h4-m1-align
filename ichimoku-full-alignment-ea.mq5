@@ -510,17 +510,17 @@ void OnTick()
                          EnumToString(TFs[exitIdx]) + " broke)";
             Print(msg); Alert(msg); SendNotification(msg);
 
-            // H4 tier only: if M5 specifically reversed (not just neutral), arm Reversion-H4 watch
-            if(tier == 1 && exitSt == -tierState[s][tier])
+            // H4 tier only: arm Reversion-H4 watch on any H4-M1 exit; M15 confirmation gates the entry
+            if(tier == 1 && revState[s] == 0)
             {
-               revWatchDir[s]    = exitSt;
+               revWatchDir[s]    = -tierState[s][tier];
                revWatchActive[s] = true;
             }
 
-            // H1 tier only: if M1 specifically reversed (not just neutral), arm Reversion-H1 watch
-            if(tier == 2 && exitSt == -tierState[s][tier])
+            // H1 tier only: arm Reversion-H1 watch on any H1-M1 exit; M5 confirmation gates the entry
+            if(tier == 2 && revH1State[s] == 0)
             {
-               revH1WatchDir[s]    = exitSt;
+               revH1WatchDir[s]    = -tierState[s][tier];
                revH1WatchActive[s] = true;
             }
 
