@@ -22,13 +22,6 @@ input double M30Lots   = 0.05;  // Lot size per position (M30-M1)
 input int    M30Count  = 1;     // Number of positions (M30-M1)
 input int    Slippage  = 30;    // Max slippage in points
 
-input double BuyTP1    = 0;     // Buy TP for position 1
-input double BuyTP2    = 0;     // Buy TP for position 2
-input double BuyTP3    = 0;     // Buy TP for position 3
-input double SellTP1   = 0;     // Sell TP for position 1
-input double SellTP2   = 0;     // Sell TP for position 2
-input double SellTP3   = 0;     // Sell TP for position 3
-
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
 #define TF_COUNT 9
@@ -284,24 +277,19 @@ bool OpenPositions(string sym, bool isBuy, int tier)
    int    count = PositionsPerTier[tier];
    string cmnt  = TierLabel(tier);
 
-   double tps[3];
-   if(isBuy) { tps[0] = BuyTP1;  tps[1] = BuyTP2;  tps[2] = BuyTP3;  }
-   else      { tps[0] = SellTP1; tps[1] = SellTP2; tps[2] = SellTP3; }
-
    trade.SetExpertMagicNumber(MagicForTier(tier));
 
    bool ok = true;
    for(int i = 0; i < count; i++)
    {
-      double tp = (i < 3) ? tps[i] : 0;
       if(isBuy)
       {
-         if(!trade.Buy(lots, sym, ask, 0, tp, cmnt))
+         if(!trade.Buy(lots, sym, ask, 0, 0, cmnt))
             ok = false;
       }
       else
       {
-         if(!trade.Sell(lots, sym, bid, 0, tp, cmnt))
+         if(!trade.Sell(lots, sym, bid, 0, 0, cmnt))
             ok = false;
       }
    }
