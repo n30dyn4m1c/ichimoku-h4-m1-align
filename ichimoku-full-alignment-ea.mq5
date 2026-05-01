@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Multi-Tier Alignment EA (MN→M1, H4→M1, H1→M1, M30→M1) |
-//| Trades four conviction tiers with tier-specific exits            |
+//| Ichimoku Multi-Tier Alignment EA (MN→M1, H4→M1, H1→M1)         |
+//| Trades three conviction tiers with tier-specific exits           |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -18,14 +18,12 @@ input double H4Lots    = 0.10;  // Lot size per position (H4-M1)
 input int    H4Count   = 3;     // Number of positions (H4-M1)
 input double H1Lots    = 0.10;  // Lot size per position (H1-M1)
 input int    H1Count   = 1;     // Number of positions (H1-M1)
-input double M30Lots   = 0.05;  // Lot size per position (M30-M1)
-input int    M30Count  = 1;     // Number of positions (M30-M1)
 input int    Slippage  = 30;    // Max slippage in points
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
 #define TF_COUNT 9
-#define TIER_COUNT 4
+#define TIER_COUNT 3
 
 ENUM_TIMEFRAMES TFs[TF_COUNT] = {
    PERIOD_MN1, PERIOD_W1, PERIOD_D1,
@@ -33,8 +31,8 @@ ENUM_TIMEFRAMES TFs[TF_COUNT] = {
    PERIOD_M15, PERIOD_M5, PERIOD_M1
 };
 
-// Exit TF index per tier: Full=M15(6), H4=M5(7), H1=M1(8), M30=M1(8)
-int ExitTFIndex[TIER_COUNT] = {6, 7, 8, 8};
+// Exit TF index per tier: Full=M15(6), H4=M5(7), H1=M1(8)
+int ExitTFIndex[TIER_COUNT] = {6, 7, 8};
 
 // Positions per tier — populated from inputs in OnInit
 int PositionsPerTier[TIER_COUNT];
@@ -43,7 +41,6 @@ int PositionsPerTier[TIER_COUNT];
 int MAGIC_FULL = 20260301;
 int MAGIC_H4   = 20260302;
 int MAGIC_H1   = 20260303;
-int MAGIC_M30  = 20260304;
 
 int      ich[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
@@ -96,7 +93,6 @@ int OnInit()
    PositionsPerTier[0] = FullCount;
    PositionsPerTier[1] = H4Count;
    PositionsPerTier[2] = H1Count;
-   PositionsPerTier[3] = M30Count;
 
    trade.SetDeviationInPoints(Slippage);
 
@@ -132,7 +128,6 @@ void SyncStateFromPositions()
       if(magic == MAGIC_FULL) tier = 0;
       else if(magic == MAGIC_H4) tier = 1;
       else if(magic == MAGIC_H1) tier = 2;
-      else if(magic == MAGIC_M30) tier = 3;
       else continue;
 
       for(int s = 0; s < symsCount; s++)
@@ -223,9 +218,6 @@ int AlignH4(const int s)   { return AlignRange(s, 3, 8); }
 // H1 → M1 (indices 4-8, 5 TFs)
 int AlignH1(const int s)   { return AlignRange(s, 4, 8); }
 
-// M30 → M1 (indices 5-8, 4 TFs)
-int AlignM30(const int s)  { return AlignRange(s, 5, 8); }
-
 //==============================================================
 // Utility Functions
 //==============================================================
@@ -249,24 +241,21 @@ int MagicForTier(const int tier)
 {
    if(tier == 0) return MAGIC_FULL;
    if(tier == 1) return MAGIC_H4;
-   if(tier == 2) return MAGIC_H1;
-   return MAGIC_M30;
+   return MAGIC_H1;
 }
 
 double LotsForTier(const int tier)
 {
    if(tier == 0) return FullLots;
    if(tier == 1) return H4Lots;
-   if(tier == 2) return H1Lots;
-   return M30Lots;
+   return H1Lots;
 }
 
 string TierLabel(const int tier)
 {
    if(tier == 0) return "Full MN-M1";
    if(tier == 1) return "H4-M1";
-   if(tier == 2) return "H1-M1";
-   return "M30-M1";
+   return "H1-M1";
 }
 
 bool OpenPositions(string sym, bool isBuy, int tier)
@@ -395,22 +384,6 @@ void OnTick()
 
             if(OpenPositions(syms[s], isBuy, 2))
                tierState[s][2] = st;
-         }
-      }
-
-      // Tier 3: M30-M1 (only if H1, H4, and Full not active)
-      if(tierState[s][3] == 0 && tierState[s][2] == 0 && tierState[s][1] == 0 && tierState[s][0] == 0)
-      {
-         int st = AlignM30(s);
-         if(st != 0)
-         {
-            bool isBuy = (st == 1);
-            string action = isBuy ? "Buy" : "Sell";
-            string msg = PCTime() + " | " + action + " " + syms[s] + " x1 @ " + DoubleToString(LotsForTier(3), 2) + " (M30-M1)";
-            Print(msg); Alert(msg); SendNotification(msg);
-
-            if(OpenPositions(syms[s], isBuy, 3))
-               tierState[s][3] = st;
          }
       }
    }
