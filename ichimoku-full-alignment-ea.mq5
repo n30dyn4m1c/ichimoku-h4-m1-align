@@ -16,6 +16,8 @@ input double FullLots  = 0.20;  // Lot size per position (Full MN-M1)
 input int    FullCount = 3;     // Number of positions (Full MN-M1)
 input double H4Lots    = 0.10;  // Lot size per position (H4-M1)
 input int    H4Count   = 3;     // Number of positions (H4-M1)
+input double RevLots   = 0.10;  // Lot size per position (Reversion)
+input int    RevCount  = 3;     // Number of positions (Reversion)
 //input double H1Lots    = 0.10;  // Lot size per position (H1-M1) [H1-M1 tier disabled]
 //input int    H1Count   = 1;     // Number of positions (H1-M1)   [H1-M1 tier disabled]
 input int    Slippage  = 30;    // Max slippage in points
@@ -41,6 +43,7 @@ int PositionsPerTier[TIER_COUNT];
 // Magic numbers per tier
 int MAGIC_FULL = 20260301;
 int MAGIC_H4   = 20260302;
+int MAGIC_REV  = 20260304;
 //int MAGIC_H1   = 20260303;  // [H1-M1 tier disabled]
 
 int      ich[MAX_SYMS][TF_COUNT];
@@ -51,6 +54,11 @@ datetime lastM1bar = 0;
 // Track active state per symbol per tier
 // 0=no position, 1=long, -1=short
 int      tierState[MAX_SYMS][TIER_COUNT];
+
+// Reversion trade state (triggered when H4-M1 exits due to M5 specifically reversing)
+bool     revWatchActive[MAX_SYMS];  // condition1: M5 broke opposite, watching for M15 confirmation
+int      revWatchDir[MAX_SYMS];     // direction of the reversal (-1 or 1)
+int      revState[MAX_SYMS];        // 0=none, 1=long reversion, -1=short reversion
 
 CTrade   trade;
 
@@ -83,6 +91,10 @@ int OnInit()
    {
       for(int tier = 0; tier < TIER_COUNT; tier++)
          tierState[s][tier] = 0;
+
+      revWatchActive[s] = false;
+      revWatchDir[s]    = 0;
+      revState[s]       = 0;
 
       for(int t = 0; t < TF_COUNT; t++)
       {
@@ -125,9 +137,12 @@ void SyncStateFromPositions()
       int    type  = (int)PositionGetInteger(POSITION_TYPE);
       int    dir   = (type == POSITION_TYPE_BUY) ? 1 : -1;
 
-      int tier = -1;
-      if(magic == MAGIC_FULL) tier = 0;
-      else if(magic == MAGIC_H4) tier = 1;
+      int  tier  = -1;
+      bool isRev = false;
+
+      if(magic == MAGIC_FULL)     tier  = 0;
+      else if(magic == MAGIC_H4)  tier  = 1;
+      else if(magic == MAGIC_REV) isRev = true;
       //else if(magic == MAGIC_H1) tier = 2;  // [H1-M1 tier disabled]
       else continue;
 
@@ -135,7 +150,10 @@ void SyncStateFromPositions()
       {
          if(syms[s] == sym)
          {
-            tierState[s][tier] = dir;
+            if(isRev)
+               revState[s] = dir;
+            else
+               tierState[s][tier] = dir;
             break;
          }
       }
@@ -303,12 +321,85 @@ void ClosePositions(string sym, int tier)
    }
 }
 
+bool OpenRevPositions(string sym, bool isBuy)
+{
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+
+   trade.SetExpertMagicNumber(MAGIC_REV);
+
+   bool ok = true;
+   for(int i = 0; i < RevCount; i++)
+   {
+      if(isBuy)
+      {
+         if(!trade.Buy(RevLots, sym, ask, 0, 0, "Reversion"))
+            ok = false;
+      }
+      else
+      {
+         if(!trade.Sell(RevLots, sym, bid, 0, 0, "Reversion"))
+            ok = false;
+      }
+   }
+   return ok;
+}
+
+void CloseRevPositions(string sym)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+
+      if(PositionGetString(POSITION_SYMBOL) == sym &&
+         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC_REV)
+      {
+         trade.PositionClose(ticket);
+      }
+   }
+}
+
+// Called on every tick — checks M30 Kijun TP for active reversion positions
+void CheckRevTP(int s)
+{
+   if(revState[s] == 0) return;
+
+   double kij[1];
+   if(CopyBuffer(ich[s][5], 1, 1, 1, kij) <= 0) return;  // ich[s][5] = M30
+   double kijun = kij[0];
+   if(kijun <= 0) return;
+
+   double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
+   double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
+
+   bool tpHit = false;
+   if(revState[s] == -1 && bid <= kijun) tpHit = true;  // short: price reached down to Kijun
+   if(revState[s] ==  1 && ask >= kijun) tpHit = true;  // long: price reached up to Kijun
+
+   if(tpHit)
+   {
+      string side = (revState[s] == 1) ? "Long" : "Short";
+      string msg = PCTime() + " | Close " + syms[s] + " " + side + " (Reversion - M30 Kijun TP)";
+      Print(msg); Alert(msg); SendNotification(msg);
+
+      CloseRevPositions(syms[s]);
+      revState[s]       = 0;
+      revWatchActive[s] = false;
+   }
+}
+
 //==============================================================
 // Main Loop
 //==============================================================
 
 void OnTick()
 {
+   // Per-tick: reversion TP check (not gated on M1 bar close)
+   for(int s = 0; s < symsCount; s++)
+      CheckRevTP(s);
+
+   // M1 bar gate — all remaining logic runs on M1 close only
    MqlRates m1[];
    if(CopyRates(_Symbol, PERIOD_M1, 0, 2, m1) <= 0) return;
    ArraySetAsSeries(m1, true);
@@ -333,8 +424,53 @@ void OnTick()
                          EnumToString(TFs[exitIdx]) + " broke)";
             Print(msg); Alert(msg); SendNotification(msg);
 
+            // H4 tier only: if M5 specifically reversed (not just neutral), arm reversion watch
+            if(tier == 1 && exitSt == -tierState[s][tier])
+            {
+               revWatchDir[s]    = exitSt;
+               revWatchActive[s] = true;
+            }
+
             ClosePositions(syms[s], tier);
             tierState[s][tier] = 0;
+         }
+      }
+
+      // --- Reversion M5 exit check ---
+
+      if(revState[s] != 0)
+      {
+         int m5St = CheckTF(syms[s], TFs[7], ich[s][7]);
+         if(m5St != revState[s])
+         {
+            string side = (revState[s] == 1) ? "Long" : "Short";
+            string msg = PCTime() + " | Close " + syms[s] + " " + side + " (Reversion - M5 reversed)";
+            Print(msg); Alert(msg); SendNotification(msg);
+
+            CloseRevPositions(syms[s]);
+            revState[s]       = 0;
+            revWatchActive[s] = false;
+         }
+      }
+
+      // --- Reversion entry check (condition1 + condition2) ---
+
+      if(revWatchActive[s] && revState[s] == 0)
+      {
+         int m15St = CheckTF(syms[s], TFs[6], ich[s][6]);
+         if(m15St == revWatchDir[s])
+         {
+            bool   isBuy  = (revWatchDir[s] == 1);
+            string action = isBuy ? "Buy" : "Sell";
+            string msg = PCTime() + " | " + action + " " + syms[s] + " x" + IntegerToString(RevCount) +
+                         " @ " + DoubleToString(RevLots, 2) + " (Reversion - M15 confirmed)";
+            Print(msg); Alert(msg); SendNotification(msg);
+
+            if(OpenRevPositions(syms[s], isBuy))
+            {
+               revState[s]       = revWatchDir[s];
+               revWatchActive[s] = false;
+            }
          }
       }
 
@@ -356,8 +492,8 @@ void OnTick()
          }
       }
 
-      // Tier 1: H4-M1 (only if Full not active)
-      if(tierState[s][1] == 0 && tierState[s][0] == 0)
+      // Tier 1: H4-M1 (only if Full not active and no reversion trade active)
+      if(tierState[s][1] == 0 && tierState[s][0] == 0 && revState[s] == 0)
       {
          int st = AlignH4(s);
          if(st != 0)
@@ -368,7 +504,10 @@ void OnTick()
             Print(msg); Alert(msg); SendNotification(msg);
 
             if(OpenPositions(syms[s], isBuy, 1))
-               tierState[s][1] = st;
+            {
+               tierState[s][1]   = st;
+               revWatchActive[s] = false;  // cancel pending reversion watch if H4 re-enters
+            }
          }
       }
 
