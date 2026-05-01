@@ -2,13 +2,13 @@
 
 ## What It Does
 
-This is a MetaTrader 5 Expert Advisor (EA) that trades multiple forex, commodity, and crypto symbols using Ichimoku Cloud alignment across multiple timeframes. It runs fully automated entry and exit logic organized into four conviction tiers.
+This is a MetaTrader 5 Expert Advisor (EA) that trades one or more symbols using Ichimoku Cloud alignment across multiple timeframes. It runs fully automated entry and exit logic organized into four conviction tiers. No stop loss is used — exits are driven entirely by Ichimoku signal breaks.
 
 ---
 
 ## Symbols Traded
 
-50+ instruments: major/minor/exotic forex pairs, gold, silver, platinum, palladium, BTC/ETH/crypto, and index/oil CFDs.
+Configurable via the `Symbols` input as a comma-separated list. Default: `GOLDm#`. Supports up to 60 symbols simultaneously.
 
 ---
 
@@ -16,8 +16,8 @@ This is a MetaTrader 5 Expert Advisor (EA) that trades multiple forex, commodity
 
 Each tier represents a different level of timeframe alignment conviction. Higher tiers = stronger signal = larger position size.
 
-| Tier | Alignment Required | Lot Size | Positions | Exit TF |
-|------|--------------------|----------|-----------|---------|
+| Tier | Alignment Required | Lot Size | Positions (default) | Exit TF |
+|------|--------------------|----------|---------------------|---------|
 | 0 — Full MN-M1 | Monthly → M1 (all 9 TFs) | 0.20 | 3 | M15 break |
 | 1 — H4-M1 | H4 → M1 (6 TFs) | 0.10 | 3 | M5 break |
 | 2 — H1-M1 | H1 → M1 (5 TFs) | 0.10 | 1 | M1 break |
@@ -25,13 +25,15 @@ Each tier represents a different level of timeframe alignment conviction. Higher
 
 Tiers are **exclusive and hierarchical**: Tier 1 only enters if Tier 0 is not active; Tier 2 only if Tiers 0 and 1 are not active; and so on.
 
+Position counts per tier are configurable via inputs (`FullCount`, `H4Count`, `H1Count`, `M30Count`).
+
 ---
 
 ## Ichimoku Alignment Rules (per timeframe)
 
-A timeframe is considered **bullish** when ALL of these hold on the confirmed bar:
-- Price is above the cloud, above Tenkan-sen, and above Kijun-sen
-- Chikou Span is above its cloud, above Tenkan, above Kijun, and above price 26 bars back
+Signal is checked on the **confirmed bar** (shift 1). A timeframe is **bullish** when ALL of these hold:
+- Price close is above the cloud, above Tenkan-sen, and above Kijun-sen
+- Chikou Span is above its cloud (26 bars back), above Tenkan, above Kijun, and above price 26 bars back
 
 **Bearish** is the mirror opposite. Neutral (0) if any condition fails.
 
@@ -41,47 +43,47 @@ All timeframes in a tier's range must agree (all bullish or all bearish) for a s
 
 ## Entry Logic
 
-On each new M1 bar, for every symbol:
-1. Check the highest eligible tier first (Tier 0).
-2. If no position exists for that tier and alignment is confirmed, open the required number of positions.
-3. For Tiers 1–3, also check for a **HTF obstacle** before entering — if price is already near or inside a higher-timeframe cloud/Kijun/SSB level, the entry is skipped.
+Fires once per M1 bar close, for every symbol:
+1. Check Tier 0 first. If no position exists and full MN→M1 alignment is confirmed, open `FullCount` positions.
+2. If Tier 0 is not active, check Tier 1 (H4→M1).
+3. If Tiers 0–1 are not active, check Tier 2 (H1→M1).
+4. If Tiers 0–2 are not active, check Tier 3 (M30→M1).
+
+Each tier opens its configured number of positions at market (no SL). TPs are assigned from the manual TP inputs (see below).
 
 ---
 
 ## Exit Logic
 
-Two exit mechanisms run before entry checks each bar:
+Exit checks run before entry checks each bar. Each tier has a designated exit timeframe:
 
-### 1. Exit TF Break
-Each tier has a designated exit timeframe (M15, M5, or M1). If that TF's Ichimoku signal no longer matches the open direction (goes neutral or flips), all positions for that tier on that symbol are closed.
+| Tier | Exit TF |
+|------|---------|
+| 0 — Full MN-M1 | M15 |
+| 1 — H4-M1 | M5 |
+| 2 — H1-M1 | M1 |
+| 3 — M30-M1 | M1 |
 
-### 2. HTF Cloud Proximity TP (Tiers 1–3)
-If an open position approaches a higher-timeframe resistance/support level (cloud edge, flat Kijun, or flat Senkou B), the EA closes the position and logs the reason. The proximity threshold is `CloudATRMult × ATR(14)` of the higher TF.
-
-Tier 0 (Full MN-M1) has no proximity TP — it exits only on M15 break.
+If the exit TF's Ichimoku signal no longer matches the open direction (goes neutral or flips), all positions for that tier on that symbol are closed at market.
 
 ---
 
-## HTF Obstacle Detection
+## Take Profit
 
-The `ScanHTFObstacles` function finds the **nearest level ahead of price** from timeframes above the current tier:
+TPs are set **manually** via input parameters at EA startup. Each of the up to three positions per tier is assigned a TP from the corresponding input:
 
-- **Tiers 1**: checks MN, W1, D1
-- **Tier 2**: checks MN, W1, D1, H4
-- **Tier 3**: checks MN, W1, D1, H4, H1
+| Input | Applied to |
+|-------|-----------|
+| `BuyTP1 / BuyTP2 / BuyTP3` | Position 1, 2, 3 of any long trade |
+| `SellTP1 / SellTP2 / SellTP3` | Position 1, 2, 3 of any short trade |
 
-For each TF it scans:
-- Cloud boundaries (immediate exit if price is inside cloud)
-- Flat Kijun-sen segments (within last 100 bars)
-- Flat Senkou B segments (within last 100 bars)
-
-The nearest obstacle ahead of price wins. The level is used as both an entry filter and a TP target.
+Setting a TP to `0` leaves that position's TP open-ended. There is no automated ATR- or cloud-based TP.
 
 ---
 
 ## Alerts & Notifications
 
-Every entry, exit, and skip emits:
+Every entry and exit emits:
 - `Print()` to the MT5 journal
 - `Alert()` popup
 - `SendNotification()` to the MT5 mobile app
@@ -101,10 +103,9 @@ All messages include local PC time in 12-hour format.
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `Symbols` | 50+ pairs | Comma-separated watch list |
+| `Symbols` | `GOLDm#` | Comma-separated watch list (up to 60) |
 | `Tenkan / Kijun / SenkouB` | 9 / 26 / 52 | Ichimoku periods |
-| `FullLots / H4Lots / H1Lots / M30Lots` | 0.20 / 0.10 / 0.10 / 0.05 | Lot sizes per tier |
-| `UseCloudTP` | true | Enable HTF proximity TP |
-| `CloudATRMult` | 0.5 | Proximity zone width (× ATR) |
-| `FlatBars` | 5 | Bars required to confirm a flat level |
-| `FlatLookback` | 100 | How far back to scan for flat levels |
+| `FullLots / H4Lots / H1Lots / M30Lots` | 0.20 / 0.10 / 0.10 / 0.05 | Lot size per position per tier |
+| `FullCount / H4Count / H1Count / M30Count` | 3 / 3 / 1 / 1 | Number of positions per tier |
+| `Slippage` | 30 | Max slippage in points |
+| `BuyTP1–3 / SellTP1–3` | 0 | Manual TP price levels per position (0 = none) |
