@@ -14,8 +14,8 @@ input int    Kijun        = 26;
 input int    SenkouB      = 52;
 //input double FullLots     = 0.20;  // Lot size per position (Full MN-M1)
 //input int    FullCount    = 3;     // Number of positions (Full MN-M1)
-input double H4Lots       = 0.10;  // Lot size per position (H4-M1)
-input int    H4Count      = 3;     // Number of positions (H4-M1)
+//input double H4Lots       = 0.10;  // superseded by GetEquityRisk()
+//input int    H4Count      = 3;     // superseded by GetEquityRisk()
 //input double RevLots      = 0.10;  // Lot size per position (Reversion-H4)
 //input int    RevCount     = 3;     // Number of positions (Reversion-H4)
 //input double H1Lots       = 0.10;  // Lot size per position (H1-M1)
@@ -115,7 +115,7 @@ int OnInit()
    }
 
 //   PositionsPerTier[0] = FullCount;
-   PositionsPerTier[1] = H4Count;
+//   PositionsPerTier[1] = H4Count;  // now dynamic via GetEquityRisk()
 //   PositionsPerTier[2] = H1Count;
 
    trade.SetDeviationInPoints(Slippage);
@@ -280,12 +280,29 @@ int MagicForTier(const int tier)
    return MAGIC_H4;
 }
 
+void GetEquityRisk(int &count, double &lots)
+{
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(eq <= 50)        { count = 1; lots = 0.10; }
+   else if(eq <= 100)  { count = 2; lots = 0.10; }
+   else if(eq <= 200)  { count = 3; lots = 0.10; }
+   else if(eq <= 300)  { count = 3; lots = 0.20; }
+   else if(eq <= 400)  { count = 3; lots = 0.30; }
+   else if(eq <= 500)  { count = 3; lots = 0.40; }
+   else if(eq <= 600)  { count = 3; lots = 0.50; }
+   else if(eq <= 1000) { count = 4; lots = 0.50; }
+   else if(eq <= 3000) { count = 3; lots = 0.30; }
+   else if(eq <= 5000) { count = 3; lots = 0.20; }
+   else if(eq <= 8000) { count = 3; lots = 0.10; }
+   else                { count = 2; lots = 0.10; }
+}
+
 double LotsForTier(const int tier)
 {
 //   if(tier == 0) return FullLots;
-   if(tier == 1) return H4Lots;
+//   if(tier == 1) — superseded by GetEquityRisk()
 //   return H1Lots;
-   return H4Lots;
+   return 0.0;
 }
 
 string TierLabel(const int tier)
@@ -299,8 +316,8 @@ bool OpenPositions(string sym, bool isBuy, int tier)
 {
    double ask   = SymbolInfoDouble(sym, SYMBOL_ASK);
    double bid   = SymbolInfoDouble(sym, SYMBOL_BID);
-   double lots  = LotsForTier(tier);
-   int    count = PositionsPerTier[tier];
+   int    count; double lots;
+   GetEquityRisk(count, lots);
    string cmnt  = TierLabel(tier);
 
    trade.SetExpertMagicNumber(MagicForTier(tier));
@@ -642,7 +659,9 @@ void OnTick()
          {
             bool isBuy = (st == 1);
             string action = isBuy ? "Buy" : "Sell";
-            string msg = PCTime() + " | " + action + " " + syms[s] + " x" + IntegerToString(PositionsPerTier[1]) + " @ " + DoubleToString(LotsForTier(1), 2) + " (H4-M1)";
+            int    msgCount; double msgLots;
+            GetEquityRisk(msgCount, msgLots);
+            string msg = PCTime() + " | " + action + " " + syms[s] + " x" + IntegerToString(msgCount) + " @ " + DoubleToString(msgLots, 2) + " (H4-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
             if(OpenPositions(syms[s], isBuy, 1))
