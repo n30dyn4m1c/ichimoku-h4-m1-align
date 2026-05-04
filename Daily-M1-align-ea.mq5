@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
-//| Ichimoku M5-M1 Cloud EA                                          |
-//| Entry: M5 and M1 close+chikou both above/below their cloud      |
-//| Exit:  M1 close crosses M1 kijun against trade direction        |
+//| Ichimoku Daily-M1 Alignment EA                                   |
+//| Entry: Daily,H12,H8,H4,H1,M30,M15,M5,M1 price+chikou aligned   |
+//| Exit:  M15 cloud alignment broken against trade direction        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -16,16 +16,22 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 //--- Constants and Global Variables ---
-#define MAX_SYMS 60
+#define MAX_SYMS  60
+#define TF_COUNT  9
+#define IDX_M15   6   // index of M15 in tfs[] — used for exit check
 
-int      ich[MAX_SYMS];
-int      ich5[MAX_SYMS];
+ENUM_TIMEFRAMES tfs[TF_COUNT] = {
+   PERIOD_D1, PERIOD_H12, PERIOD_H8, PERIOD_H4,
+   PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
+};
+
+int      ich[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
-int MAGIC_M1 = 20260501;
+int MAGIC = 20260501;
 
 CTrade trade;
 
@@ -56,10 +62,11 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       state[s] = 0;
-      ich[s]   = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
-      if(ich[s] == INVALID_HANDLE) return(INIT_FAILED);
-      ich5[s]  = iIchimoku(syms[s], PERIOD_M5, Tenkan, Kijun, SenkouB);
-      if(ich5[s] == INVALID_HANDLE) return(INIT_FAILED);
+      for(int t = 0; t < TF_COUNT; t++)
+      {
+         ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
+         if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+      }
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -70,10 +77,8 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
-   {
-      IndicatorRelease(ich[s]);
-      IndicatorRelease(ich5[s]);
-   }
+      for(int t = 0; t < TF_COUNT; t++)
+         IndicatorRelease(ich[s][t]);
 }
 
 //==============================================================
@@ -92,7 +97,7 @@ void SyncStateFromPositions()
       int    type  = (int)PositionGetInteger(POSITION_TYPE);
       int    dir   = (type == POSITION_TYPE_BUY) ? 1 : -1;
 
-      if(magic != MAGIC_M1) continue;
+      if(magic != MAGIC) continue;
 
       for(int s = 0; s < symsCount; s++)
       {
@@ -102,59 +107,34 @@ void SyncStateFromPositions()
 }
 
 //==============================================================
-// Entry Check: price and chikou both above/below cloud
+// Alignment Check: price and chikou both above/below cloud
+// Returns 1 (bullish), -1 (bearish), 0 (not aligned)
 //==============================================================
 
-int CheckM5Align(int s)
+int CheckAlign(int s, int tfIdx)
 {
+   ENUM_TIMEFRAMES tf = tfs[tfIdx];
+
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M5, 0, 120, rt) <= 0) return 0;
+   if(CopyRates(syms[s], tf, 0, 120, rt) <= 0) return 0;
    ArraySetAsSeries(rt, true);
 
-   int sh      = 1;
-   int chShift = sh + 26;
-   int chCloud = sh + 52;
+   int sh      = 1;              // last closed bar
+   int chShift = sh + Kijun;     // chikou buffer offset for bar sh
+   int chCloud = sh + SenkouB;   // cloud buffer offset at chikou's chart position
 
    if(ArraySize(rt) <= chCloud) return 0;
 
    double senA[1], senB[1], chik[1], senA_ch[1], senB_ch[1];
 
-   if(CopyBuffer(ich5[s], 2, sh + 26, 1, senA)    <= 0) return 0;
-   if(CopyBuffer(ich5[s], 3, sh + 26, 1, senB)    <= 0) return 0;
-   if(CopyBuffer(ich5[s], 4, chShift, 1, chik)    <= 0) return 0;
-   if(CopyBuffer(ich5[s], 2, chCloud, 1, senA_ch) <= 0) return 0;
-   if(CopyBuffer(ich5[s], 3, chCloud, 1, senB_ch) <= 0) return 0;
-
-   double closeP = rt[sh].close;
-   double cHi    = MathMax(senA[0], senB[0]);
-   double cLo    = MathMin(senA[0], senB[0]);
-   double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
-   double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
-
-   if(closeP > cHi && chik[0] > cHiC) return  1;
-   if(closeP < cLo && chik[0] < cLoC) return -1;
-   return 0;
-}
-
-int CheckM1Entry(int s)
-{
-   MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 120, rt) <= 0) return 0;
-   ArraySetAsSeries(rt, true);
-
-   int sh      = 1;
-   int chShift = sh + 26;   // chikou at last closed bar maps to offset sh+26 in buffer
-   int chCloud = sh + 52;   // cloud at chikou's price position
-
-   if(ArraySize(rt) <= chCloud) return 0;
-
-   double senA[1], senB[1], chik[1], senA_ch[1], senB_ch[1];
-
-   if(CopyBuffer(ich[s], 2, sh + 26, 1, senA)    <= 0) return 0;
-   if(CopyBuffer(ich[s], 3, sh + 26, 1, senB)    <= 0) return 0;
-   if(CopyBuffer(ich[s], 4, chShift, 1, chik)    <= 0) return 0;
-   if(CopyBuffer(ich[s], 2, chCloud, 1, senA_ch) <= 0) return 0;
-   if(CopyBuffer(ich[s], 3, chCloud, 1, senB_ch) <= 0) return 0;
+   // cloud at bar sh (Senkou stored Kijun bars ahead in buffer)
+   if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)    <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)    <= 0) return 0;
+   // chikou value at bar sh (stored Kijun bars back in buffer)
+   if(CopyBuffer(ich[s][tfIdx], 4, chShift,    1, chik)    <= 0) return 0;
+   // cloud at chikou's position (SenkouB bars further back)
+   if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch) <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch) <= 0) return 0;
 
    double closeP = rt[sh].close;
    double cHi    = MathMax(senA[0], senB[0]);
@@ -168,16 +148,32 @@ int CheckM1Entry(int s)
 }
 
 //==============================================================
-// Exit Check: price closed opposite side of kijun
+// Entry Check: all timeframes (Daily→M1) aligned same direction
 //==============================================================
 
-bool CheckM1Exit(int s, int dir)
+int CheckAllAlign(int s)
+{
+   int dir = CheckAlign(s, 0);
+   if(dir == 0) return 0;
+
+   for(int t = 1; t < TF_COUNT; t++)
+   {
+      if(CheckAlign(s, t) != dir) return 0;
+   }
+   return dir;
+}
+
+//==============================================================
+// Exit Check: M15 price closed on wrong side of M15 kijun
+//==============================================================
+
+bool CheckM15Exit(int s, int dir)
 {
    double kij[1];
-   if(CopyBuffer(ich[s], 1, 1, 1, kij) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_M15], 1, 1, 1, kij) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M1, 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], PERIOD_M15, 1, 1, rt) <= 0) return false;
    double closeP = rt[0].close;
 
    if(dir ==  1 && closeP < kij[0]) return true;
@@ -237,13 +233,13 @@ bool OpenPositions(string sym, bool isBuy)
    int count; double lots;
    GetEquityRisk(count, lots);
 
-   trade.SetExpertMagicNumber(MAGIC_M1);
+   trade.SetExpertMagicNumber(MAGIC);
 
    bool ok = true;
    for(int i = 0; i < count; i++)
    {
-      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "M1 Cloud")) ok = false; }
-      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "M1 Cloud")) ok = false; }
+      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "D1-M1 Cloud")) ok = false; }
+      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "D1-M1 Cloud")) ok = false; }
    }
    return ok;
 }
@@ -256,7 +252,7 @@ void ClosePositions(string sym)
       if(!PositionSelectByTicket(ticket)) continue;
 
       if(PositionGetString(POSITION_SYMBOL) == sym &&
-         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC_M1)
+         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC)
       {
          trade.PositionClose(ticket);
       }
@@ -277,23 +273,21 @@ void OnTick()
 
    for(int s = 0; s < symsCount; s++)
    {
-      // Exit check
-      if(state[s] != 0 && CheckM1Exit(s, state[s]))
+      // Exit check: close when M15 alignment breaks
+      if(state[s] != 0 && CheckM15Exit(s, state[s]))
       {
          string side = (state[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M1 - Kijun crossed)";
+         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
          Print(msg); Alert(msg); SendNotification(msg);
 
          ClosePositions(syms[s]);
          state[s] = 0;
       }
 
-      // Entry check
+      // Entry check: all timeframes Daily→M1 must align
       if(state[s] == 0)
       {
-         int m5 = CheckM5Align(s);
-         int m1 = CheckM1Entry(s);
-         int st = (m5 != 0 && m5 == m1) ? m1 : 0;
+         int st = CheckAllAlign(s);
          if(st != 0)
          {
             bool   isBuy  = (st == 1);
@@ -302,7 +296,7 @@ void OnTick()
             GetEquityRisk(msgCount, msgLots);
             string msg = PCTime() + " | " + action + " " + syms[s] +
                          " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (M5-M1)";
+                         " @ " + DoubleToString(msgLots, 2) + " (D1-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
             if(OpenPositions(syms[s], isBuy))
