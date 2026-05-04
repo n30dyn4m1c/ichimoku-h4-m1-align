@@ -247,8 +247,8 @@ int AlignRange(const int s, const int from, const int to)
 // MN → M1 (indices 0-8, all 9 TFs)
 //int AlignFull(const int s) { return AlignRange(s, 0, 8); }
 
-// H4 → M1 (indices 3-8, 6 TFs)
-int AlignH4(const int s)   { return AlignRange(s, 3, 8); }
+// H4 → M15 (indices 3-6, 4 TFs: H4, H1, M30, M15); M5/M1 not required
+int AlignH4(const int s)   { return AlignRange(s, 3, 6); }
 
 // H1 → M1 (indices 4-8, 5 TFs)
 //int AlignH1(const int s)   { return AlignRange(s, 4, 8); }

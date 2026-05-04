@@ -1,94 +1,70 @@
-# Ichimoku Multi-Tier Alignment EA — Summary
+# Ichimoku H4-M1 Alignment EA — Summary
 
 ## What It Does
 
-This is a MetaTrader 5 Expert Advisor (EA) that trades one or more symbols using Ichimoku Cloud alignment across multiple timeframes. It runs fully automated entry and exit logic organized into three conviction tiers. No stop loss or take profit is used — exits are driven entirely by Ichimoku signal breaks.
+MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M15 (4 timeframes). Single active tier. No SL or TP — exit is driven by M15 Ichimoku signal break.
 
 ---
 
-## Symbols Traded
+## Entry
 
-Configurable via the `Symbols` input as a comma-separated list. Default: `GOLDm#`. Supports up to 60 symbols simultaneously.
-
----
-
-## The Three Tiers
-
-Each tier represents a different level of timeframe alignment conviction. Higher tiers = stronger signal = larger position size.
-
-| Tier | Alignment Required | Lot Size | Positions (default) | Exit TF |
-|------|--------------------|----------|---------------------|---------|
-| 0 — Full MN-M1 | Monthly → M1 (all 9 TFs) | 0.20 | 3 | M15 break |
-| 1 — H4-M1 | H4 → M1 (6 TFs) | 0.10 | 3 | M5 break |
-| 2 — H1-M1 | H1 → M1 (5 TFs) | 0.10 | 1 | M1 break |
-
-Tiers are **exclusive and hierarchical**: Tier 1 only enters if Tier 0 is not active; Tier 2 only if Tiers 0 and 1 are not active.
-
-Position counts per tier are configurable via inputs (`FullCount`, `H4Count`, `H1Count`).
+Runs on every M1 bar close. Enters when all 4 TFs (H4, H1, M30, M15) are aligned and no position is open. M5 and M1 alignment not required. Opens `count` market positions at lot size determined by account equity.
 
 ---
 
-## Ichimoku Alignment Rules (per timeframe)
+## Exit
 
-Signal is checked on the **confirmed bar** (shift 1). A timeframe is **bullish** when ALL of these hold:
-- Price close is above the cloud, above Tenkan-sen, and above Kijun-sen
-- Chikou Span is above its cloud (26 bars back), above Tenkan, above Kijun, and above price 26 bars back
-
-**Bearish** is the mirror opposite. Neutral (0) if any condition fails.
-
-All timeframes in a tier's range must agree (all bullish or all bearish) for a signal.
+Closes all positions when the M15 Ichimoku signal no longer matches the open direction (goes neutral or flips).
 
 ---
 
-## Entry Logic
+## Equity-Based Risk
 
-Fires once per M1 bar close, for every symbol:
-1. Check Tier 0 first. If no position exists and full MN→M1 alignment is confirmed, open `FullCount` positions.
-2. If Tier 0 is not active, check Tier 1 (H4→M1).
-3. If Tiers 0–1 are not active, check Tier 2 (H1→M1).
+`GetEquityRisk()` determines position count and lot size at entry:
 
-Each tier opens its configured number of positions at market with no SL or TP.
-
----
-
-## Exit Logic
-
-Exit checks run before entry checks each bar. Each tier has a designated exit timeframe:
-
-| Tier | Exit TF |
-|------|---------|
-| 0 — Full MN-M1 | M15 |
-| 1 — H4-M1 | M5 |
-| 2 — H1-M1 | M1 |
-
-If the exit TF's Ichimoku signal no longer matches the open direction (goes neutral or flips), all positions for that tier on that symbol are closed at market.
+| Equity | Count | Lots |
+|--------|-------|------|
+| ≤ $50  | 1 | 0.10 |
+| ≤ $100 | 2 | 0.10 |
+| ≤ $200 | 3 | 0.10 |
+| ≤ $300 | 3 | 0.20 |
+| ≤ $400 | 3 | 0.30 |
+| ≤ $500 | 3 | 0.40 |
+| ≤ $600 | 3 | 0.50 |
+| ≤ $1000 | 4 | 0.50 |
+| ≤ $3000 | 3 | 0.30 |
+| ≤ $5000 | 3 | 0.20 |
+| ≤ $8000 | 3 | 0.10 |
+| > $8000 | 2 | 0.10 |
 
 ---
 
-## Alerts & Notifications
+## Ichimoku Signal Rules
 
-Every entry and exit emits:
-- `Print()` to the MT5 journal
-- `Alert()` popup
-- `SendNotification()` to the MT5 mobile app
+Checked on confirmed bar (shift 1). A TF is **bullish** when:
+- Price close above cloud, Tenkan, and Kijun
+- Chikou Span above its cloud (26 bars back), Tenkan, Kijun, and price 26 bars back
 
-All messages include local PC time in 12-hour format.
-
----
-
-## State Management
-
-- `tierState[symbol][tier]` tracks whether each tier is long (+1), short (-1), or flat (0) per symbol.
-- On EA restart, `SyncStateFromPositions()` scans all open positions and restores state using magic numbers (one unique magic per tier).
+**Bearish** is the mirror. All 4 TFs must agree for a signal.
 
 ---
 
-## Key Parameters
+## Alerts
+
+Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with local PC time (12-hour format).
+
+---
+
+## State / Restart
+
+`tierState[symbol][tier]` tracks direction per tier. On restart, `SyncStateFromPositions()` restores state from open positions using magic number `MAGIC_H4 = 20260302`.
+
+---
+
+## Inputs
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
 | `Symbols` | `GOLDm#` | Comma-separated watch list (up to 60) |
 | `Tenkan / Kijun / SenkouB` | 9 / 26 / 52 | Ichimoku periods |
-| `FullLots / H4Lots / H1Lots` | 0.20 / 0.10 / 0.10 | Lot size per position per tier |
-| `FullCount / H4Count / H1Count` | 3 / 3 / 1 | Number of positions per tier |
 | `Slippage` | 30 | Max slippage in points |
