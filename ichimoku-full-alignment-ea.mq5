@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Multi-Tier Alignment EA (MN→M1, H4→M1, H1→M1)         |
+//| Ichimoku Multi-Tier Alignment EA (MN?M1, H4?M1, H1?M1)         |
 //| Trades H4-M1 tier only                                           |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -244,13 +244,13 @@ int AlignRange(const int s, const int from, const int to)
    return state;
 }
 
-// MN → M1 (indices 0-8, all 9 TFs)
+// MN ? M1 (indices 0-8, all 9 TFs)
 //int AlignFull(const int s) { return AlignRange(s, 0, 8); }
 
-// H4 → M15 (indices 3-6, 4 TFs: H4, H1, M30, M15); M5/M1 not required
-int AlignH4(const int s)   { return AlignRange(s, 3, 6); }
+// H4 ? M1 (indices 3-8, 6 TFs) — exit on M15 break
+int AlignH4(const int s)   { return AlignRange(s, 3, 8); }
 
-// H1 → M1 (indices 4-8, 5 TFs)
+// H1 ? M1 (indices 4-8, 5 TFs)
 //int AlignH1(const int s)   { return AlignRange(s, 4, 8); }
 
 //==============================================================
@@ -283,13 +283,18 @@ int MagicForTier(const int tier)
 void GetEquityRisk(int &count, double &lots)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq <= 50)        { count = 1; lots = 0.10; }
-   else if(eq <= 100)  { count = 2; lots = 0.10; }
-   else if(eq <= 200)  { count = 3; lots = 0.10; }
-   else if(eq <= 300)  { count = 3; lots = 0.20; }
-   else if(eq <= 400)  { count = 3; lots = 0.30; }
-   else if(eq <= 500)  { count = 3; lots = 0.40; }
-   else if(eq <= 600)  { count = 3; lots = 0.50; }
+   if(eq <= 30)        { count = 1; lots = 0.10; }
+   else if(eq <= 50)  { count = 2; lots = 0.10; }
+   else if(eq <= 70)  { count = 3; lots = 0.10; }
+   else if(eq <= 100)  { count = 4; lots = 0.10; }
+   else if(eq <= 130)  { count = 5; lots = 0.10; }
+   else if(eq <= 150)  { count = 7; lots = 0.10; }
+   else if(eq <= 170)  { count = 9; lots = 0.10; }
+   else if(eq <= 200)  { count = 5; lots = 0.20; }
+   else if(eq <= 300)  { count = 4; lots = 0.30; }
+   else if(eq <= 400)  { count = 5; lots = 0.30; }
+   else if(eq <= 500)  { count = 6; lots = 0.30; }
+   else if(eq <= 600)  { count = 7; lots = 0.30; }
    else if(eq <= 1000) { count = 4; lots = 0.50; }
    else if(eq <= 3000) { count = 3; lots = 0.30; }
    else if(eq <= 5000) { count = 3; lots = 0.20; }
