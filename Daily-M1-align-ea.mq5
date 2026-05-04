@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//| Ichimoku M1 Cloud EA                                             |
-//| Entry: M1 close and chikou both above/below M1 cloud            |
+//| Ichimoku M5-M1 Cloud EA                                          |
+//| Entry: M5 and M1 close+chikou both above/below their cloud      |
 //| Exit:  M1 close crosses M1 kijun against trade direction        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -19,6 +19,7 @@ input int    Slippage = 30;
 #define MAX_SYMS 60
 
 int      ich[MAX_SYMS];
+int      ich5[MAX_SYMS];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar = 0;
@@ -57,6 +58,8 @@ int OnInit()
       state[s] = 0;
       ich[s]   = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
       if(ich[s] == INVALID_HANDLE) return(INIT_FAILED);
+      ich5[s]  = iIchimoku(syms[s], PERIOD_M5, Tenkan, Kijun, SenkouB);
+      if(ich5[s] == INVALID_HANDLE) return(INIT_FAILED);
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -67,7 +70,10 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
+   {
       IndicatorRelease(ich[s]);
+      IndicatorRelease(ich5[s]);
+   }
 }
 
 //==============================================================
@@ -98,6 +104,37 @@ void SyncStateFromPositions()
 //==============================================================
 // Entry Check: price and chikou both above/below cloud
 //==============================================================
+
+int CheckM5Align(int s)
+{
+   MqlRates rt[];
+   if(CopyRates(syms[s], PERIOD_M5, 0, 120, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+
+   int sh      = 1;
+   int chShift = sh + 26;
+   int chCloud = sh + 52;
+
+   if(ArraySize(rt) <= chCloud) return 0;
+
+   double senA[1], senB[1], chik[1], senA_ch[1], senB_ch[1];
+
+   if(CopyBuffer(ich5[s], 2, sh + 26, 1, senA)    <= 0) return 0;
+   if(CopyBuffer(ich5[s], 3, sh + 26, 1, senB)    <= 0) return 0;
+   if(CopyBuffer(ich5[s], 4, chShift, 1, chik)    <= 0) return 0;
+   if(CopyBuffer(ich5[s], 2, chCloud, 1, senA_ch) <= 0) return 0;
+   if(CopyBuffer(ich5[s], 3, chCloud, 1, senB_ch) <= 0) return 0;
+
+   double closeP = rt[sh].close;
+   double cHi    = MathMax(senA[0], senB[0]);
+   double cLo    = MathMin(senA[0], senB[0]);
+   double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
+   double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
+
+   if(closeP > cHi && chik[0] > cHiC) return  1;
+   if(closeP < cLo && chik[0] < cLoC) return -1;
+   return 0;
+}
 
 int CheckM1Entry(int s)
 {
@@ -254,7 +291,9 @@ void OnTick()
       // Entry check
       if(state[s] == 0)
       {
-         int st = CheckM1Entry(s);
+         int m5 = CheckM5Align(s);
+         int m1 = CheckM1Entry(s);
+         int st = (m5 != 0 && m5 == m1) ? m1 : 0;
          if(st != 0)
          {
             bool   isBuy  = (st == 1);
@@ -263,7 +302,7 @@ void OnTick()
             GetEquityRisk(msgCount, msgLots);
             string msg = PCTime() + " | " + action + " " + syms[s] +
                          " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (M1)";
+                         " @ " + DoubleToString(msgLots, 2) + " (M5-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
             if(OpenPositions(syms[s], isBuy))
