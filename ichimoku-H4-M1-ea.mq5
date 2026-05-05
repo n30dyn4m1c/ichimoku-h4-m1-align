@@ -248,40 +248,25 @@ int OpenPositions(string sym, bool isBuy)
    int filled = 0;
    for(int i = 0; i < count; i++)
    {
-      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, "H4-M1 Cloud")
-                      : trade.Sell(lots, sym, bid, 0, 0, "H4-M1 Cloud");
+      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, "Buy H4-M1")
+                      : trade.Sell(lots, sym, bid, 0, 0, "Sell H4-M1");
       if(ok) filled++;
    }
    return filled;
 }
 
-void ClosePositions(string sym, string comment)
+void ClosePositions(string sym)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(!PositionSelectByTicket(ticket)) continue;
-      if(PositionGetString(POSITION_SYMBOL) != sym) continue;
-      if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
 
-      ENUM_ORDER_TYPE closeType = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-                                  ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
-      double price = (closeType == ORDER_TYPE_SELL)
-                     ? SymbolInfoDouble(sym, SYMBOL_BID)
-                     : SymbolInfoDouble(sym, SYMBOL_ASK);
-
-      MqlTradeRequest req = {};
-      MqlTradeResult  res = {};
-      req.action    = TRADE_ACTION_DEAL;
-      req.position  = ticket;
-      req.symbol    = sym;
-      req.volume    = PositionGetDouble(POSITION_VOLUME);
-      req.type      = closeType;
-      req.price     = price;
-      req.deviation = Slippage;
-      req.magic     = MAGIC;
-      req.comment   = comment;
-      OrderSend(req, res);
+      if(PositionGetString(POSITION_SYMBOL) == sym &&
+         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC)
+      {
+         trade.PositionClose(ticket);
+      }
    }
 }
 
@@ -306,7 +291,7 @@ void OnTick()
          string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
          Print(msg); Alert(msg); SendNotification(msg);
 
-         ClosePositions(syms[s], "M15 kijun cross");
+         ClosePositions(syms[s]);
          state[s] = 0;
       }
 
