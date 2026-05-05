@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| Ichimoku H4-M1 Alignment EA                                      |
-//| Entry: H4,H1,M30,M15,M5,M1 price+chikou all above/below cloud   |
+//| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
 //| Exit:  M15 close crosses M15 kijun against trade direction       |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -106,8 +106,8 @@ void SyncStateFromPositions()
 }
 
 //==============================================================
-// Alignment Check: price and chikou both above/below cloud
-// Returns 1 (bullish), -1 (bearish), 0 (not aligned)
+// Alignment Check: price and chikou both above/below tenkan,
+// kijun, and cloud. Returns 1 (bullish), -1 (bearish), 0 (none)
 //==============================================================
 
 int CheckAlign(int s, int tfIdx)
@@ -124,16 +124,21 @@ int CheckAlign(int s, int tfIdx)
 
    if(ArraySize(rt) <= chCloud) return 0;
 
-   double senA[1], senB[1], chik[1], senA_ch[1], senB_ch[1];
+   double tenkan[1], kijun[1], senA[1], senB[1], chik[1];
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
 
-   // cloud at bar sh (Senkou stored Kijun bars ahead in buffer)
-   if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)    <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)    <= 0) return 0;
-   // chikou value at bar sh (stored Kijun bars back in buffer)
-   if(CopyBuffer(ich[s][tfIdx], 4, chShift,    1, chik)    <= 0) return 0;
-   // cloud at chikou's position (SenkouB bars further back)
-   if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch) <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch) <= 0) return 0;
+   // price bar sh: tenkan, kijun, cloud
+   if(CopyBuffer(ich[s][tfIdx], 0, sh,         1, tenkan)    <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, sh,         1, kijun)     <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)      <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)      <= 0) return 0;
+   // chikou value at bar sh
+   if(CopyBuffer(ich[s][tfIdx], 4, chShift,    1, chik)      <= 0) return 0;
+   // tenkan, kijun, cloud at chikou's chart position
+   if(CopyBuffer(ich[s][tfIdx], 0, chShift,    1, tenkan_ch) <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, chShift,    1, kijun_ch)  <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch)   <= 0) return 0;
 
    double closeP = rt[sh].close;
    double cHi    = MathMax(senA[0], senB[0]);
@@ -141,8 +146,14 @@ int CheckAlign(int s, int tfIdx)
    double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
-   if(closeP > cHi && chik[0] > cHiC) return  1;
-   if(closeP < cLo && chik[0] < cLoC) return -1;
+   // bullish: price above tenkan, kijun, and cloud; chikou above all three at its position
+   if(closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi &&
+      chik[0] > tenkan_ch[0] && chik[0] > kijun_ch[0] && chik[0] > cHiC) return  1;
+
+   // bearish: price below tenkan, kijun, and cloud; chikou below all three at its position
+   if(closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo &&
+      chik[0] < tenkan_ch[0] && chik[0] < kijun_ch[0] && chik[0] < cLoC) return -1;
+
    return 0;
 }
 
