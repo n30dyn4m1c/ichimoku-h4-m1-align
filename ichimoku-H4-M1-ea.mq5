@@ -257,17 +257,31 @@ int OpenPositions(string sym, bool isBuy)
 
 void ClosePositions(string sym, string comment)
 {
-   trade.SetComment(comment);
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != sym) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
 
-      if(PositionGetString(POSITION_SYMBOL) == sym &&
-         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC)
-      {
-         trade.PositionClose(ticket);
-      }
+      ENUM_ORDER_TYPE closeType = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                                  ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+      double price = (closeType == ORDER_TYPE_SELL)
+                     ? SymbolInfoDouble(sym, SYMBOL_BID)
+                     : SymbolInfoDouble(sym, SYMBOL_ASK);
+
+      MqlTradeRequest req = {};
+      MqlTradeResult  res = {};
+      req.action    = TRADE_ACTION_DEAL;
+      req.position  = ticket;
+      req.symbol    = sym;
+      req.volume    = PositionGetDouble(POSITION_VOLUME);
+      req.type      = closeType;
+      req.price     = price;
+      req.deviation = Slippage;
+      req.magic     = MAGIC;
+      req.comment   = comment;
+      OrderSend(req, res);
    }
 }
 
