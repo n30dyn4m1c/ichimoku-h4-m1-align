@@ -255,8 +255,9 @@ int OpenPositions(string sym, bool isBuy)
    return filled;
 }
 
-void ClosePositions(string sym)
+void ClosePositions(string sym, string comment)
 {
+   trade.SetComment(comment);
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -291,7 +292,7 @@ void OnTick()
          string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
          Print(msg); Alert(msg); SendNotification(msg);
 
-         ClosePositions(syms[s]);
+         ClosePositions(syms[s], "M15 kijun cross");
          state[s] = 0;
       }
 
