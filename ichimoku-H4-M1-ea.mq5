@@ -120,7 +120,7 @@ int CheckAlign(int s, int tfIdx)
 
    int sh      = 1;              // last closed bar
    int chShift = sh + Kijun;     // chikou buffer offset for bar sh
-   int chCloud = sh + SenkouB;   // cloud buffer offset at chikou's chart position
+   int chCloud = chShift + Kijun;// cloud buffer offset at chikou's chart position
 
    if(ArraySize(rt) <= chCloud) return 0;
 
@@ -236,7 +236,7 @@ void GetEquityRisk(int &count, double &lots)
 // Trading Functions
 //==============================================================
 
-bool OpenPositions(string sym, bool isBuy)
+int OpenPositions(string sym, bool isBuy)
 {
    double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
    double bid = SymbolInfoDouble(sym, SYMBOL_BID);
@@ -245,13 +245,14 @@ bool OpenPositions(string sym, bool isBuy)
 
    trade.SetExpertMagicNumber(MAGIC);
 
-   bool ok = true;
+   int filled = 0;
    for(int i = 0; i < count; i++)
    {
-      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "H4-M1 Cloud")) ok = false; }
-      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "H4-M1 Cloud")) ok = false; }
+      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, "H4-M1 Cloud")
+                      : trade.Sell(lots, sym, bid, 0, 0, "H4-M1 Cloud");
+      if(ok) filled++;
    }
-   return ok;
+   return filled;
 }
 
 void ClosePositions(string sym)
@@ -309,7 +310,9 @@ void OnTick()
                          " @ " + DoubleToString(msgLots, 2) + " (H1-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
-            if(OpenPositions(syms[s], isBuy))
+            // Track state if any order filled — keeps exit logic and re-entry
+            // guard correct even when only some of the orders go through.
+            if(OpenPositions(syms[s], isBuy) > 0)
                state[s] = st;
          }
       }
