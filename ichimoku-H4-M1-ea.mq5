@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //| Ichimoku H4-M1 Alignment EA                                      |
 //| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
-//| Exit:  Half on M5 kijun cross, half on M15 kijun cross           |
+//| Exit:  M15 close crosses M15 kijun against trade direction       |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -19,10 +19,6 @@ input int    Slippage = 30;
 #define MAX_SYMS  60
 #define TF_COUNT  6
 #define IDX_M15   3   // index of M15 in tfs[] — used for exit check
-#define IDX_M5    4   // index of M5 in tfs[] — used for exit check
-
-#define TAG_M5    "H4-M1 Cloud M5"
-#define TAG_M15   "H4-M1 Cloud M15"
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
    PERIOD_H4, PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
@@ -32,8 +28,7 @@ int      ich[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar = 0;
-int      stateM5[MAX_SYMS];   // 0=none, 1=long, -1=short — M5-exit batch
-int      stateM15[MAX_SYMS];  // 0=none, 1=long, -1=short — M15-exit batch
+int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
 int MAGIC = 20260501;
 
@@ -65,8 +60,7 @@ int OnInit()
 
    for(int s = 0; s < symsCount; s++)
    {
-      stateM5[s]  = 0;
-      stateM15[s] = 0;
+      state[s] = 0;
       for(int t = 0; t < TF_COUNT; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
@@ -97,22 +91,16 @@ void SyncStateFromPositions()
       ulong ticket = PositionGetTicket(i);
       if(!PositionSelectByTicket(ticket)) continue;
 
-      string sym     = PositionGetString(POSITION_SYMBOL);
-      int    magic   = (int)PositionGetInteger(POSITION_MAGIC);
-      int    type    = (int)PositionGetInteger(POSITION_TYPE);
-      string comment = PositionGetString(POSITION_COMMENT);
-      int    dir     = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      string sym   = PositionGetString(POSITION_SYMBOL);
+      int    magic = (int)PositionGetInteger(POSITION_MAGIC);
+      int    type  = (int)PositionGetInteger(POSITION_TYPE);
+      int    dir   = (type == POSITION_TYPE_BUY) ? 1 : -1;
 
       if(magic != MAGIC) continue;
 
       for(int s = 0; s < symsCount; s++)
       {
-         if(syms[s] == sym)
-         {
-            if(comment == TAG_M5)       stateM5[s]  = dir;
-            else if(comment == TAG_M15) stateM15[s] = dir;
-            break;
-         }
+         if(syms[s] == sym) { state[s] = dir; break; }
       }
    }
 }
@@ -186,16 +174,16 @@ int CheckAllAlign(int s)
 }
 
 //==============================================================
-// Exit Check: price closed on wrong side of kijun for the given TF
+// Exit Check: M15 price closed on wrong side of M15 kijun
 //==============================================================
 
-bool CheckKijunExit(int s, int dir, int tfIdx, ENUM_TIMEFRAMES tf)
+bool CheckM15Exit(int s, int dir)
 {
    double kij[1];
-   if(CopyBuffer(ich[s][tfIdx], 1, 1, 1, kij) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_M15], 1, 1, 1, kij) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], tf, 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], PERIOD_M15, 1, 1, rt) <= 0) return false;
    double closeP = rt[0].close;
 
    if(dir ==  1 && closeP < kij[0]) return true;
@@ -248,7 +236,7 @@ void GetEquityRisk(int &count, double &lots)
 // Trading Functions
 //==============================================================
 
-int OpenPositions(string sym, bool isBuy, int &filledM5, int &filledM15)
+int OpenPositions(string sym, bool isBuy)
 {
    double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
    double bid = SymbolInfoDouble(sym, SYMBOL_BID);
@@ -257,26 +245,17 @@ int OpenPositions(string sym, bool isBuy, int &filledM5, int &filledM15)
 
    trade.SetExpertMagicNumber(MAGIC);
 
-   int half = count / 2;
-   filledM5  = 0;
-   filledM15 = 0;
-
-   for(int i = 0; i < half; i++)
+   int filled = 0;
+   for(int i = 0; i < count; i++)
    {
-      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, TAG_M5)
-                      : trade.Sell(lots, sym, bid, 0, 0, TAG_M5);
-      if(ok) filledM5++;
+      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, "H4-M1 Cloud")
+                      : trade.Sell(lots, sym, bid, 0, 0, "H4-M1 Cloud");
+      if(ok) filled++;
    }
-   for(int i = 0; i < half; i++)
-   {
-      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, TAG_M15)
-                      : trade.Sell(lots, sym, bid, 0, 0, TAG_M15);
-      if(ok) filledM15++;
-   }
-   return filledM5 + filledM15;
+   return filled;
 }
 
-void ClosePositions(string sym, string tag)
+void ClosePositions(string sym)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -284,8 +263,7 @@ void ClosePositions(string sym, string tag)
       if(!PositionSelectByTicket(ticket)) continue;
 
       if(PositionGetString(POSITION_SYMBOL) == sym &&
-         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC &&
-         PositionGetString(POSITION_COMMENT) == tag)
+         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC)
       {
          trade.PositionClose(ticket);
       }
@@ -306,30 +284,19 @@ void OnTick()
 
    for(int s = 0; s < symsCount; s++)
    {
-      // Exit check: M5 batch closes when M5 kijun crosses
-      if(stateM5[s] != 0 && CheckKijunExit(s, stateM5[s], IDX_M5, PERIOD_M5))
+      // Exit check: close all when M15 closes against direction across M15 kijun
+      if(state[s] != 0 && CheckM15Exit(s, state[s]))
       {
-         string side = (stateM5[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " M5 half (M5 kijun crossed)";
+         string side = (state[s] == 1) ? "Long" : "Short";
+         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
          Print(msg); Alert(msg); SendNotification(msg);
 
-         ClosePositions(syms[s], TAG_M5);
-         stateM5[s] = 0;
+         ClosePositions(syms[s]);
+         state[s] = 0;
       }
 
-      // Exit check: M15 batch closes when M15 kijun crosses
-      if(stateM15[s] != 0 && CheckKijunExit(s, stateM15[s], IDX_M15, PERIOD_M15))
-      {
-         string side = (stateM15[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " M15 half (M15 kijun crossed)";
-         Print(msg); Alert(msg); SendNotification(msg);
-
-         ClosePositions(syms[s], TAG_M15);
-         stateM15[s] = 0;
-      }
-
-      // Entry check: all timeframes H4→M1 must align, and no batch open
-      if(stateM5[s] == 0 && stateM15[s] == 0)
+      // Entry check: all timeframes H4→M1 must align
+      if(state[s] == 0)
       {
          int st = CheckAllAlign(s);
          if(st != 0)
@@ -343,10 +310,10 @@ void OnTick()
                          " @ " + DoubleToString(msgLots, 2) + " (H1-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
-            int fM5, fM15;
-            OpenPositions(syms[s], isBuy, fM5, fM15);
-            if(fM5  > 0) stateM5[s]  = st;
-            if(fM15 > 0) stateM15[s] = st;
+            // Track state if any order filled — keeps exit logic and re-entry
+            // guard correct even when only some of the orders go through.
+            if(OpenPositions(syms[s], isBuy) > 0)
+               state[s] = st;
          }
       }
    }
