@@ -35,6 +35,7 @@ int      ich[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar = 0;
+datetime lastH4bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
 int MAGIC = 20260501;
@@ -329,7 +330,13 @@ void ClosePositions(string sym)
 
 void OnTick()
 {
-   CheckEquityAlert();
+   // Equity alert: fire only on a new H4 bar (CheckEquityAlert self-guards on day-of-week)
+   MqlRates h4[];
+   if(CopyRates(_Symbol, PERIOD_H4, 0, 1, h4) > 0 && h4[0].time != lastH4bar)
+   {
+      lastH4bar = h4[0].time;
+      CheckEquityAlert();
+   }
 
    MqlRates m1[];
    if(CopyRates(_Symbol, PERIOD_M1, 0, 2, m1) <= 0) return;
