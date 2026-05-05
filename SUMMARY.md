@@ -1,20 +1,20 @@
-# Ichimoku H1-M1 Alignment EA — Summary
+# Ichimoku H4-M1 Alignment EA — Summary
 
 ## What It Does
 
-MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H1 → M1 (5 timeframes). No SL or TP — exit is driven by M15 kijun cross.
+MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). No SL or TP — exit is driven by M15 kijun cross.
 
 ---
 
 ## Entry
 
-Runs on every M1 bar close. Enters when all 5 TFs (H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds and no position is open. Opens `count` market positions at lot size determined by account equity.
+Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds and no position is open. Opens `count` market orders at lot size determined by account equity.
 
 ---
 
 ## Exit
 
-Closes all positions when the M15 close crosses the M15 kijun against the open direction.
+Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction.
 
 ---
 
@@ -47,10 +47,21 @@ Closes all positions when the M15 close crosses the M15 kijun against the open d
 ## Ichimoku Signal Rules
 
 Checked on confirmed bar (shift 1). A TF is **bullish** when:
-- Price close above cloud
-- Chikou Span above its cloud (at chikou's chart position)
+- Price close (bar 1) is above the Kumo cloud at bar 1
+- Chikou Span (bar 1) is above the Kumo cloud at chikou's chart position
 
-**Bearish** is the mirror. All 5 TFs (H1, M30, M15, M5, M1) must agree for a signal.
+**Bearish** is the mirror. All 6 TFs (H4, H1, M30, M15, M5, M1) must agree for a signal.
+
+### Buffer Offset Detail
+
+`CheckAlign()` uses these offsets when calling `CopyBuffer`:
+
+| Value | Formula | Purpose |
+|-------|---------|---------|
+| `sh = 1` | — | Last confirmed bar |
+| `sh + Kijun` (= 27) | shift into Senkou buffer | Cloud at bar 1 (Senkou is plotted Kijun bars ahead) |
+| `chShift = sh + Kijun` (= 27) | shift into Chikou buffer | Chikou value at bar 1 (Chikou is plotted Kijun bars back) |
+| `chCloud = sh + SenkouB` (= 53) | shift for cloud at chikou's position | Cloud 52 bars before bar 1 — the cloud chikou "sees" |
 
 ---
 
@@ -62,7 +73,7 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 
 ## State / Restart
 
-`state[symbol]` tracks direction per symbol. On restart, `SyncStateFromPositions()` restores state from open positions using magic number `MAGIC = 20260501`.
+`state[symbol]` tracks direction per symbol. On restart, `SyncStateFromPositions()` restores state from open positions filtered by magic number `MAGIC = 20260501` (date-stamped: May 1, 2026).
 
 ---
 
@@ -70,6 +81,21 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `Symbols` | `GOLDm#` | Comma-separated watch list (up to 60) |
+| `Symbols` | `GOLDm#` | Comma-separated watch list (up to 60 symbols) |
 | `Tenkan / Kijun / SenkouB` | 9 / 26 / 52 | Ichimoku periods |
 | `Slippage` | 30 | Max slippage in points |
+
+---
+
+## Timeframe Alignment Order
+
+Timeframes are checked highest to lowest — all must agree before entry:
+
+| Index | Timeframe | Role |
+|-------|-----------|------|
+| 0 | H4 | Highest — trend anchor |
+| 1 | H1 | Intermediate |
+| 2 | M30 | Intermediate |
+| 3 | M15 | Exit reference (IDX_M15) |
+| 4 | M5 | Fine filter |
+| 5 | M1 | Trigger bar |
