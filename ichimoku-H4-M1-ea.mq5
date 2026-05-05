@@ -15,6 +15,13 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
+input group             "Equity Alert Settings"
+input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
+input double            InpWithdrawProfitPct = 50.0;       // Percentage of the PROFIT to withdraw
+input ENUM_DAY_OF_WEEK  InpCheckDay          = FRIDAY;     // Day of the week to check
+input bool              InpResetBaseline     = false;      // Set to true to reset baseline to current equity
+input bool              InpSendPush          = true;       // Send push notification
+
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
 #define TF_COUNT  6
@@ -28,9 +35,13 @@ int      ich[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar = 0;
+datetime lastH4bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
 int MAGIC = 20260501;
+
+#define GV_BASE_EQUITY    "EA_EquityAlert_Base_"    + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+#define GV_LAST_ALERT_DAY "EA_EquityAlert_Day_"     + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
 
 CTrade trade;
 
@@ -70,7 +81,50 @@ int OnInit()
 
    trade.SetDeviationInPoints(Slippage);
    SyncStateFromPositions();
+   InitEquityAlert();
    return(INIT_SUCCEEDED);
+}
+
+//==============================================================
+// Equity Alert: weekly profit-withdrawal reminder
+//==============================================================
+
+void InitEquityAlert()
+{
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!GlobalVariableCheck(GV_BASE_EQUITY) || InpResetBaseline)
+   {
+      GlobalVariableSet(GV_BASE_EQUITY, currentEquity);
+   }
+   if(!GlobalVariableCheck(GV_LAST_ALERT_DAY))
+   {
+      GlobalVariableSet(GV_LAST_ALERT_DAY, 0);
+   }
+}
+
+void CheckEquityAlert()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+
+   if(dt.day_of_week != InpCheckDay) return;
+   if((int)GlobalVariableGet(GV_LAST_ALERT_DAY) == dt.day) return;
+
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double baseEquity    = GlobalVariableGet(GV_BASE_EQUITY);
+   double profit        = currentEquity - baseEquity;
+
+   if(profit >= InpMinProfitTrigger)
+   {
+      double withdrawAmount = profit * (InpWithdrawProfitPct / 100.0);
+      string msg = StringFormat("Profit: %.2f. Suggest withdrawing: %.2f", profit, withdrawAmount);
+
+      Alert(msg);
+      if(InpSendPush) SendNotification(msg);
+
+      GlobalVariableSet(GV_LAST_ALERT_DAY, (double)dt.day);
+      GlobalVariablesFlush();
+   }
 }
 
 void OnDeinit(const int reason)
@@ -276,6 +330,14 @@ void ClosePositions(string sym)
 
 void OnTick()
 {
+   // Equity alert: fire only on a new H4 bar (CheckEquityAlert self-guards on day-of-week)
+   MqlRates h4[];
+   if(CopyRates(_Symbol, PERIOD_H4, 0, 1, h4) > 0 && h4[0].time != lastH4bar)
+   {
+      lastH4bar = h4[0].time;
+      CheckEquityAlert();
+   }
+
    MqlRates m1[];
    if(CopyRates(_Symbol, PERIOD_M1, 0, 2, m1) <= 0) return;
    ArraySetAsSeries(m1, true);
