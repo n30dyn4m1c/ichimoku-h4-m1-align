@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//| Ichimoku H1-M1 Alignment EA                                      |
-//| Entry: H1,M30,M15,M5,M1 price+chikou all above/below cloud      |
+//| Ichimoku H4-M1 Alignment EA                                      |
+//| Entry: H4,H1,M30,M15,M5,M1 price+chikou all above/below cloud   |
 //| Exit:  M15 close crosses M15 kijun against trade direction       |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -17,11 +17,11 @@ input int    Slippage = 30;
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
-#define TF_COUNT  5
-#define IDX_M15   2   // index of M15 in tfs[] — used for exit check
+#define TF_COUNT  6
+#define IDX_M15   3   // index of M15 in tfs[] — used for exit check
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
-   PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
+   PERIOD_H4, PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
 };
 
 int      ich[MAX_SYMS][TF_COUNT];
@@ -147,7 +147,7 @@ int CheckAlign(int s, int tfIdx)
 }
 
 //==============================================================
-// Entry Check: all timeframes (Daily?M1) aligned same direction
+// Entry Check: all timeframes (H4→M1) aligned same direction
 //==============================================================
 
 int CheckAllAlign(int s)
