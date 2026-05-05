@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//| Ichimoku H4-H1 Alignment EA                                      |
-//| Entry: H4 & H1 price+chikou all above/below tenkan,kijun,cloud   |
+//| Ichimoku H4-M1 Alignment EA                                      |
+//| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
 //| Exit:  M15 close crosses M15 kijun against trade direction       |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -17,13 +17,11 @@ input int    Slippage = 30;
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
-#define TF_COUNT  3
-#define IDX_M15   2   // index of M15 in tfs[] — used for exit check only
+#define TF_COUNT  6
+#define IDX_M15   3   // index of M15 in tfs[] — used for exit check
 
-// Entry timeframes are tfs[0..IDX_M15-1] (H4, H1).
-// M15 is loaded only so its kijun is available for the exit check.
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
-   PERIOD_H4, PERIOD_H1, PERIOD_M15
+   PERIOD_H4, PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
 };
 
 int      ich[MAX_SYMS][TF_COUNT];
@@ -160,7 +158,7 @@ int CheckAlign(int s, int tfIdx)
 }
 
 //==============================================================
-// Entry Check: H4 and H1 both aligned in the same direction
+// Entry Check: all timeframes (H4→M1) aligned same direction
 //==============================================================
 
 int CheckAllAlign(int s)
@@ -168,7 +166,7 @@ int CheckAllAlign(int s)
    int dir = CheckAlign(s, 0);
    if(dir == 0) return 0;
 
-   for(int t = 1; t < IDX_M15; t++)
+   for(int t = 1; t < TF_COUNT; t++)
    {
       if(CheckAlign(s, t) != dir) return 0;
    }
@@ -250,8 +248,8 @@ bool OpenPositions(string sym, bool isBuy)
    bool ok = true;
    for(int i = 0; i < count; i++)
    {
-      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "H4-H1 Cloud")) ok = false; }
-      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "H4-H1 Cloud")) ok = false; }
+      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "H4-M1 Cloud")) ok = false; }
+      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "H4-M1 Cloud")) ok = false; }
    }
    return ok;
 }
@@ -296,7 +294,7 @@ void OnTick()
          state[s] = 0;
       }
 
-      // Entry check: H4 and H1 must align in the same direction
+      // Entry check: all timeframes Daily?M1 must align
       if(state[s] == 0)
       {
          int st = CheckAllAlign(s);
@@ -308,7 +306,7 @@ void OnTick()
             GetEquityRisk(msgCount, msgLots);
             string msg = PCTime() + " | " + action + " " + syms[s] +
                          " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (H4-H1)";
+                         " @ " + DoubleToString(msgLots, 2) + " (H1-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
             if(OpenPositions(syms[s], isBuy))

@@ -1,14 +1,14 @@
-# Ichimoku H4-H1 Alignment EA — Summary
+# Ichimoku H4-M1 Alignment EA — Summary
 
 ## What It Does
 
-MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment on H4 and H1. No SL or TP — exit is driven by M15 kijun cross.
+MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). No SL or TP — exit is driven by M15 kijun cross.
 
 ---
 
 ## Entry
 
-Runs on every M1 bar close. Enters when both H4 and H1 price and chikou are aligned above/below their respective tenkan, kijun, and cloud, and no position is open. Opens `count` market orders at lot size determined by account equity.
+Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds and no position is open. Opens `count` market orders at lot size determined by account equity.
 
 ---
 
@@ -54,7 +54,7 @@ Checked on confirmed bar (shift 1). A TF is **bullish** when price and chikou ar
 | Kijun-sen | Price > Kijun (bar 1) | Chikou > Kijun at chikou's position |
 | Kumo cloud | Price > cloud top (bar 1) | Chikou > cloud top at chikou's position |
 
-**Bearish** is the mirror (price and chikou below all three). Both H4 and H1 must agree for a signal.
+**Bearish** is the mirror (price and chikou below all three). All 6 TFs (H4, H1, M30, M15, M5, M1) must agree for a signal.
 
 ### Buffer Offset Detail
 
@@ -93,10 +93,13 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 
 ## Timeframe Alignment Order
 
-Entry requires both H4 and H1 to agree. M15 is loaded only for the exit check.
+Timeframes are checked highest to lowest — all must agree before entry:
 
 | Index | Timeframe | Role |
 |-------|-----------|------|
-| 0 | H4 | Highest — trend anchor (entry) |
-| 1 | H1 | Confirmation (entry) |
-| 2 | M15 | Exit reference (IDX_M15) |
+| 0 | H4 | Highest — trend anchor |
+| 1 | H1 | Intermediate |
+| 2 | M30 | Intermediate |
+| 3 | M15 | Exit reference (IDX_M15) |
+| 4 | M5 | Fine filter |
+| 5 | M1 | Trigger bar |
