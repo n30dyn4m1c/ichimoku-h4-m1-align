@@ -2,7 +2,7 @@
 
 ## What It Does
 
-MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). No SL or TP — exit is driven by M15 kijun cross.
+MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). No SL or TP — exits are staggered: half of positions exit on M5 kijun cross, the other half on M15 kijun cross.
 
 ---
 
@@ -14,32 +14,37 @@ Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) pri
 
 ## Exit
 
-Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction.
+Positions are split into two equal halves at entry:
+
+- **M5 half** — closed when the M5 bar-1 close crosses the M5 kijun (bar 1) against the open direction.
+- **M15 half** — closed when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction.
+
+Halves are tagged via order comment (`H4-M1 Cloud M5` / `H4-M1 Cloud M15`) and tracked separately so each exits independently.
 
 ---
 
 ## Equity-Based Risk
 
-`GetEquityRisk()` determines position count and lot size at entry:
+`GetEquityRisk()` determines position count and lot size at entry. All counts are even so positions can be split evenly between M5 and M15 exit halves; the lowest tier opens 2:
 
 | Equity | Count | Lots |
 |--------|-------|------|
-| ≤ $30  | 1 | 0.10 |
-| ≤ $50  | 2 | 0.10 |
-| ≤ $70  | 3 | 0.10 |
-| ≤ $100 | 4 | 0.10 |
-| ≤ $130 | 5 | 0.10 |
-| ≤ $150 | 7 | 0.10 |
-| ≤ $170 | 9 | 0.10 |
-| ≤ $200 | 5 | 0.20 |
-| ≤ $300 | 4 | 0.30 |
-| ≤ $400 | 5 | 0.30 |
-| ≤ $500 | 6 | 0.30 |
-| ≤ $600 | 7 | 0.30 |
+| ≤ $30  | 2  | 0.10 |
+| ≤ $50  | 2  | 0.10 |
+| ≤ $70  | 4  | 0.10 |
+| ≤ $100 | 4  | 0.10 |
+| ≤ $130 | 6  | 0.10 |
+| ≤ $150 | 8  | 0.10 |
+| ≤ $170 | 10 | 0.10 |
+| ≤ $200 | 6  | 0.20 |
+| ≤ $300 | 4  | 0.30 |
+| ≤ $400 | 6  | 0.30 |
+| ≤ $500 | 6  | 0.30 |
+| ≤ $600 | 8  | 0.30 |
 | ≤ $1000 | 4 | 0.50 |
-| ≤ $3000 | 3 | 0.30 |
-| ≤ $5000 | 3 | 0.20 |
-| ≤ $8000 | 3 | 0.10 |
+| ≤ $3000 | 4 | 0.30 |
+| ≤ $5000 | 4 | 0.20 |
+| ≤ $8000 | 4 | 0.10 |
 | > $8000 | 2 | 0.10 |
 
 ---
@@ -77,7 +82,7 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 
 ## State / Restart
 
-`state[symbol]` tracks direction per symbol. On restart, `SyncStateFromPositions()` restores state from open positions filtered by magic number `MAGIC = 20260501` (date-stamped: May 1, 2026).
+`stateM5[symbol]` and `stateM15[symbol]` track direction per symbol for each exit batch. On restart, `SyncStateFromPositions()` restores both states from open positions filtered by magic number `MAGIC = 20260501` (date-stamped: May 1, 2026), assigning each position to its batch via order comment.
 
 ---
 
@@ -100,6 +105,6 @@ Timeframes are checked highest to lowest — all must agree before entry:
 | 0 | H4 | Highest — trend anchor |
 | 1 | H1 | Intermediate |
 | 2 | M30 | Intermediate |
-| 3 | M15 | Exit reference (IDX_M15) |
-| 4 | M5 | Fine filter |
+| 3 | M15 | Exit reference for M15 half (IDX_M15) |
+| 4 | M5 | Exit reference for M5 half (IDX_M5) / fine filter |
 | 5 | M1 | Trigger bar |
