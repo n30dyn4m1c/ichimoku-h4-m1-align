@@ -46,11 +46,15 @@ Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) agai
 
 ## Ichimoku Signal Rules
 
-Checked on confirmed bar (shift 1). A TF is **bullish** when:
-- Price close (bar 1) is above the Kumo cloud at bar 1
-- Chikou Span (bar 1) is above the Kumo cloud at chikou's chart position
+Checked on confirmed bar (shift 1). A TF is **bullish** when price and chikou are clear of all three Ichimoku levels:
 
-**Bearish** is the mirror. All 6 TFs (H4, H1, M30, M15, M5, M1) must agree for a signal.
+| Level | Price condition | Chikou condition |
+|-------|----------------|-----------------|
+| Tenkan-sen | Price > Tenkan (bar 1) | Chikou > Tenkan at chikou's position |
+| Kijun-sen | Price > Kijun (bar 1) | Chikou > Kijun at chikou's position |
+| Kumo cloud | Price > cloud top (bar 1) | Chikou > cloud top at chikou's position |
+
+**Bearish** is the mirror (price and chikou below all three). All 6 TFs (H4, H1, M30, M15, M5, M1) must agree for a signal.
 
 ### Buffer Offset Detail
 
