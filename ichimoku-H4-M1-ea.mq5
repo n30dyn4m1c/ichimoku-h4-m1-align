@@ -248,8 +248,8 @@ bool OpenPositions(string sym, bool isBuy)
    bool ok = true;
    for(int i = 0; i < count; i++)
    {
-      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "H1-M1 Cloud")) ok = false; }
-      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "H1-M1 Cloud")) ok = false; }
+      if(isBuy) { if(!trade.Buy(lots,  sym, ask, 0, 0, "H4-M1 Cloud")) ok = false; }
+      else      { if(!trade.Sell(lots, sym, bid, 0, 0, "H4-M1 Cloud")) ok = false; }
    }
    return ok;
 }
