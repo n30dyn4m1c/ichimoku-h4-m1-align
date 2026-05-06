@@ -34,7 +34,7 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 int      ich[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
-datetime lastM1bar = 0;
+datetime lastM1bar[MAX_SYMS];
 datetime lastH4bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
@@ -72,6 +72,7 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       state[s] = 0;
+      lastM1bar[s] = 0;
       for(int t = 0; t < TF_COUNT; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
@@ -332,20 +333,23 @@ void OnTick()
 {
    // Equity alert: fire only on a new H4 bar (CheckEquityAlert self-guards on day-of-week)
    MqlRates h4[];
-   if(CopyRates(_Symbol, PERIOD_H4, 0, 1, h4) > 0 && h4[0].time != lastH4bar)
+   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H4, 0, 1, h4) > 0 && h4[0].time != lastH4bar)
    {
       lastH4bar = h4[0].time;
       CheckEquityAlert();
    }
 
-   MqlRates m1[];
-   if(CopyRates(_Symbol, PERIOD_M1, 0, 2, m1) <= 0) return;
-   ArraySetAsSeries(m1, true);
-   if(m1[1].time == lastM1bar) return;
-   lastM1bar = m1[1].time;
+   SyncStateFromPositions();
 
    for(int s = 0; s < symsCount; s++)
    {
+      // Per-symbol M1 bar gating — only act on a new closed M1 bar for this symbol
+      MqlRates m1[];
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) <= 0) continue;
+      ArraySetAsSeries(m1, true);
+      if(m1[1].time == lastM1bar[s]) continue;
+      lastM1bar[s] = m1[1].time;
+
       // Exit check: close all when M15 closes against direction across M15 kijun
       if(state[s] != 0 && CheckM15Exit(s, state[s]))
       {
