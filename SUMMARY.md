@@ -2,19 +2,19 @@
 
 ## What It Does
 
-MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). No SL or TP — exit is driven by M15 kijun cross.
+MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). Signal exit is driven by M15 kijun cross; every position also carries an ATR-based protective stop loss (no TP).
 
 ---
 
 ## Entry
 
-Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds and no position is open. Opens `count` market orders at lot size determined by account equity.
+Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds, no position is open, and the current spread is within `InpMaxSpreadPoints`. Opens `count` market orders at lot size determined by account equity, each with a stop loss `InpATRMultiplier × ATR(M15, InpATRPeriod)` away from entry (widened to the broker's minimum stop distance if needed). Order placement stops at the first rejection (e.g. out of margin), and an entry is skipped entirely if the ATR value can't be read — the EA never opens unprotected positions while `InpUseStopLoss` is on.
 
 ---
 
 ## Exit
 
-Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction — i.e. for a long, the M15 close ends below the M15 kijun; for a short, the M15 close ends above the M15 kijun.
+Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction — i.e. for a long, the M15 close ends below the M15 kijun; for a short, the M15 close ends above the M15 kijun. Independently, each position's ATR stop loss caps the loss on fast adverse moves between M15 closes.
 
 ---
 
@@ -46,15 +46,16 @@ Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) agai
 
 ## Ichimoku Signal Rules
 
-Checked on confirmed bar (shift 1). A TF is **bullish** when price and chikou are clear of all three Ichimoku levels:
+Checked on confirmed bar (shift 1). The chikou span for bar 1 is by definition that bar's close, plotted `Kijun` bars back — so the chikou conditions compare the bar-1 close against the candle and Ichimoku levels at that plotted position. A TF is **bullish** when:
 
 | Level | Price condition | Chikou condition |
 |-------|----------------|-----------------|
-| Tenkan-sen | Price > Tenkan (bar 1) | Chikou > Tenkan at chikou's position |
-| Kijun-sen | Price > Kijun (bar 1) | Chikou > Kijun at chikou's position |
-| Kumo cloud | Price > cloud top (bar 1) | Chikou > cloud top at chikou's position |
+| Tenkan-sen | Price > Tenkan (bar 1) | Close (bar 1) > Tenkan at chikou's position |
+| Kijun-sen | Price > Kijun (bar 1) | Close (bar 1) > Kijun at chikou's position |
+| Kumo cloud | Price > cloud top (bar 1) | Close (bar 1) > cloud top at chikou's position |
+| Price action | — | Close (bar 1) > high of the candle at chikou's position |
 
-**Bearish** is the mirror (price and chikou below all three). All 6 TFs (H4, H1, M30, M15, M5, M1) must agree for a signal.
+**Bearish** is the mirror (price and chikou below all levels, chikou below the candle low). All 6 TFs (H4, H1, M30, M15, M5, M1) must agree for a signal.
 
 ### Buffer Offset Detail
 
@@ -64,8 +65,10 @@ Checked on confirmed bar (shift 1). A TF is **bullish** when price and chikou ar
 |-------|---------|---------|
 | `sh = 1` | — | Last confirmed bar |
 | `sh + Kijun` (= 27) | shift into Senkou buffer | Cloud at bar 1 (Senkou is plotted Kijun bars ahead) |
-| `chShift = sh + Kijun` (= 27) | shift into Chikou buffer | Chikou value at bar 1 (Chikou is plotted Kijun bars back) |
-| `chCloud = sh + SenkouB` (= 53) | shift for cloud at chikou's position | Cloud 52 bars before bar 1 — the cloud chikou "sees" |
+| `chShift = sh + Kijun` (= 27) | chikou's chart position for bar 1 | Where bar 1's chikou is plotted — reference candle, Tenkan, and Kijun are read here |
+| `chCloud = chShift + Kijun` (= 53) | shift for cloud at chikou's position | Cloud 52 bars before bar 1 — the cloud chikou "sees" |
+
+The chikou *value* itself is taken directly as `close[1]` from rates (not from the indicator buffer) — the buffer read at offset 27 in earlier versions actually returned the close from 27 bars ago, which silently reduced the chikou filter to a lagged copy of the price check.
 
 ---
 
@@ -77,7 +80,7 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 
 ## State / Restart
 
-`state[symbol]` tracks direction per symbol. On restart, `SyncStateFromPositions()` restores state from open positions filtered by magic number `MAGIC = 20260501` (date-stamped: May 1, 2026).
+`state[symbol]` tracks direction per symbol. `SyncStateFromPositions()` rebuilds it from open positions (filtered by magic number `MAGIC = 20260501`) on init and on every tick — clearing first, so positions closed by stop loss or manually free the symbol for re-entry instead of leaving stale state.
 
 ---
 
@@ -88,6 +91,10 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 | `Symbols` | `GOLDm#` | Comma-separated watch list (up to 60 symbols) |
 | `Tenkan / Kijun / SenkouB` | 9 / 26 / 52 | Ichimoku periods |
 | `Slippage` | 30 | Max slippage in points |
+| `InpUseStopLoss` | `true` | Attach an ATR-based stop loss to every entry |
+| `InpATRPeriod` | 14 | ATR period, computed on M15 |
+| `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
+| `InpMaxSpreadPoints` | 60 | Skip entries when spread exceeds this (0 = no limit); tune per broker |
 
 ---
 

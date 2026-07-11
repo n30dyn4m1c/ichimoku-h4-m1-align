@@ -1,7 +1,8 @@
 //+------------------------------------------------------------------+
 //| Ichimoku H4-M1 Alignment EA                                      |
 //| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
-//| Exit:  M15 close crosses M15 kijun against trade direction       |
+//| Exit:  M15 close crosses M15 kijun against trade direction,      |
+//|        or ATR-based protective stop loss                         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -14,6 +15,12 @@ input int    Tenkan   = 9;
 input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
+
+input group  "Risk Protection"
+input bool   InpUseStopLoss     = true;   // Attach ATR-based stop loss to every entry
+input int    InpATRPeriod       = 14;     // ATR period (M15)
+input double InpATRMultiplier   = 2.0;    // SL distance = ATR * multiplier
+input int    InpMaxSpreadPoints = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -32,6 +39,7 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 };
 
 int      ich[MAX_SYMS][TF_COUNT];
+int      atr[MAX_SYMS];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -77,6 +85,13 @@ int OnInit()
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+      }
+
+      atr[s] = INVALID_HANDLE;
+      if(InpUseStopLoss)
+      {
+         atr[s] = iATR(syms[s], PERIOD_M15, InpATRPeriod);
+         if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
@@ -131,8 +146,11 @@ void CheckEquityAlert()
 void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
+   {
       for(int t = 0; t < TF_COUNT; t++)
          IndicatorRelease(ich[s][t]);
+      if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
+   }
 }
 
 //==============================================================
@@ -141,6 +159,10 @@ void OnDeinit(const int reason)
 
 void SyncStateFromPositions()
 {
+   // Rebuild from scratch so positions closed by SL or manually free the
+   // symbol for re-entry instead of leaving stale state behind.
+   for(int s = 0; s < symsCount; s++) state[s] = 0;
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -174,12 +196,12 @@ int CheckAlign(int s, int tfIdx)
    ArraySetAsSeries(rt, true);
 
    int sh      = 1;              // last closed bar
-   int chShift = sh + Kijun;     // chikou buffer offset for bar sh
-   int chCloud = chShift + Kijun;// cloud buffer offset at chikou's chart position
+   int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
+   int chCloud = chShift + Kijun;// senkou buffer offset for the cloud at chikou's position
 
    if(ArraySize(rt) <= chCloud) return 0;
 
-   double tenkan[1], kijun[1], senA[1], senB[1], chik[1];
+   double tenkan[1], kijun[1], senA[1], senB[1];
    double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
 
    // price bar sh: tenkan, kijun, cloud
@@ -187,8 +209,6 @@ int CheckAlign(int s, int tfIdx)
    if(CopyBuffer(ich[s][tfIdx], 1, sh,         1, kijun)     <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)      <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)      <= 0) return 0;
-   // chikou value at bar sh
-   if(CopyBuffer(ich[s][tfIdx], 4, chShift,    1, chik)      <= 0) return 0;
    // tenkan, kijun, cloud at chikou's chart position
    if(CopyBuffer(ich[s][tfIdx], 0, chShift,    1, tenkan_ch) <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, chShift,    1, kijun_ch)  <= 0) return 0;
@@ -196,18 +216,25 @@ int CheckAlign(int s, int tfIdx)
    if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch)   <= 0) return 0;
 
    double closeP = rt[sh].close;
+   // The chikou span for bar sh IS its close, plotted Kijun bars back.
+   // Compare it against the candle and Ichimoku levels at that chart position.
+   double chik   = closeP;
    double cHi    = MathMax(senA[0], senB[0]);
    double cLo    = MathMin(senA[0], senB[0]);
    double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
-   // bullish: price above tenkan, kijun, and cloud; chikou above all three at its position
+   // bullish: price above tenkan, kijun, and cloud; chikou clear above price,
+   // tenkan, kijun, and cloud at its plotted position
    if(closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi &&
-      chik[0] > tenkan_ch[0] && chik[0] > kijun_ch[0] && chik[0] > cHiC) return  1;
+      chik > rt[chShift].high &&
+      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
 
-   // bearish: price below tenkan, kijun, and cloud; chikou below all three at its position
+   // bearish: price below tenkan, kijun, and cloud; chikou clear below price,
+   // tenkan, kijun, and cloud at its plotted position
    if(closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo &&
-      chik[0] < tenkan_ch[0] && chik[0] < kijun_ch[0] && chik[0] < cLoC) return -1;
+      chik < rt[chShift].low &&
+      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
 
    return 0;
 }
@@ -291,10 +318,37 @@ void GetEquityRisk(int &count, double &lots)
 // Trading Functions
 //==============================================================
 
-int OpenPositions(string sym, bool isBuy)
+bool SpreadOK(string sym)
 {
-   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
-   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   if(InpMaxSpreadPoints <= 0) return true;
+   return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
+}
+
+// Protective stop: ATR(M15) * multiplier away from entry, widened to the
+// broker's minimum stop distance if needed. Returns false when the ATR
+// value is unavailable so the caller skips the entry instead of trading
+// unprotected.
+bool GetStopLoss(int s, bool isBuy, double price, double &sl)
+{
+   sl = 0.0;
+   if(!InpUseStopLoss) return true;
+
+   double a[1];
+   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+
+   double dist    = a[0] * InpATRMultiplier;
+   double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
+   if(dist < minDist) dist = minDist;
+
+   int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   sl = NormalizeDouble(isBuy ? price - dist : price + dist, digits);
+   return true;
+}
+
+int OpenPositions(int s, bool isBuy)
+{
+   string sym = syms[s];
    int count; double lots;
    GetEquityRisk(count, lots);
 
@@ -303,9 +357,15 @@ int OpenPositions(string sym, bool isBuy)
    int filled = 0;
    for(int i = 0; i < count; i++)
    {
-      bool ok = isBuy ? trade.Buy(lots,  sym, ask, 0, 0, "Buy H4-M1")
-                      : trade.Sell(lots, sym, bid, 0, 0, "Sell H4-M1");
-      if(ok) filled++;
+      double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                           : SymbolInfoDouble(sym, SYMBOL_BID);
+      double sl;
+      if(!GetStopLoss(s, isBuy, price, sl)) break;
+
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy H4-M1")
+                      : trade.Sell(lots, sym, price, sl, 0, "Sell H4-M1");
+      if(!ok) break;   // out of margin or rejected — don't hammer the server
+      filled++;
    }
    return filled;
 }
@@ -361,8 +421,8 @@ void OnTick()
          state[s] = 0;
       }
 
-      // Entry check: all timeframes H4→M1 must align
-      if(state[s] == 0)
+      // Entry check: all timeframes H4→M1 must align, spread must be sane
+      if(state[s] == 0 && SpreadOK(syms[s]))
       {
          int st = CheckAllAlign(s);
          if(st != 0)
@@ -373,12 +433,12 @@ void OnTick()
             GetEquityRisk(msgCount, msgLots);
             string msg = PCTime() + " | " + action + " " + syms[s] +
                          " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (H1-M1)";
+                         " @ " + DoubleToString(msgLots, 2) + " (H4-M1)";
             Print(msg); Alert(msg); SendNotification(msg);
 
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
-            if(OpenPositions(syms[s], isBuy) > 0)
+            if(OpenPositions(s, isBuy) > 0)
                state[s] = st;
          }
       }
