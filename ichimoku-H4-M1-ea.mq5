@@ -21,9 +21,7 @@ input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to eve
 input int    InpATRPeriod         = 14;     // ATR period (M15)
 input double InpATRMultiplier     = 2.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
-input double InpMidRiskPct        = 5.0;    // % of equity risked per trade, $1000-$5000
-input double InpUpperRiskPct      = 3.0;    // % of equity risked per trade, $5000-$8000
-input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade, > $8000
+input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -295,11 +293,11 @@ string PCTime()
 // Risk Management
 //==============================================================
 
-// Lot size that risks riskPct% of equity, split evenly across 'count'
-// concurrent orders, if the ATR stop loss is hit on all of them. Falls back
-// to a conservative fixed lot when the stop distance or the symbol's tick
-// value/size aren't available (e.g. InpUseStopLoss = false).
-double RiskBasedLots(string sym, double eq, double stopDist, int count, double riskPct)
+// Lot size that risks InpHighEquityRiskPct% of equity, split evenly across
+// 'count' concurrent orders, if the ATR stop loss is hit on all of them.
+// Falls back to a conservative fixed lot when the stop distance or the
+// symbol's tick value/size aren't available (e.g. InpUseStopLoss = false).
+double RiskBasedLots(string sym, double eq, double stopDist, int count)
 {
    double fallback = 0.10;
    if(stopDist <= 0 || count <= 0) return fallback;
@@ -311,7 +309,7 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count, double r
    double moneyPerLot = (stopDist / tickSize) * tickValue;
    if(moneyPerLot <= 0) return fallback;
 
-   double riskMoney = eq * (riskPct / 100.0) / count;
+   double riskMoney = eq * (InpHighEquityRiskPct / 100.0) / count;
    double lots      = riskMoney / moneyPerLot;
 
    double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
@@ -339,9 +337,10 @@ void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
    else if(eq <= 500)  { count = 6;  lots = 0.30; }
    else if(eq <= 600)  { count = 8;  lots = 0.30; }
    else if(eq <= 1000) { count = 4;  lots = 0.50; }
-   else if(eq <= 5000) { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, InpMidRiskPct); }
-   else if(eq <= 8000) { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, InpUpperRiskPct); }
-   else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count, InpHighEquityRiskPct); }
+   else if(eq <= 3000) { count = 4;  lots = 0.30; }
+   else if(eq <= 5000) { count = 4;  lots = 0.20; }
+   else if(eq <= 8000) { count = 4;  lots = 0.10; }
+   else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count); }
 }
 
 //==============================================================
