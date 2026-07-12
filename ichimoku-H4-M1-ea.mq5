@@ -17,10 +17,11 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 input group  "Risk Protection"
-input bool   InpUseStopLoss     = true;   // Attach ATR-based stop loss to every entry
-input int    InpATRPeriod       = 14;     // ATR period (M15)
-input double InpATRMultiplier   = 2.0;    // SL distance = ATR * multiplier
-input int    InpMaxSpreadPoints = 60;     // Max spread in points to allow entry (0 = no limit)
+input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
+input int    InpATRPeriod         = 14;     // ATR period (M15)
+input double InpATRMultiplier     = 2.0;    // SL distance = ATR * multiplier
+input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
+input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -292,7 +293,35 @@ string PCTime()
 // Risk Management
 //==============================================================
 
-void GetEquityRisk(int &count, double &lots)
+// Lot size that risks InpHighEquityRiskPct% of equity, split evenly across
+// 'count' concurrent orders, if the ATR stop loss is hit on all of them.
+// Falls back to a conservative fixed lot when the stop distance or the
+// symbol's tick value/size aren't available (e.g. InpUseStopLoss = false).
+double RiskBasedLots(string sym, double eq, double stopDist, int count)
+{
+   double fallback = 0.10;
+   if(stopDist <= 0 || count <= 0) return fallback;
+
+   double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0 || tickSize <= 0) return fallback;
+
+   double moneyPerLot = (stopDist / tickSize) * tickValue;
+   if(moneyPerLot <= 0) return fallback;
+
+   double riskMoney = eq * (InpHighEquityRiskPct / 100.0) / count;
+   double lots      = riskMoney / moneyPerLot;
+
+   double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   double lotMin  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double lotMax  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   if(lotStep > 0) lots = MathFloor(lots / lotStep) * lotStep;
+   lots = MathMax(lotMin, MathMin(lotMax, lots));
+
+   return (lots > 0) ? lots : fallback;
+}
+
+void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    if(eq <= 30)        { count = 2;  lots = 0.10; }
@@ -311,7 +340,7 @@ void GetEquityRisk(int &count, double &lots)
    else if(eq <= 3000) { count = 4;  lots = 0.30; }
    else if(eq <= 5000) { count = 4;  lots = 0.20; }
    else if(eq <= 8000) { count = 4;  lots = 0.10; }
-   else                { count = 2;  lots = 0.10; }
+   else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count); }
 }
 
 //==============================================================
@@ -324,33 +353,37 @@ bool SpreadOK(string sym)
    return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
 }
 
-// Protective stop: ATR(M15) * multiplier away from entry, widened to the
-// broker's minimum stop distance if needed. Returns false when the ATR
-// value is unavailable so the caller skips the entry instead of trading
-// unprotected.
-bool GetStopLoss(int s, bool isBuy, double price, double &sl)
+// ATR(M15) * multiplier, widened to the broker's minimum stop distance if
+// needed. Returns false when the ATR value is unavailable so the caller
+// skips the entry instead of trading unprotected.
+bool GetStopDistance(int s, double &dist)
 {
-   sl = 0.0;
-   if(!InpUseStopLoss) return true;
-
+   dist = 0.0;
    double a[1];
    if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
 
-   double dist    = a[0] * InpATRMultiplier;
+   dist = a[0] * InpATRMultiplier;
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
    double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
    if(dist < minDist) dist = minDist;
-
-   int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
-   sl = NormalizeDouble(isBuy ? price - dist : price + dist, digits);
    return true;
+}
+
+double BuildStopLoss(int s, bool isBuy, double price, double dist)
+{
+   int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
 int OpenPositions(int s, bool isBuy)
 {
    string sym = syms[s];
+
+   double dist = 0.0;
+   if(InpUseStopLoss && !GetStopDistance(s, dist)) return 0;   // ATR unavailable — skip entry
+
    int count; double lots;
-   GetEquityRisk(count, lots);
+   GetEquityRisk(sym, dist, count, lots);
 
    trade.SetExpertMagicNumber(MAGIC);
 
@@ -359,8 +392,7 @@ int OpenPositions(int s, bool isBuy)
    {
       double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
                            : SymbolInfoDouble(sym, SYMBOL_BID);
-      double sl;
-      if(!GetStopLoss(s, isBuy, price, sl)) break;
+      double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
 
       bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy H4-M1")
                       : trade.Sell(lots, sym, price, sl, 0, "Sell H4-M1");
@@ -429,8 +461,10 @@ void OnTick()
          {
             bool   isBuy  = (st == 1);
             string action = isBuy ? "Buy" : "Sell";
+            double msgDist = 0.0;
+            if(InpUseStopLoss) GetStopDistance(s, msgDist);
             int msgCount; double msgLots;
-            GetEquityRisk(msgCount, msgLots);
+            GetEquityRisk(syms[s], msgDist, msgCount, msgLots);
             string msg = PCTime() + " | " + action + " " + syms[s] +
                          " x" + IntegerToString(msgCount) +
                          " @ " + DoubleToString(msgLots, 2) + " (H4-M1)";
