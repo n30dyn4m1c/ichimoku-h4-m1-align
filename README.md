@@ -84,9 +84,11 @@ Independently of that signal exit, every position carries an **ATR(M15) × multi
 | ≤ $3000 | 4 | 0.30 |
 | ≤ $5000 | 4 | 0.20 |
 | ≤ $8000 | 4 | 0.10 |
-| > $8000 | 2 | 0.10 |
+| > $8000 | 2 | dynamic (see below) |
 
 > Tune this table in `GetEquityRisk()` to fit your own account size and risk tolerance — the defaults are unlikely to be right for you as-is.
+
+Above $8000, lot size is no longer fixed — it's computed by `RiskBasedLots()` so that if the ATR stop loss is hit on both orders, the combined loss is `InpHighEquityRiskPct`% of equity (1% by default). It uses the ATR(M15) stop distance and the symbol's tick value/size to size the position, then rounds down to the broker's lot step and clamps to the symbol's min/max volume. If the ATR value or tick data aren't available (or `InpUseStopLoss` is off), it falls back to a fixed 0.10 lots.
 
 If a batch of orders is only partially filled (e.g. the broker runs out of margin partway through), the EA still tracks the position and exit logic correctly for whatever did open.
 
@@ -135,6 +137,7 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 | `InpATRPeriod` | 14 | ATR period, computed on M15 |
 | `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
 | `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert |
 | `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline |
 | `InpCheckDay` | Friday | Day of week the equity alert is evaluated |

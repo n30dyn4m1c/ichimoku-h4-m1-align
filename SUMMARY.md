@@ -40,7 +40,7 @@ Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) agai
 | ≤ $3000 | 4 | 0.30 |
 | ≤ $5000 | 4 | 0.20 |
 | ≤ $8000 | 4 | 0.10 |
-| > $8000 | 2 | 0.10 |
+| > $8000 | 2 | dynamic — sized so 1% of equity (`InpHighEquityRiskPct`) is risked across both orders if the ATR stop is hit |
 
 ---
 
@@ -95,6 +95,7 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 | `InpATRPeriod` | 14 | ATR period, computed on M15 |
 | `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Skip entries when spread exceeds this (0 = no limit); tune per broker |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (`RiskBasedLots()`) |
 
 ---
 
