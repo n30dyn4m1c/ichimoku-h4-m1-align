@@ -37,10 +37,9 @@ Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) agai
 | ≤ $500 | 6  | 0.30 |
 | ≤ $600 | 8  | 0.30 |
 | ≤ $1000 | 4 | 0.50 |
-| ≤ $3000 | 4 | 0.30 |
-| ≤ $5000 | 4 | 0.20 |
-| ≤ $8000 | 4 | 0.10 |
-| > $8000 | 2 | dynamic — sized so 1% of equity (`InpHighEquityRiskPct`) is risked across both orders if the ATR stop is hit |
+| $1000–$5000 | 4 | dynamic — sized so 5% of equity (`InpMidRiskPct`) is risked across all orders if the ATR stop is hit |
+| $5000–$8000 | 4 | dynamic — 3% of equity (`InpUpperRiskPct`) |
+| > $8000 | 2 | dynamic — 1% of equity (`InpHighEquityRiskPct`) |
 
 ---
 
@@ -95,7 +94,9 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 | `InpATRPeriod` | 14 | ATR period, computed on M15 |
 | `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Skip entries when spread exceeds this (0 = no limit); tune per broker |
-| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (`RiskBasedLots()`) |
+| `InpMidRiskPct` | 5.0 | % of equity risked per trade, $1000–$5000 (`RiskBasedLots()`) |
+| `InpUpperRiskPct` | 3.0 | % of equity risked per trade, $5000–$8000 |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade, > $8000 |
 
 ---
 
