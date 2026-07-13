@@ -44,7 +44,7 @@ int      atr[MAX_SYMS];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
-datetime lastH4bar = 0;
+datetime lastH1bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
 int MAGIC = 20260502;
@@ -192,13 +192,13 @@ int CheckAlign(int s, int tfIdx)
 {
    ENUM_TIMEFRAMES tf = tfs[tfIdx];
 
-   MqlRates rt[];
-   if(CopyRates(syms[s], tf, 0, 120, rt) <= 0) return 0;
-   ArraySetAsSeries(rt, true);
-
    int sh      = 1;              // last closed bar
    int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
    int chCloud = chShift + Kijun;// senkou buffer offset for the cloud at chikou's position
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], tf, 0, chCloud + 1, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
 
    if(ArraySize(rt) <= chCloud) return 0;
 
@@ -375,15 +375,9 @@ double BuildStopLoss(int s, bool isBuy, double price, double dist)
    return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
-int OpenPositions(int s, bool isBuy)
+int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
 {
    string sym = syms[s];
-
-   double dist = 0.0;
-   if(InpUseStopLoss && !GetStopDistance(s, dist)) return 0;   // ATR unavailable — skip entry
-
-   int count; double lots;
-   GetEquityRisk(sym, dist, count, lots);
 
    trade.SetExpertMagicNumber(MAGIC);
 
@@ -423,11 +417,11 @@ void ClosePositions(string sym)
 
 void OnTick()
 {
-   // Equity alert: fire only on a new H4 bar (CheckEquityAlert self-guards on day-of-week)
-   MqlRates h4[];
-   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H4, 0, 1, h4) > 0 && h4[0].time != lastH4bar)
+   // Equity alert: fire only on a new H1 bar (CheckEquityAlert self-guards on day-of-week)
+   MqlRates h1[];
+   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H1, 0, 1, h1) > 0 && h1[0].time != lastH1bar)
    {
-      lastH4bar = h4[0].time;
+      lastH1bar = h1[0].time;
       CheckEquityAlert();
    }
 
@@ -437,7 +431,7 @@ void OnTick()
    {
       // Per-symbol M1 bar gating — only act on a new closed M1 bar for this symbol
       MqlRates m1[];
-      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) <= 0) continue;
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) continue;
       ArraySetAsSeries(m1, true);
       if(m1[1].time == lastM1bar[s]) continue;
       lastM1bar[s] = m1[1].time;
@@ -459,21 +453,28 @@ void OnTick()
          int st = CheckAllAlign(s);
          if(st != 0)
          {
-            bool   isBuy  = (st == 1);
-            string action = isBuy ? "Buy" : "Sell";
-            double msgDist = 0.0;
-            if(InpUseStopLoss) GetStopDistance(s, msgDist);
-            int msgCount; double msgLots;
-            GetEquityRisk(syms[s], msgDist, msgCount, msgLots);
-            string msg = PCTime() + " | " + action + " " + syms[s] +
-                         " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (H1-M1)";
-            Print(msg); Alert(msg); SendNotification(msg);
+            bool   isBuy = (st == 1);
+            double dist  = 0.0;
+            if(InpUseStopLoss && !GetStopDistance(s, dist)) continue;   // ATR unavailable — skip entry
+
+            int count; double lots;
+            GetEquityRisk(syms[s], dist, count, lots);
 
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
-            if(OpenPositions(s, isBuy) > 0)
+            // Alert reports the actual fill count, not the requested count.
+            int filled = OpenPositions(s, isBuy, dist, count, lots);
+            if(filled > 0)
+            {
                state[s] = st;
+               string action = isBuy ? "Buy" : "Sell";
+               string msg = PCTime() + " | " + action + " " + syms[s] +
+                            " x" + IntegerToString(filled) +
+                            " @ " + DoubleToString(lots, 2) + " (H1-M1)";
+               Print(msg); Alert(msg); SendNotification(msg);
+            }
+            else
+               Print(PCTime() + " | " + syms[s] + " entry signal but no order filled");
          }
       }
    }
