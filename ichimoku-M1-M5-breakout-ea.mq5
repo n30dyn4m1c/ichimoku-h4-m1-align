@@ -1,8 +1,9 @@
 //+------------------------------------------------------------------+
-//| Ichimoku M1 Breakout EA                                          |
-//| Entry: M1 price+chikou all above/below tenkan,kijun,cloud,       |
-//|        close clear of the cloud by a minimum ATR distance        |
-//| Exit:  M1 close crosses M1 kijun against trade direction,        |
+//| Ichimoku M1-M5 Breakout Alignment EA                             |
+//| Entry: M5 and M1 price+chikou all above/below tenkan,kijun,      |
+//|        cloud, each close clear of its cloud by a minimum ATR     |
+//|        distance                                                  |
+//| Exit:  M5 close crosses M5 kijun against trade direction,        |
 //|        or ATR-based protective stop loss                         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -18,12 +19,12 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 input group  "Entry Quality"
-input double InpMinBreakoutATR = 0.5;       // Min close distance beyond cloud, in ATR multiples (0 = off)
+input double InpMinBreakoutATR = 0.5;       // Min close distance beyond cloud, in ATR multiples per TF (0 = off)
 
 input group  "Risk Protection"
 input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
-input int    InpATRPeriod         = 14;     // ATR period (M1)
-input double InpATRMultiplier     = 2.0;    // SL distance = ATR * multiplier
+input int    InpATRPeriod         = 14;     // ATR period
+input double InpATRMultiplier     = 2.0;    // SL distance = ATR(M1) * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 
@@ -36,16 +37,21 @@ input bool              InpSendPush          = true;       // Send push notifica
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
+#define TF_COUNT  2
+#define IDX_M5    0   // index of M5 in tfs[] — used for exit check
+#define IDX_M1    1   // index of M1 in tfs[] — used for stop loss sizing
 
-int      ich[MAX_SYMS];
-int      atr[MAX_SYMS];
+ENUM_TIMEFRAMES tfs[TF_COUNT] = { PERIOD_M5, PERIOD_M1 };
+
+int      ich[MAX_SYMS][TF_COUNT];
+int      atr[MAX_SYMS][TF_COUNT];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime lastAlertBar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
-int MAGIC = 20260716;
+int MAGIC = 20260717;
 
 #define GV_BASE_EQUITY    "EA_EquityAlert_Base_"    + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
 #define GV_LAST_ALERT_DAY "EA_EquityAlert_Day_"     + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
@@ -80,14 +86,17 @@ int OnInit()
    {
       state[s] = 0;
       lastM1bar[s] = 0;
-      ich[s] = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
-      if(ich[s] == INVALID_HANDLE) return(INIT_FAILED);
-
-      atr[s] = INVALID_HANDLE;
-      if(InpUseStopLoss || InpMinBreakoutATR > 0)
+      for(int t = 0; t < TF_COUNT; t++)
       {
-         atr[s] = iATR(syms[s], PERIOD_M1, InpATRPeriod);
-         if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
+         ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
+         if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+
+         atr[s][t] = INVALID_HANDLE;
+         if(InpUseStopLoss || InpMinBreakoutATR > 0)
+         {
+            atr[s][t] = iATR(syms[s], tfs[t], InpATRPeriod);
+            if(atr[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+         }
       }
    }
 
@@ -143,8 +152,11 @@ void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
    {
-      IndicatorRelease(ich[s]);
-      if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
+      for(int t = 0; t < TF_COUNT; t++)
+      {
+         IndicatorRelease(ich[s][t]);
+         if(atr[s][t] != INVALID_HANDLE) IndicatorRelease(atr[s][t]);
+      }
    }
 }
 
@@ -178,35 +190,37 @@ void SyncStateFromPositions()
 }
 
 //==============================================================
-// ATR value of the last closed M1 bar. Returns false when the
-// buffer isn't ready yet.
+// ATR value of the last closed bar on the given timeframe.
+// Returns false when the buffer isn't ready yet.
 //==============================================================
 
-bool GetATRValue(int s, double &val)
+bool GetATRValue(int s, int tfIdx, double &val)
 {
    val = 0.0;
    double a[1];
-   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   if(CopyBuffer(atr[s][tfIdx], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
    val = a[0];
    return true;
 }
 
 //==============================================================
-// Alignment Check: M1 price and chikou both above/below tenkan,
-// kijun, and cloud, with the close clear of the cloud by at
-// least InpMinBreakoutATR * ATR so marginal breakouts that just
-// graze the cloud edge are skipped.
+// Alignment Check: price and chikou both above/below tenkan,
+// kijun, and cloud on the given timeframe, with the close clear
+// of the cloud by at least InpMinBreakoutATR * ATR(tf) so
+// marginal breakouts that just graze the cloud edge are skipped.
 // Returns 1 (bullish), -1 (bearish), 0 (none)
 //==============================================================
 
-int CheckAlign(int s)
+int CheckAlign(int s, int tfIdx)
 {
+   ENUM_TIMEFRAMES tf = tfs[tfIdx];
+
    int sh      = 1;              // last closed bar
    int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
    int chCloud = chShift + Kijun;// senkou buffer offset for the cloud at chikou's position
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, chCloud + 1, rt) <= 0) return 0;
+   if(CopyRates(syms[s], tf, 0, chCloud + 1, rt) <= 0) return 0;
    ArraySetAsSeries(rt, true);
 
    if(ArraySize(rt) <= chCloud) return 0;
@@ -215,15 +229,15 @@ int CheckAlign(int s)
    double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
 
    // price bar sh: tenkan, kijun, cloud
-   if(CopyBuffer(ich[s], 0, sh,         1, tenkan)    <= 0) return 0;
-   if(CopyBuffer(ich[s], 1, sh,         1, kijun)     <= 0) return 0;
-   if(CopyBuffer(ich[s], 2, sh + Kijun, 1, senA)      <= 0) return 0;
-   if(CopyBuffer(ich[s], 3, sh + Kijun, 1, senB)      <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 0, sh,         1, tenkan)    <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, sh,         1, kijun)     <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)      <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)      <= 0) return 0;
    // tenkan, kijun, cloud at chikou's chart position
-   if(CopyBuffer(ich[s], 0, chShift,    1, tenkan_ch) <= 0) return 0;
-   if(CopyBuffer(ich[s], 1, chShift,    1, kijun_ch)  <= 0) return 0;
-   if(CopyBuffer(ich[s], 2, chCloud,    1, senA_ch)   <= 0) return 0;
-   if(CopyBuffer(ich[s], 3, chCloud,    1, senB_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 0, chShift,    1, tenkan_ch) <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, chShift,    1, kijun_ch)  <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch)   <= 0) return 0;
 
    double closeP = rt[sh].close;
    // The chikou span for bar sh IS its close, plotted Kijun bars back.
@@ -235,13 +249,14 @@ int CheckAlign(int s)
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
    // Breakout-strength buffer: the close must clear the cloud by this much,
-   // not merely sit on the other side of it. Skip the signal entirely when
-   // the filter is on but ATR isn't available, rather than trade unfiltered.
+   // not merely sit on the other side of it. Sized from this timeframe's own
+   // ATR. Skip the signal entirely when the filter is on but ATR isn't
+   // available, rather than trade unfiltered.
    double buf = 0.0;
    if(InpMinBreakoutATR > 0)
    {
       double atrVal;
-      if(!GetATRValue(s, atrVal)) return 0;
+      if(!GetATRValue(s, tfIdx, atrVal)) return 0;
       buf = atrVal * InpMinBreakoutATR;
    }
 
@@ -261,16 +276,32 @@ int CheckAlign(int s)
 }
 
 //==============================================================
-// Exit Check: M1 price closed on wrong side of M1 kijun
+// Entry Check: M5 and M1 breakouts aligned in the same direction
 //==============================================================
 
-bool CheckM1Exit(int s, int dir)
+int CheckAllAlign(int s)
+{
+   int dir = CheckAlign(s, 0);
+   if(dir == 0) return 0;
+
+   for(int t = 1; t < TF_COUNT; t++)
+   {
+      if(CheckAlign(s, t) != dir) return 0;
+   }
+   return dir;
+}
+
+//==============================================================
+// Exit Check: M5 price closed on wrong side of M5 kijun
+//==============================================================
+
+bool CheckM5Exit(int s, int dir)
 {
    double kij[1];
-   if(CopyBuffer(ich[s], 1, 1, 1, kij) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_M5], 1, 1, 1, kij) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M1, 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], PERIOD_M5, 1, 1, rt) <= 0) return false;
    double closeP = rt[0].close;
 
    if(dir ==  1 && closeP < kij[0]) return true;
@@ -364,7 +395,7 @@ bool GetStopDistance(int s, double &dist)
 {
    dist = 0.0;
    double atrVal;
-   if(!GetATRValue(s, atrVal)) return false;
+   if(!GetATRValue(s, IDX_M1, atrVal)) return false;
 
    dist = atrVal * InpATRMultiplier;
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
@@ -392,8 +423,8 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
                            : SymbolInfoDouble(sym, SYMBOL_BID);
       double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
 
-      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy M1")
-                      : trade.Sell(lots, sym, price, sl, 0, "Sell M1");
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy M1-M5")
+                      : trade.Sell(lots, sym, price, sl, 0, "Sell M1-M5");
       if(!ok) break;   // out of margin or rejected — don't hammer the server
       filled++;
    }
@@ -440,21 +471,21 @@ void OnTick()
          CheckEquityAlert();
       }
 
-      // Exit check: close all when M1 closes against direction across M1 kijun
-      if(state[s] != 0 && CheckM1Exit(s, state[s]))
+      // Exit check: close all when M5 closes against direction across M5 kijun
+      if(state[s] != 0 && CheckM5Exit(s, state[s]))
       {
          string side = (state[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M1 kijun crossed)";
+         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M5 kijun crossed)";
          Print(msg); Alert(msg); SendNotification(msg);
 
          ClosePositions(syms[s]);
          state[s] = 0;
       }
 
-      // Entry check: M1 must align, spread must be sane
+      // Entry check: M5 and M1 must both align, spread must be sane
       if(state[s] == 0 && SpreadOK(syms[s]))
       {
-         int st = CheckAlign(s);
+         int st = CheckAllAlign(s);
          if(st != 0)
          {
             bool   isBuy = (st == 1);
@@ -474,7 +505,7 @@ void OnTick()
                string action = isBuy ? "Buy" : "Sell";
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +
-                            " @ " + DoubleToString(lots, 2) + " (M1)";
+                            " @ " + DoubleToString(lots, 2) + " (M1-M5)";
                Print(msg); Alert(msg); SendNotification(msg);
             }
             else
