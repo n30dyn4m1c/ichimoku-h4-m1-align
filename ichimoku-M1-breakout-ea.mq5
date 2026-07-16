@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //| Ichimoku M1 Breakout EA                                          |
-//| Entry: M1 price+chikou all above/below tenkan,kijun,cloud        |
+//| Entry: M1 price+chikou all above/below tenkan,kijun,cloud,       |
+//|        close clear of the cloud by a minimum ATR distance        |
 //| Exit:  M1 close crosses M1 kijun against trade direction,        |
 //|        or ATR-based protective stop loss                         |
 //| Author: Neo Malesa                                               |
@@ -15,6 +16,9 @@ input int    Tenkan   = 9;
 input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
+
+input group  "Entry Quality"
+input double InpMinBreakoutATR = 0.5;       // Min close distance beyond cloud, in ATR multiples (0 = off)
 
 input group  "Risk Protection"
 input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
@@ -80,7 +84,7 @@ int OnInit()
       if(ich[s] == INVALID_HANDLE) return(INIT_FAILED);
 
       atr[s] = INVALID_HANDLE;
-      if(InpUseStopLoss)
+      if(InpUseStopLoss || InpMinBreakoutATR > 0)
       {
          atr[s] = iATR(syms[s], PERIOD_M1, InpATRPeriod);
          if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
@@ -174,8 +178,25 @@ void SyncStateFromPositions()
 }
 
 //==============================================================
+// ATR value of the last closed M1 bar. Returns false when the
+// buffer isn't ready yet.
+//==============================================================
+
+bool GetATRValue(int s, double &val)
+{
+   val = 0.0;
+   double a[1];
+   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   val = a[0];
+   return true;
+}
+
+//==============================================================
 // Alignment Check: M1 price and chikou both above/below tenkan,
-// kijun, and cloud. Returns 1 (bullish), -1 (bearish), 0 (none)
+// kijun, and cloud, with the close clear of the cloud by at
+// least InpMinBreakoutATR * ATR so marginal breakouts that just
+// graze the cloud edge are skipped.
+// Returns 1 (bullish), -1 (bearish), 0 (none)
 //==============================================================
 
 int CheckAlign(int s)
@@ -213,15 +234,26 @@ int CheckAlign(int s)
    double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
-   // bullish: price above tenkan, kijun, and cloud; chikou clear above price,
-   // tenkan, kijun, and cloud at its plotted position
-   if(closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi &&
+   // Breakout-strength buffer: the close must clear the cloud by this much,
+   // not merely sit on the other side of it. Skip the signal entirely when
+   // the filter is on but ATR isn't available, rather than trade unfiltered.
+   double buf = 0.0;
+   if(InpMinBreakoutATR > 0)
+   {
+      double atrVal;
+      if(!GetATRValue(s, atrVal)) return 0;
+      buf = atrVal * InpMinBreakoutATR;
+   }
+
+   // bullish: price above tenkan, kijun, and decisively above the cloud;
+   // chikou clear above price, tenkan, kijun, and cloud at its plotted position
+   if(closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi + buf &&
       chik > rt[chShift].high &&
       chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
 
-   // bearish: price below tenkan, kijun, and cloud; chikou clear below price,
-   // tenkan, kijun, and cloud at its plotted position
-   if(closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo &&
+   // bearish: price below tenkan, kijun, and decisively below the cloud;
+   // chikou clear below price, tenkan, kijun, and cloud at its plotted position
+   if(closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo - buf &&
       chik < rt[chShift].low &&
       chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
 
@@ -331,10 +363,10 @@ bool SpreadOK(string sym)
 bool GetStopDistance(int s, double &dist)
 {
    dist = 0.0;
-   double a[1];
-   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   double atrVal;
+   if(!GetATRValue(s, atrVal)) return false;
 
-   dist = a[0] * InpATRMultiplier;
+   dist = atrVal * InpATRMultiplier;
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
    double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
    if(dist < minDist) dist = minDist;
