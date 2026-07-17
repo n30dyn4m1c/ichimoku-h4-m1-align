@@ -118,7 +118,7 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ### Installation
 
-1. Download `ichimoku-H4-M1-ea.mq5` from this repository.
+1. Download `ichimoku-H4-M1-po3-ea.mq5` from this repository (the PO3 build documented here). The pre-PO3 build is preserved as `ichimoku-H4-M1-ea.mq5` for reference.
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
