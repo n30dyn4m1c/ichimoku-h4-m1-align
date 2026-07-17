@@ -1,8 +1,9 @@
 //+------------------------------------------------------------------+
 //| Ichimoku H4-M1 Alignment EA                                      |
-//| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
-//| Exit:  M15 close crosses M15 kijun against trade direction,      |
-//|        or ATR-based protective stop loss                         |
+//| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud,   |
+//|        location-filtered by PO3 dealing ranges (room + bias)     |
+//| Exit:  tiered TPs on PO3 levels for half the batch; remainder    |
+//|        closes on M15 kijun cross or ATR-based protective stop    |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -22,6 +23,20 @@ input int    InpATRPeriod         = 14;     // ATR period (M15)
 input double InpATRMultiplier     = 2.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
+
+input group  "PO3 Dealing Ranges"
+input bool   InpUsePO3         = true;   // Use PO3 dealing-range levels for TPs and entry filters
+input double InpPO3Unit        = 1.0;    // Price per PO3 unit (1.0 = whole dollars on gold)
+input int    InpPO3BasePower   = 4;      // Base rung: 3^4 = 81 units
+input int    InpPO3StrongPower = 5;      // Strong level: 3^5 = 243 units
+input double InpPO3MinRR       = 1.5;    // Min reward:risk for a level to qualify as a TP
+input double InpPO3MaxRR       = 8.0;    // Levels beyond this R are ignored (runner instead)
+input double InpPO3BufferATR   = 0.25;   // Front-run TP buffer = ATR(M15) * this
+input bool   InpPO3RoomFilter  = true;   // Skip entries without MinRR room to next strong level
+input bool   InpPO3BiasFilter  = true;   // Block entries against a recent major-level rejection
+input int    InpPO3BiasPower   = 6;      // Major level for the bias filter: 3^6 = 729 units
+input int    InpPO3BiasBars    = 180;    // H4 bars scanned for a major-level rejection
+input double InpPO3BiasTolFrac = 0.4;    // Rejection tag tolerance, fraction of the base rung
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -46,6 +61,7 @@ int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime lastH4bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
+string   lastBlock[MAX_SYMS];   // last PO3 block reason printed, per symbol (anti-spam)
 
 int MAGIC = 20260501;
 
@@ -82,6 +98,7 @@ int OnInit()
    {
       state[s] = 0;
       lastM1bar[s] = 0;
+      lastBlock[s] = "";
       for(int t = 0; t < TF_COUNT; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
@@ -344,6 +361,117 @@ void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 }
 
 //==============================================================
+// PO3 Dealing Ranges (Hopiplaka)
+// Levels are fixed multiples of 3^n price units — on gold the 81
+// grid is ...3888, 3969, 4050... with every level whose multiple
+// carries a higher power of 3 outranking its neighbours (3888 =
+// 16*3^5 is a 243-grade level, 4374 = 2*3^7 a 2187-grade one).
+// floor(price/step)*step bounds the current dealing range; its
+// midpoint is equilibrium, the lower half discount, the upper
+// half premium. Ichimoku alignment decides WHEN to trade; PO3
+// decides WHERE it's worth trading and HOW FAR to hold.
+//==============================================================
+
+double PO3Step(int power)
+{
+   return MathPow(3.0, power) * InpPO3Unit;
+}
+
+// First multiple of `step` strictly beyond `price` in direction `dir`
+double PO3NextLevel(double price, int dir, double step)
+{
+   double k = MathFloor(price / step + 1e-9);
+   if(dir > 0) return (k + 1.0) * step;
+   return (k * step < price - 1e-9) ? k * step : (k - 1.0) * step;
+}
+
+// Walk levels of size 3^sigPower beyond `from` in direction `dir` and
+// return the first whose buffered reward lands in [MinRR, MaxRR] * the
+// stop distance — past `beyond`, when given, so TP2 clears TP1's level.
+// Returns 0 when nothing qualifies: that order stays a kijun-trailed runner.
+double PO3PickTarget(double from, int dir, int sigPower, double stopDist,
+                     double buffer, double beyond)
+{
+   double step = PO3Step(sigPower);
+   double lvl  = PO3NextLevel(from, dir, step);
+   for(int i = 0; i < 64; i++, lvl += dir * step)
+   {
+      if(beyond > 0 && ((dir > 0) ? (lvl <= beyond + 1e-9)
+                                  : (lvl >= beyond - 1e-9))) continue;
+      double reward = MathAbs(lvl - from) - buffer;
+      if(reward > InpPO3MaxRR * stopDist) return 0.0;
+      if(reward < InpPO3MinRR * stopDist) continue;
+      return lvl;
+   }
+   return 0.0;
+}
+
+// Premium/discount position inside the strong-grade dealing range
+string PO3RangeInfo(double price)
+{
+   double step = PO3Step(InpPO3StrongPower);
+   double lo   = MathFloor(price / step + 1e-9) * step;
+   double pct  = (price - lo) / step * 100.0;
+   string zone = (pct > 55.0) ? "premium" : ((pct < 45.0) ? "discount" : "equilibrium");
+   return StringFormat("PO3 %g[%g-%g] %.0f%% %s", step, lo, lo + step, pct, zone);
+}
+
+// The first strong-grade level ahead is where the move is most likely to
+// stall — entering with less than MinRR of room to it is a poor-geometry
+// trade regardless of how clean the Ichimoku alignment looks.
+bool PO3RoomOK(double entry, int dir, double stopDist, double buffer)
+{
+   double lvl  = PO3NextLevel(entry, dir, PO3Step(InpPO3StrongPower));
+   double room = MathAbs(lvl - entry) - buffer;
+   return room >= InpPO3MinRR * stopDist;
+}
+
+// Detects price "acting off" a major PO3 level: when the H4 lookback
+// extreme tagged (or raided) a 3^BiasPower-grade level and price has since
+// been rejected back away from it, only trades away from that level are
+// allowed. Returns -1 (shorts only), +1 (longs only), or 0 (no bias).
+// A rejection stops binding as soon as price reclaims the level, and a
+// newer opposite-side tag supersedes an older one.
+int PO3Bias(int s)
+{
+   double step = PO3Step(InpPO3BiasPower);
+   double tol  = InpPO3BiasTolFrac * PO3Step(InpPO3BasePower);
+
+   MqlRates rt[];
+   int n = CopyRates(syms[s], PERIOD_H4, 1, InpPO3BiasBars, rt);
+   if(n <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+
+   int hhI = 0, llI = 0;
+   for(int i = 1; i < n; i++)
+   {
+      if(rt[i].high > rt[hhI].high) hhI = i;
+      if(rt[i].low  < rt[llI].low)  llI = i;
+   }
+   double close0 = rt[0].close;
+
+   double hLvl = MathRound(rt[hhI].high / step) * step;
+   bool   hTag = (MathAbs(rt[hhI].high - hLvl) <= tol) && (close0 < hLvl - tol);
+
+   double lLvl = MathRound(rt[llI].low / step) * step;
+   bool   lTag = (MathAbs(rt[llI].low - lLvl) <= tol) && (close0 > lLvl + tol);
+
+   if(hTag && lTag) return (hhI < llI) ? -1 : 1;   // series order: lower index = newer
+   if(hTag) return -1;
+   if(lTag) return  1;
+   return 0;
+}
+
+// Print a block reason once per streak instead of once per M1 bar
+void BlockNote(int s, string reason)
+{
+   string msg = syms[s] + ": entry blocked (" + reason + ")";
+   if(msg == lastBlock[s]) return;
+   lastBlock[s] = msg;
+   Print(msg);
+}
+
+//==============================================================
 // Trading Functions
 //==============================================================
 
@@ -353,16 +481,26 @@ bool SpreadOK(string sym)
    return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
 }
 
+bool GetATRValue(int s, double &val)
+{
+   val = 0.0;
+   if(atr[s] == INVALID_HANDLE) return false;
+   double a[1];
+   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   val = a[0];
+   return true;
+}
+
 // ATR(M15) * multiplier, widened to the broker's minimum stop distance if
 // needed. Returns false when the ATR value is unavailable so the caller
 // skips the entry instead of trading unprotected.
 bool GetStopDistance(int s, double &dist)
 {
    dist = 0.0;
-   double a[1];
-   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   double a = 0.0;
+   if(!GetATRValue(s, a)) return false;
 
-   dist = a[0] * InpATRMultiplier;
+   dist = a * InpATRMultiplier;
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
    double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
    if(dist < minDist) dist = minDist;
@@ -375,15 +513,29 @@ double BuildStopLoss(int s, bool isBuy, double price, double dist)
    return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
-int OpenPositions(int s, bool isBuy)
+// Drop a TP that sits on the wrong side of price or inside the broker's
+// minimum stop distance — such a level failed the RR gate anyway.
+double NormalizeTP(int s, bool isBuy, double price, double tp)
+{
+   if(tp <= 0) return 0.0;
+   if((isBuy && tp <= price) || (!isBuy && tp >= price)) return 0.0;
+
+   double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
+   if(MathAbs(tp - price) < minDist) return 0.0;
+
+   int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   return NormalizeDouble(tp, digits);
+}
+
+// Alternate the batch between the two PO3 target tiers: even-indexed
+// orders bank at TP1 (nearest qualifying base rung), odd-indexed at TP2
+// (nearest qualifying strong level beyond it). A zero TP leaves that
+// order as a runner managed by the M15 kijun exit.
+int OpenPositions(int s, bool isBuy, double dist, int count, double lots,
+                  double tp1, double tp2)
 {
    string sym = syms[s];
-
-   double dist = 0.0;
-   if(InpUseStopLoss && !GetStopDistance(s, dist)) return 0;   // ATR unavailable — skip entry
-
-   int count; double lots;
-   GetEquityRisk(sym, dist, count, lots);
 
    trade.SetExpertMagicNumber(MAGIC);
 
@@ -393,13 +545,80 @@ int OpenPositions(int s, bool isBuy)
       double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
                            : SymbolInfoDouble(sym, SYMBOL_BID);
       double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
+      double tp = NormalizeTP(s, isBuy, price, (i % 2 == 0) ? tp1 : tp2);
 
-      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy H4-M1")
-                      : trade.Sell(lots, sym, price, sl, 0, "Sell H4-M1");
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, tp, "Buy H4-M1")
+                      : trade.Sell(lots, sym, price, sl, tp, "Sell H4-M1");
       if(!ok) break;   // out of margin or rejected — don't hammer the server
       filled++;
    }
    return filled;
+}
+
+// Ichimoku said "go" — PO3 now decides whether the location is worth it
+// (bias + room filters) and supplies the tiered targets before the batch
+// is opened.
+void TryEnter(int s, int st)
+{
+   bool   isBuy = (st == 1);
+   string sym   = syms[s];
+
+   double dist = 0.0;
+   if(InpUseStopLoss && !GetStopDistance(s, dist)) return;   // ATR unavailable — skip entry
+
+   // PO3 RR gating needs a stop distance to measure reward against; without
+   // one (InpUseStopLoss off) only the bias filter stays active.
+   double atrVal = 0.0, buffer = 0.0;
+   bool po3 = InpUsePO3 && dist > 0 && GetATRValue(s, atrVal);
+   if(po3) buffer = atrVal * InpPO3BufferATR;
+
+   double entry = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                        : SymbolInfoDouble(sym, SYMBOL_BID);
+
+   if(InpUsePO3 && InpPO3BiasFilter)
+   {
+      int bias = PO3Bias(s);
+      if(bias != 0 && bias != st)
+      {
+         BlockNote(s, "against major PO3 level rejection");
+         return;
+      }
+   }
+   if(po3 && InpPO3RoomFilter && !PO3RoomOK(entry, st, dist, buffer))
+   {
+      BlockNote(s, "no room to next strong PO3 level");
+      return;
+   }
+   lastBlock[s] = "";
+
+   double tp1 = 0.0, tp2 = 0.0;
+   if(po3)
+   {
+      double lvl1 = PO3PickTarget(entry, st, InpPO3BasePower,   dist, buffer, 0.0);
+      double lvl2 = PO3PickTarget(entry, st, InpPO3StrongPower, dist, buffer, lvl1);
+      if(lvl1 > 0) tp1 = lvl1 - st * buffer;   // front-run the level
+      if(lvl2 > 0) tp2 = lvl2 - st * buffer;
+   }
+
+   int count; double lots;
+   GetEquityRisk(sym, dist, count, lots);
+
+   string action = isBuy ? "Buy" : "Sell";
+   string msg = PCTime() + " | " + action + " " + sym +
+                " x" + IntegerToString(count) +
+                " @ " + DoubleToString(lots, 2) + " (H4-M1)";
+   if(InpUsePO3)
+   {
+      msg += " | " + PO3RangeInfo(entry) +
+             " | TP1 " + (tp1 > 0 ? DoubleToString(tp1, 2) : "runner") +
+             " TP2 "   + (tp2 > 0 ? DoubleToString(tp2, 2) : "runner");
+   }
+   Print(msg); Alert(msg); SendNotification(msg);
+
+   // Track state if any order filled — keeps exit logic and re-entry
+   // guard correct even when only some of the orders go through.
+   if(OpenPositions(s, isBuy, dist, count, lots, tp1, tp2) > 0)
+      state[s] = st;
 }
 
 void ClosePositions(string sym)
@@ -453,28 +672,12 @@ void OnTick()
          state[s] = 0;
       }
 
-      // Entry check: all timeframes H4→M1 must align, spread must be sane
+      // Entry check: all timeframes H4→M1 must align, spread must be sane,
+      // and the PO3 location filters must approve before orders go out.
       if(state[s] == 0 && SpreadOK(syms[s]))
       {
          int st = CheckAllAlign(s);
-         if(st != 0)
-         {
-            bool   isBuy  = (st == 1);
-            string action = isBuy ? "Buy" : "Sell";
-            double msgDist = 0.0;
-            if(InpUseStopLoss) GetStopDistance(s, msgDist);
-            int msgCount; double msgLots;
-            GetEquityRisk(syms[s], msgDist, msgCount, msgLots);
-            string msg = PCTime() + " | " + action + " " + syms[s] +
-                         " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (H4-M1)";
-            Print(msg); Alert(msg); SendNotification(msg);
-
-            // Track state if any order filled — keeps exit logic and re-entry
-            // guard correct even when only some of the orders go through.
-            if(OpenPositions(s, isBuy) > 0)
-               state[s] = st;
-         }
+         if(st != 0) TryEnter(s, st);
       }
    }
 }
