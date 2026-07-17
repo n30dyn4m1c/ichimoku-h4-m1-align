@@ -105,7 +105,7 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 | `Slippage` | 30 | Max slippage in points |
 | `InpUseStopLoss` | `true` | Attach an ATR-based stop loss to every entry |
 | `InpATRPeriod` | 14 | ATR period, computed on M15 |
-| `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
+| `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Skip entries when spread exceeds this (0 = no limit); tune per broker |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (`RiskBasedLots()`) |
 | `InpUsePO3` | `true` | PO3 dealing-range TPs and entry filters |
