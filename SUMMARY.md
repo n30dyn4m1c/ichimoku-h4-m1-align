@@ -2,19 +2,31 @@
 
 ## What It Does
 
-MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes). Signal exit is driven by M15 kijun cross; every position also carries an ATR-based protective stop loss (no TP).
+MetaTrader 5 EA trading GOLDm# (configurable) using Ichimoku Cloud alignment across H4 → M1 (6 timeframes), location-filtered by PO3 dealing ranges. Half of each batch takes profit at tiered PO3 levels; the signal exit for the rest is driven by M15 kijun cross; every position also carries an ATR-based protective stop loss.
 
 ---
 
 ## Entry
 
-Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds, no position is open, and the current spread is within `InpMaxSpreadPoints`. Opens `count` market orders at lot size determined by account equity, each with a stop loss `InpATRMultiplier × ATR(M15, InpATRPeriod)` away from entry (widened to the broker's minimum stop distance if needed). Order placement stops at the first rejection (e.g. out of margin), and an entry is skipped entirely if the ATR value can't be read — the EA never opens unprotected positions while `InpUseStopLoss` is on.
+Runs on every M1 bar close. Enters when all 6 TFs (H4, H1, M30, M15, M5, M1) price and chikou are aligned above/below their respective clouds, no position is open, the current spread is within `InpMaxSpreadPoints`, and the PO3 location filters approve (see below). Opens `count` market orders at lot size determined by account equity, each with a stop loss `InpATRMultiplier × ATR(M15, InpATRPeriod)` away from entry (widened to the broker's minimum stop distance if needed). Order placement stops at the first rejection (e.g. out of margin), and an entry is skipped entirely if the ATR value can't be read — the EA never opens unprotected positions while `InpUseStopLoss` is on.
+
+---
+
+## PO3 Dealing Ranges
+
+Fixed grid of power-of-three price levels (Hopiplaka): every multiple of `3^n × InpPO3Unit`. Gold with unit 1.0 → base 81 grid (…3888, 3969, 4050…); a multiple carrying a higher power of 3 outranks its neighbours (3888 = 16×3⁵ → 243-grade; 4374 = 2×3⁷ → 2187-grade). Current dealing range = `floor(price/step)×step` … `+step`; midpoint = equilibrium, lower half discount, upper half premium.
+
+- **Bias filter**: if the H4 lookback extreme (180 bars) tagged a 729-grade level within `0.4 ×` base rung and price was rejected away from it, entries against the rejection are blocked until price reclaims the level (or a newer opposite tag supersedes it).
+- **Room filter**: entry skipped when the first 243-grade level ahead is closer than `InpPO3MinRR ×` stop distance.
+- **Tiered TPs**: even-indexed orders target TP1 = nearest 81-rung worth ≥ `MinRR` R; odd-indexed target TP2 = nearest 243-grade level beyond TP1; both front-run by `InpPO3BufferATR × ATR(M15)`; nothing within `MaxRR` R → no TP (runner). TPs that would violate the broker's minimum stop distance are dropped.
+
+Entry alerts append the PO3 range, premium/discount position, and both TPs.
 
 ---
 
 ## Exit
 
-Closes all positions when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction — i.e. for a long, the M15 close ends below the M15 kijun; for a short, the M15 close ends above the M15 kijun. Independently, each position's ATR stop loss caps the loss on fast adverse moves between M15 closes.
+Orders that reach their PO3 TP close there. All remaining positions close when the M15 bar-1 close crosses the M15 kijun (bar 1) against the open direction — i.e. for a long, the M15 close ends below the M15 kijun; for a short, the M15 close ends above the M15 kijun. Independently, each position's ATR stop loss caps the loss on fast adverse moves between M15 closes.
 
 ---
 
@@ -96,6 +108,13 @@ Every entry and exit emits `Print()`, `Alert()`, and `SendNotification()` with l
 | `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Skip entries when spread exceeds this (0 = no limit); tune per broker |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (`RiskBasedLots()`) |
+| `InpUsePO3` | `true` | PO3 dealing-range TPs and entry filters |
+| `InpPO3Unit` | 1.0 | Price per PO3 unit (whole dollars on gold; 0.0001 for 5-digit FX) |
+| `InpPO3BasePower` / `InpPO3StrongPower` / `InpPO3BiasPower` | 4 / 5 / 6 | Level grades: 81 / 243 / 729 units |
+| `InpPO3MinRR` / `InpPO3MaxRR` | 1.5 / 8.0 | R-multiple window for a level to qualify as a TP |
+| `InpPO3BufferATR` | 0.25 | Front-run TP buffer = ATR(M15) × this |
+| `InpPO3RoomFilter` / `InpPO3BiasFilter` | `true` | Location filters (room to next strong level; major-level rejection bias) |
+| `InpPO3BiasBars` / `InpPO3BiasTolFrac` | 180 / 0.4 | Bias lookback (H4 bars) and tag tolerance (fraction of base rung) |
 
 ---
 

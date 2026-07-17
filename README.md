@@ -19,10 +19,11 @@ This EA is provided **for educational and research purposes only**. Trading leve
 
 ## What It Does
 
-The EA opens trades on a symbol (defaults to `GOLDm#`, configurable) only when **six timeframes — H4, H1, M30, M15, M5, and M1 — all agree** on trend direction using Ichimoku price *and* Chikou Span confirmation. It exits when price crosses the M15 Kijun-sen against the trade direction, backstopped by a hard ATR-based stop loss on every position. Position count and lot size scale automatically with account equity.
+The EA opens trades on a symbol (defaults to `GOLDm#`, configurable) only when **six timeframes — H4, H1, M30, M15, M5, and M1 — all agree** on trend direction using Ichimoku price *and* Chikou Span confirmation, and the location passes **PO3 dealing-range filters** (enough room to the next strong power-of-three level, and not fighting a recent rejection off a major level). Half of each order batch takes profit at tiered PO3 levels; the rest exits when price crosses the M15 Kijun-sen against the trade direction, backstopped by a hard ATR-based stop loss on every position. Position count and lot size scale automatically with account equity.
 
 **Highlights:**
 - ✅ 6-timeframe Ichimoku alignment filter (trend + Chikou confirmation) — cuts down on false signals from any single timeframe
+- ✅ PO3 dealing-range integration (Hopiplaka) — fixed power-of-three price levels supply entry location filters and tiered take-profit targets
 - ✅ ATR-based protective stop loss on every trade (respects broker minimum stop distance)
 - ✅ Spread filter to avoid entries during wide/illiquid conditions
 - ✅ Equity-tiered position sizing (auto-scales lot size and order count as your account grows or shrinks)
@@ -46,11 +47,21 @@ On every new M1 bar close (per symbol), the EA checks all six timeframes (H4 →
 | Kumo (cloud) | Price above cloud top | Chikou above cloud top at its plotted position |
 | Price action | — | Chikou above the high of the candle at its plotted position |
 
-**Bearish** is the exact mirror (price and Chikou below every level). A trade only opens when **all six timeframes agree** on the same direction, no position is currently open on that symbol, and the current spread is within `InpMaxSpreadPoints`.
+**Bearish** is the exact mirror (price and Chikou below every level). A trade only opens when **all six timeframes agree** on the same direction, no position is currently open on that symbol, the current spread is within `InpMaxSpreadPoints`, and the PO3 location filters (below) approve.
+
+### PO3 Dealing Ranges
+
+The EA overlays a fixed grid of **power-of-three price levels** (the PO3 dealing-range concept by Hopiplaka): every multiple of `3^n × InpPO3Unit`. On gold with `InpPO3Unit = 1.0` the base grid (`3^4 = 81`) is …3888, 3969, 4050, 4131…; a level whose multiple carries a higher power of 3 outranks its neighbours (3888 = 16 × 3⁵ is a 243-grade level, 4374 = 2 × 3⁷ a 2187-grade one). The dealing range containing price is `floor(price / step) × step` to that plus `step`; its midpoint is **equilibrium**, the lower half **discount**, the upper half **premium**. Ichimoku decides *when* to trade — PO3 decides *whether the location is worth it* and *how far to hold*:
+
+- **Bias filter** (`InpPO3BiasFilter`): if the recent H4 extreme tagged or raided a major level (`3^InpPO3BiasPower`, default 729-grade) and price was rejected away from it, entries *against* that rejection are blocked until price reclaims the level or an opposite-side tag supersedes it.
+- **Room filter** (`InpPO3RoomFilter`): an entry is skipped when the first strong level (`3^InpPO3StrongPower`, default 243-grade) ahead in the trade direction is closer than `InpPO3MinRR ×` the ATR stop distance — no buying into a ceiling, no selling into a floor.
+- **Tiered take-profits**: half of each order batch targets **TP1**, the nearest base rung worth at least `InpPO3MinRR` R; the other half targets **TP2**, the nearest strong level beyond TP1. Both are front-run by `InpPO3BufferATR × ATR(M15)` since price often stalls just short of a level. A tier with no qualifying level within `InpPO3MaxRR` R gets no TP — those orders stay runners managed by the Kijun exit.
+
+Entry alerts include the PO3 context, e.g. `PO3 243[3888-4131] 39% discount | TP1 3890.12 TP2 runner`. For non-gold symbols set `InpPO3Unit` to the instrument's convention (e.g. `0.0001` for 5-digit FX pairs so a 243 range spans 0.0243; `0.01` for a cents-based intraday grid on metals).
 
 ### Exit Logic
 
-Positions are closed when the M15 close crosses the M15 Kijun-sen against the trade's direction:
+Orders that reached their PO3 take-profit close there. Everything remaining is closed when the M15 close crosses the M15 Kijun-sen against the trade's direction:
 - **Long** closes when the M15 close ends *below* the M15 Kijun.
 - **Short** closes when the M15 close ends *above* the M15 Kijun.
 
@@ -138,6 +149,18 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 | `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
+| `InpUsePO3` | `true` | Use PO3 dealing-range levels for take-profits and entry filters |
+| `InpPO3Unit` | 1.0 | Price per PO3 unit (1.0 = whole dollars on gold; 0.0001 for 5-digit FX) |
+| `InpPO3BasePower` | 4 | Base rung = 3^power units (4 → 81) |
+| `InpPO3StrongPower` | 5 | Strong level = 3^power units (5 → 243) |
+| `InpPO3MinRR` | 1.5 | Minimum reward:risk for a level to qualify as a TP (also the room-filter threshold) |
+| `InpPO3MaxRR` | 8.0 | Levels beyond this R-multiple are ignored (order stays a runner) |
+| `InpPO3BufferATR` | 0.25 | Front-run TP buffer = ATR(M15) × this |
+| `InpPO3RoomFilter` | `true` | Skip entries without `MinRR` room to the next strong level |
+| `InpPO3BiasFilter` | `true` | Block entries against a recent rejection off a major level |
+| `InpPO3BiasPower` | 6 | Major level for the bias filter = 3^power units (6 → 729) |
+| `InpPO3BiasBars` | 180 | H4 bars scanned for a major-level rejection |
+| `InpPO3BiasTolFrac` | 0.4 | Rejection tag tolerance, as a fraction of the base rung |
 | `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert |
 | `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline |
 | `InpCheckDay` | Friday | Day of week the equity alert is evaluated |
