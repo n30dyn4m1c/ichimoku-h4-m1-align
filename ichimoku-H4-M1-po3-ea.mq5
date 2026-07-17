@@ -20,7 +20,7 @@ input int    Slippage = 30;
 input group  "Risk Protection"
 input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
 input int    InpATRPeriod         = 14;     // ATR period (M15)
-input double InpATRMultiplier     = 2.0;    // SL distance = ATR * multiplier
+input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 

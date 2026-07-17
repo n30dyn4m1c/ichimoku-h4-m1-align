@@ -146,7 +146,7 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 | `Slippage` | 30 | Maximum allowed slippage, in points |
 | `InpUseStopLoss` | `true` | Attach an ATR-based stop loss to every entry |
 | `InpATRPeriod` | 14 | ATR period, computed on M15 |
-| `InpATRMultiplier` | 2.0 | Stop distance = ATR × multiplier |
+| `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
 | `InpUsePO3` | `true` | Use PO3 dealing-range levels for take-profits and entry filters |
