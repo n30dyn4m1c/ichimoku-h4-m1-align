@@ -115,18 +115,18 @@ A separate, standalone EA that trades the **opposite** edge to the trend/alignme
 
 ### The idea
 
-After price has stayed **off the H1 Kijun for ~26 candles** (one Ichimoku time cycle, `InpNoTouchBars` ± `InpNoTouchTol`) and the **Kijun is flat**, an extended move is "due" to snap back to the Kijun. The Kijun becomes a magnet; the trade is taken *toward* it.
+After price has stayed **off the H1 Kijun for one of the Ichimoku time cycles** (9, 17, 26, or 33 bars, each ± `InpTimeTol`) and the **Kijun is flat**, an extended move is "due" to snap back to the Kijun. The Kijun becomes a magnet; the trade is taken *toward* it.
 
 ### Entry
 
 On each new M1 bar, per symbol, a reversion trade opens when **all** of these hold:
 
 1. **Extension** — the last H1 close is at least `InpFarATRMult × ATR(H1)` away from the Kijun. Above the Kijun ⇒ **sell** back down; below ⇒ **buy** back up.
-2. **Time theory** — price has not touched the Kijun for at least `InpNoTouchBars − InpNoTouchTol` consecutive H1 candles (a "touch" = the Kijun falls within a candle's high–low range).
+2. **Time theory** — the number of consecutive H1 candles since the last Kijun touch lands on an **Ichimoku time cycle** — `InpTimeCycles` (default `9,17,26,33`) each within ± `InpTimeTol`. A "touch" = the Kijun falling within a candle's high–low range; the count resets to 0 on any touch, so a streak that falls *between* cycles (e.g. 13 or 30 bars) does **not** qualify.
 3. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
 4. **A trigger fires** (either one, both configurable):
    - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
-   - **Turtle-soup rejection** (`InpUseTurtleSoup`) — the last closed H1 candle pokes beyond the prior swing (stop raid) then closes back inside with a **long thin wick** and a **small body** (a doji to the upside for a sell, to the downside for a buy). Wick ≥ `InpTSWickFrac` of range, body ≤ `InpTSBodyFrac` of range.
+   - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids beyond a prior fractal swing high/low** from the last `InpRejLookback` bars (default 500) and closes back inside it. With `InpRequireUnraided` (default on) the raided swing must still hold **resting liquidity** — nothing has exceeded it since it formed — so the trade fires on a genuine liquidity grab, not a level that was already run. `InpSwingWing` sets the fractal half-width (bars each side that define a swing point).
 
 ### Exit
 
@@ -143,17 +143,20 @@ Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk(
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `InpNoTouchBars` | 26 | H1 bars price must stay off the Kijun (time theory cycle) |
-| `InpNoTouchTol` | 2 | ± tolerance on the no-touch count |
+| `InpTimeCycles` | `9,17,26,33` | Ichimoku time cycles (bars since last Kijun touch) that qualify |
+| `InpTimeTol` | 2 | ± tolerance applied to each time cycle |
 | `InpFarATRMult` | 2.0 | Price must be ≥ this × ATR(H1) from the Kijun to be "far" |
 | `InpFlatBars` | 5 | H1 bars over which the Kijun slope is measured |
 | `InpFlatATRMult` | 0.25 | Kijun is "flat" if its move over `InpFlatBars` ≤ this × ATR(H1) |
-| `InpSwingLookback` | 10 | H1 bars used for the swing-based stop loss (and the turtle-soup raid) |
+| `InpSwingLookback` | 10 | H1 bars used for the swing-based stop loss |
 | `InpSLBufferATR` | 0.10 | Extra SL padding beyond the swing = this × ATR(H1) |
 | `InpUseM5Cross` | `true` | Enable the fresh-M5-Kijun-cross trigger |
-| `InpUseTurtleSoup` | `true` | Enable the turtle-soup rejection-candle trigger |
-| `InpTSWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
-| `InpTSBodyFrac` | 0.35 | Rejection body ≤ this fraction of the H1 candle range |
+| `InpUseRejection` | `true` | Enable the swing-liquidity rejection-candle trigger |
+| `InpRejWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
+| `InpRejBodyFrac` | 0.35 | Rejection body ≤ this fraction of the H1 candle range |
+| `InpRejLookback` | 500 | H1 bars scanned for prior swing highs/lows to raid |
+| `InpSwingWing` | 2 | Fractal half-width for a swing point (bars each side) |
+| `InpRequireUnraided` | `true` | Only count swings whose liquidity is not yet raided |
 | `InpATRPeriod` | 14 | ATR period (computed on H1) for distance/flatness/buffer |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity > $8000 |

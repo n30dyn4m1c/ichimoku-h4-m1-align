@@ -23,19 +23,22 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 input group  "Reversion Setup"
-input int    InpNoTouchBars   = 26;    // H1 bars price must stay off the Kijun (time theory)
-input int    InpNoTouchTol    = 2;     // +/- tolerance on the no-touch count
+input string InpTimeCycles    = "9,17,26,33"; // Ichimoku time cycles: bars since last H1 Kijun touch
+input int    InpTimeTol       = 2;     // +/- tolerance applied to each time cycle
 input double InpFarATRMult    = 2.0;   // Price must be >= this * ATR(H1) from the Kijun
 input int    InpFlatBars      = 5;     // Bars over which the Kijun slope is measured
 input double InpFlatATRMult   = 0.25;  // Kijun is "flat" if its move over InpFlatBars <= this * ATR(H1)
-input int    InpSwingLookback = 10;    // H1 bars used for the swing high/low (stop loss)
+input int    InpSwingLookback = 10;    // H1 bars used for the stop-loss swing high/low
 input double InpSLBufferATR   = 0.10;  // Extra SL padding beyond the swing = this * ATR(H1)
 
 input group  "Reversion Triggers"
-input bool   InpUseM5Cross    = true;  // Trigger on a fresh M5 close cross of the M5 Kijun
-input bool   InpUseTurtleSoup = true;  // Trigger on a turtle-soup rejection candle (H1)
-input double InpTSWickFrac    = 0.55;  // Rejection wick >= this fraction of the H1 candle range
-input double InpTSBodyFrac    = 0.35;  // Rejection body <= this fraction of the H1 candle range
+input bool   InpUseM5Cross      = true; // Trigger on a fresh M5 close cross of the M5 Kijun
+input bool   InpUseRejection    = true; // Trigger on a rejection candle raiding swing liquidity
+input double InpRejWickFrac     = 0.55; // Rejection wick >= this fraction of the H1 candle range
+input double InpRejBodyFrac     = 0.35; // Rejection body <= this fraction of the H1 candle range
+input int    InpRejLookback     = 500;  // H1 bars scanned for prior swing highs/lows to raid
+input int    InpSwingWing       = 2;    // Fractal half-width for a swing point (bars each side)
+input bool   InpRequireUnraided = true; // Only count swings whose liquidity is not yet raided
 
 input group  "Risk Protection"
 input int    InpATRPeriod         = 14;   // ATR period (H1) for the distance / flatness measures
@@ -60,6 +63,10 @@ int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime lastH1bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
+
+int      g_cycles[];        // parsed Ichimoku time cycles (bars since last Kijun touch)
+int      g_cycleCount = 0;
+int      g_maxCycle   = 0;
 
 int MAGIC = 20260722;
 
@@ -87,10 +94,44 @@ int ParseSymbols(string list)
    return cnt;
 }
 
+// Parse the "9,17,26,33" cycle list into g_cycles[] and record the largest.
+void ParseCycles(string list)
+{
+   string parts[];
+   int n = StringSplit(list, ',', parts);
+   ArrayResize(g_cycles, 0);
+   g_cycleCount = 0;
+   g_maxCycle   = 0;
+   for(int i = 0; i < n; i++)
+   {
+      string p = parts[i];
+      StringTrimLeft(p);
+      StringTrimRight(p);
+      int v = (int)StringToInteger(p);
+      if(v > 0)
+      {
+         ArrayResize(g_cycles, g_cycleCount + 1);
+         g_cycles[g_cycleCount++] = v;
+         if(v > g_maxCycle) g_maxCycle = v;
+      }
+   }
+}
+
+// True when the bars-since-last-touch count sits within any cycle +/- tolerance.
+bool InTimeWindow(int count)
+{
+   for(int i = 0; i < g_cycleCount; i++)
+      if(count >= g_cycles[i] - InpTimeTol && count <= g_cycles[i] + InpTimeTol) return true;
+   return false;
+}
+
 int OnInit()
 {
    symsCount = ParseSymbols(Symbols);
    if(symsCount <= 0) return(INIT_FAILED);
+
+   ParseCycles(InpTimeCycles);
+   if(g_cycleCount <= 0) return(INIT_FAILED);
 
    for(int s = 0; s < symsCount; s++)
    {
@@ -214,7 +255,9 @@ bool GetH1Kijun(int s, int shift, double &v)
 // Kijun (i.e. the candle never touched the Kijun). Stops at the first touch.
 int CountNoTouch(int s)
 {
-   int want = InpNoTouchBars + InpNoTouchTol + 5;
+   // Copy comfortably past the largest cycle window so a streak longer than
+   // every window returns a value outside them all (no false positive).
+   int want = g_maxCycle + InpTimeTol + 10;
    double kij[];
    MqlRates rt[];
    if(CopyBuffer(ichH1[s], 1, 1, want, kij) <= 0) return 0;
@@ -282,16 +325,20 @@ bool M5CrossTrigger(int s, int dir)
    return (c2 <= k2 && c1 > k1);                 // crossed up toward the Kijun
 }
 
-// Turtle-soup rejection: the last closed H1 bar pokes beyond the prior swing
-// (stop raid) then closes back inside with a long thin wick and a small body.
-// dir = -1 wants an upper-wick rejection above the swing high (doji to the
-// upside); dir = +1 wants a lower-wick rejection below the swing low.
-bool TurtleSoupTrigger(int s, int dir)
+// Proper rejection candle: the last closed H1 bar is a long-wicked, small-body
+// candle whose wick raids beyond a prior fractal swing high/low from the last
+// InpRejLookback bars, then closes back inside it. With InpRequireUnraided the
+// raided swing must still hold resting liquidity (nothing exceeded it since it
+// formed). dir = -1 wants an upper-wick raid above a swing high (doji to the
+// upside); dir = +1 wants a lower-wick raid below a swing low.
+bool RejectionTrigger(int s, int dir)
 {
-   int need = InpSwingLookback + 2;
+   int wing = MathMax(1, InpSwingWing);
+   int need = InpRejLookback + wing + 2;
+
    MqlRates rt[];
    if(CopyRates(syms[s], PERIOD_H1, 1, need, rt) < need) return false;
-   ArraySetAsSeries(rt, true);
+   ArraySetAsSeries(rt, true);   // rt[0] = rejection candle (last closed H1 bar)
 
    double o = rt[0].open, h = rt[0].high, l = rt[0].low, c = rt[0].close;
    double range = h - l;
@@ -300,19 +347,59 @@ bool TurtleSoupTrigger(int s, int dir)
    double body   = MathAbs(c - o);
    double upWick = h - MathMax(o, c);
    double loWick = MathMin(o, c) - l;
-   if(body > InpTSBodyFrac * range) return false;
+   if(body > InpRejBodyFrac * range) return false;
 
-   // prior swing over bars shift 2..(InpSwingLookback+1) -> indices 1..InpSwingLookback
+   int n    = ArraySize(rt);
+   int last = n - 1 - wing;      // furthest index that can still be a fractal centre
+
    if(dir == -1)
    {
-      double priorHigh = rt[1].high;
-      for(int i = 2; i <= InpSwingLookback; i++) if(rt[i].high > priorHigh) priorHigh = rt[i].high;
-      return (upWick >= InpTSWickFrac * range && h > priorHigh && c < priorHigh);
+      if(upWick < InpRejWickFrac * range) return false;
+
+      // Walk from the most recent past swing outward; j > wing keeps the
+      // fractal test off the rejection candle itself (index 0).
+      for(int j = wing + 1; j <= last; j++)
+      {
+         double sh = rt[j].high;
+         bool isSwing = true;
+         for(int k = 1; k <= wing && isSwing; k++)
+            if(rt[j - k].high >= sh || rt[j + k].high >= sh) isSwing = false;
+         if(!isSwing) continue;
+
+         if(!(h > sh && c < sh)) continue;   // wick raids above, close rejects back below
+
+         if(InpRequireUnraided)
+         {
+            bool raided = false;
+            for(int i = 1; i < j && !raided; i++) if(rt[i].high >= sh) raided = true;
+            if(raided) continue;
+         }
+         return true;
+      }
+      return false;
    }
 
-   double priorLow = rt[1].low;
-   for(int i = 2; i <= InpSwingLookback; i++) if(rt[i].low < priorLow) priorLow = rt[i].low;
-   return (loWick >= InpTSWickFrac * range && l < priorLow && c > priorLow);
+   if(loWick < InpRejWickFrac * range) return false;
+
+   for(int j = wing + 1; j <= last; j++)
+   {
+      double sl = rt[j].low;
+      bool isSwing = true;
+      for(int k = 1; k <= wing && isSwing; k++)
+         if(rt[j - k].low <= sl || rt[j + k].low <= sl) isSwing = false;
+      if(!isSwing) continue;
+
+      if(!(l < sl && c > sl)) continue;      // wick raids below, close rejects back above
+
+      if(InpRequireUnraided)
+      {
+         bool raided = false;
+         for(int i = 1; i < j && !raided; i++) if(rt[i].low <= sl) raided = true;
+         if(raided) continue;
+      }
+      return true;
+   }
+   return false;
 }
 
 //==============================================================
@@ -323,9 +410,9 @@ bool TurtleSoupTrigger(int s, int dir)
 // stopDist (|entry - sl|) and a short trigger label.
 //==============================================================
 
-int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig)
+int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig, int &barsSince)
 {
-   sl = 0.0; tp = 0.0; stopDist = 0.0; trig = "";
+   sl = 0.0; tp = 0.0; stopDist = 0.0; trig = ""; barsSince = 0;
 
    double atr = ATRval(s);
    if(atr <= 0) return 0;
@@ -344,16 +431,18 @@ int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig
    // Above the Kijun -> sell back down; below -> buy back up.
    int dir = (dist > 0) ? -1 : 1;
 
-   // Time theory: the move must have stayed off the Kijun long enough.
-   if(CountNoTouch(s) < InpNoTouchBars - InpNoTouchTol) return 0;
+   // Time theory: bars since the last Kijun touch must land on an Ichimoku
+   // cycle (9 / 17 / 26 / 33 by default) within +/- InpTimeTol.
+   barsSince = CountNoTouch(s);
+   if(!InTimeWindow(barsSince)) return 0;
 
    // The Kijun must be flat so it acts as a magnet, not a trending line.
    if(!KijunFlat(s, atr)) return 0;
 
    // At least one reversion trigger must fire.
    bool triggered = false;
-   if(InpUseM5Cross && M5CrossTrigger(s, dir))       { triggered = true; trig = "M5 cross"; }
-   if(!triggered && InpUseTurtleSoup && TurtleSoupTrigger(s, dir)) { triggered = true; trig = "turtle soup"; }
+   if(InpUseM5Cross && M5CrossTrigger(s, dir))                { triggered = true; trig = "M5 cross"; }
+   if(!triggered && InpUseRejection && RejectionTrigger(s, dir)) { triggered = true; trig = "rejection"; }
    if(!triggered) return 0;
 
    // Stop loss at the H1 swing, take profit at the H1 Kijun.
@@ -518,8 +607,8 @@ void OnTick()
       if(state[s] != 0) continue;
       if(!SpreadOK(syms[s])) continue;
 
-      double sl, tp, stopDist; string trig;
-      int dir = CheckReversion(s, sl, tp, stopDist, trig);
+      double sl, tp, stopDist; string trig; int barsSince;
+      int dir = CheckReversion(s, sl, tp, stopDist, trig, barsSince);
       if(dir == 0) continue;
 
       bool isBuy = (dir == 1);
@@ -538,8 +627,8 @@ void OnTick()
          string msg = PCTime() + " | " + action + " " + syms[s] +
                       " x" + IntegerToString(filled) +
                       " @ " + DoubleToString(lots, 2) +
-                      " (H1 Reversion: " + trig + ") SL " + DoubleToString(sl, dg) +
-                      " TP " + DoubleToString(tp, dg);
+                      " (H1 Reversion: " + trig + " @" + IntegerToString(barsSince) + "c) SL " +
+                      DoubleToString(sl, dg) + " TP " + DoubleToString(tp, dg);
          Print(msg); Alert(msg); SendNotification(msg);
       }
       else
