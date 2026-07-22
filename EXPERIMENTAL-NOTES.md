@@ -290,3 +290,71 @@ EAs — see the [README](README.md#configuration-inputs).
   tuned for fast moves rather than sustained trends.
 - Not yet extensively backtested here — run it in the Strategy Tester and on
   demo before considering live capital.
+
+---
+
+## 4. M30-M1 Breakout Alignment EA
+
+**File:** `experimental-m30-m1-breakout-ea.mq5`
+**Magic number:** `20260723`
+
+A shorter-anchor clone of the main [H1-M1 alignment EA](README.md#entry-logic).
+It runs the **exact same** 4-of-4 Ichimoku alignment entry and M5 Kijun exit,
+but drops the top timeframe: instead of aligning **H1→M1** it aligns
+**M30→M1**. This is a **trend/breakout alignment** build (all timeframes must
+agree in one direction) — *not* a reversion EA.
+
+### Entry logic
+
+Runs on every new M1 bar close, per symbol. `CheckAlign()` on each of **M30,
+M15, M5, M1** requires price *and* Chikou above/below Tenkan, Kijun, and the
+cloud — the same rule table as the main EAs (see
+[README](README.md#entry-logic)). A trade opens only when **all four
+timeframes** agree on direction and no position is already open on that symbol.
+Because the highest anchor is M30 rather than H1, setups form and clear faster
+than the main H1-M1 build.
+
+### Exit logic
+
+All positions close when the **M5 close crosses the M5 Kijun-sen** against the
+trade's direction (long closes below the M5 Kijun, short closes above it) —
+identical to the H1-M1 EA's exit. Independently, every position carries an
+`ATR(M15) × InpATRMultiplier` stop loss.
+
+### Risk protection & equity sizing
+
+Identical `InpUseStopLoss` / `InpMaxSpreadPoints` / `InpHighEquityRiskPct`
+risk protection and the same `GetEquityRisk()` equity-tiered position sizing
+as the main EAs — see [README](README.md#equity-based-position-sizing). ATR is
+computed on **M15** (as in the H1-M1 EA), not M1.
+
+### Inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `Symbols` | `GOLDm#` | Comma-separated list of symbols to watch (up to 60) |
+| `Tenkan` / `Kijun` / `SenkouB` | 9 / 26 / 52 | Ichimoku periods |
+| `Slippage` | 30 | Maximum allowed slippage, in points |
+| `InpUseStopLoss` | `true` | Attach an ATR(M15)-based stop loss to every entry |
+| `InpATRPeriod` | 14 | ATR period, computed on M15 |
+| `InpATRMultiplier` | 3.0 | Stop distance = ATR(M15) × multiplier |
+| `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
+
+The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
+`InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
+EAs — see the [README](README.md#configuration-inputs).
+
+### Technical notes
+
+- **Magic number:** `20260723` — independent from the other EAs, so it can run alongside them without interfering.
+- **State recovery:** `SyncStateFromPositions()` rebuilds per-symbol direction state from open positions filtered by magic number on every tick, same as the main EAs.
+- **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar; the weekly equity alert is gated on a new **M30** bar (the highest timeframe present).
+
+### Status & caveats
+
+- Shorter trend anchor than the main H1-M1 EA (M30 vs. H1) — expect more
+  frequent signals and a faster exit cadence, at the cost of a noisier
+  top-timeframe trend filter.
+- Not yet extensively backtested here — run it in the Strategy Tester and on
+  demo before considering live capital.
