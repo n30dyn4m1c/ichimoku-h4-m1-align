@@ -32,10 +32,8 @@ input bool   InpUseTrendFilter = true; // Only fade an established H1 Ichimoku t
 input double InpSLBufferATR   = 0.10;  // Extra SL padding beyond the stop level = this * ATR(H1)
 
 input group  "Reversion Stop Management"
-input int    InpM15TrailFractal = 2;   // Trail SL to the Nth M15 fractal high/low beyond price
-input int    InpM15SwingWing    = 2;   // M15 fractal half-width (bars each side)
-input int    InpM15FractalBars  = 100; // M15 bars scanned for fractals when trailing
-input double InpM15ClearATR     = 0.1; // "Clearly beyond the M15 Kijun" buffer = this * ATR(M15)
+input double InpM15ClearATR    = 0.1;  // "Clearly beyond the M15 Kijun" buffer = this * ATR(M15)
+input double InpM15SLBufferATR = 0.1;  // Trailed SL padding beyond the M15 Kijun = this * ATR(M15)
 
 input group  "Reversion Triggers"
 input bool   InpUseM5Cross      = true; // Trigger on a fresh M5 close cross of the M5 Kijun
@@ -346,48 +344,13 @@ bool M15Confirmed(int s, int dir)
    return close > kij[0] + buf;
 }
 
-// Nth M15 fractal on the protective side of `price` (highs above it for a sell,
-// lows below it for a buy), ordered nearest-first. Returns false if fewer than
-// `nth` exist. Used to trail the stop up/down behind M15 structure.
-bool NthM15Fractal(int s, int dir, double price, int nth, double &level)
+// Current M15 Kijun value (last closed M15 bar). The reversion stop trails to
+// this once M15 has confirmed. Returns false if it can't be read.
+bool GetM15Kijun(int s, double &v)
 {
-   if(nth < 1) return false;
-
-   int wing = MathMax(1, InpM15SwingWing);
-   int need = InpM15FractalBars + wing + 2;
-
-   MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M15, 1, need, rt) < need) return false;
-   ArraySetAsSeries(rt, true);
-
-   int n    = ArraySize(rt);
-   int last = n - 1 - wing;
-
-   double found[];
-   int cnt = 0;
-   for(int j = wing; j <= last; j++)
-   {
-      double lvl = (dir == -1) ? rt[j].high : rt[j].low;
-
-      bool isSwing = true;
-      for(int k = 1; k <= wing && isSwing; k++)
-      {
-         if(dir == -1) { if(rt[j-k].high >= lvl || rt[j+k].high >= lvl) isSwing = false; }
-         else          { if(rt[j-k].low  <= lvl || rt[j+k].low  <= lvl) isSwing = false; }
-      }
-      if(!isSwing) continue;
-
-      if(dir == -1 && lvl <= price) continue;   // keep only fractals on the stop side
-      if(dir ==  1 && lvl >= price) continue;
-
-      ArrayResize(found, cnt + 1);
-      found[cnt++] = lvl;
-   }
-   if(cnt < nth) return false;
-
-   ArraySort(found);   // ascending
-   // sell: nearest above price = smallest -> nth smallest; buy: nth largest.
-   level = (dir == -1) ? found[nth - 1] : found[cnt - nth];
+   double k[1];
+   if(CopyBuffer(ichM15[s], 1, 1, 1, k) <= 0) return false;
+   v = k[0];
    return true;
 }
 
@@ -682,8 +645,8 @@ int OpenReversion(int s, bool isBuy, double sl, double tp, int count, double lot
    return filled;
 }
 
-// Trail the stop of every open position on this symbol to the Nth M15 fractal
-// beyond price (InpM15TrailFractal). Only tightens — a short's stop only moves
+// Trail the stop of every open position on this symbol to the M15 Kijun (padded
+// by InpM15SLBufferATR * ATR(M15)). Only tightens — a short's stop only moves
 // down, a long's only up — and never inside the broker's minimum stop distance.
 void TrailSymbolStops(int s, int dir)
 {
@@ -691,16 +654,18 @@ void TrailSymbolStops(int s, int dir)
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
 
-   double lvl;
-   if(!NthM15Fractal(s, dir, price, InpM15TrailFractal, lvl)) return;
+   double kij;
+   if(!GetM15Kijun(s, kij)) return;
 
-   double atr   = ATRval(s);
-   double buf   = (atr > 0) ? InpSLBufferATR * atr : 0.0;
+   double atrM = 0.0, a[1];
+   if(CopyBuffer(atrM15[s], 0, 1, 1, a) > 0 && a[0] > 0) atrM = a[0];
+   double buf   = InpM15SLBufferATR * atrM;
+
    int    dg    = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(sym, SYMBOL_POINT);
    double minD  = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
 
-   double newSL = (dir == 1) ? lvl - buf : lvl + buf;
+   double newSL = (dir == 1) ? kij - buf : kij + buf;
    newSL = NormalizeDouble(newSL, dg);
 
    if(dir == -1 && newSL < price + minD) return;   // too close to price to place
@@ -725,7 +690,7 @@ void TrailSymbolStops(int s, int dir)
 }
 
 // Once per new M15 bar, for each symbol holding a reversion position that M15
-// has confirmed, trail the stop behind M15 structure.
+// has confirmed, trail the stop to the M15 Kijun.
 void ManageReversionStops()
 {
    for(int s = 0; s < symsCount; s++)

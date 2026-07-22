@@ -66,7 +66,7 @@ across three timeframes, checked **Daily → H4 → H1**; a raid of any one qual
 
 - **Take profit** — the **H1 Kijun** (the reversion target), fixed at entry, attached to the order. A setup whose Kijun is inside the broker's minimum stop distance is skipped.
 - **Initial stop (Stage 1)** — the **H1 signal candle's own extreme** (its high for a sell, low for a buy) + `InpSLBufferATR × ATR(H1)`, widened to the broker minimum if needed. A tight stop just past the rejection/raid wick ⇒ **small risk**.
-- **M15 fractal trail (Stage 2)** — once a **closed M15 candle prints clearly beyond the M15 Kijun** in the trade direction ("clearly" = ≥ `InpM15ClearATR × ATR(M15)` past it), the stop is moved to the **`InpM15TrailFractal`-th M15 fractal** on the protective side of price (default the **2nd** M15 swing high above price for a sell / low below for a buy). It re-evaluates each new M15 bar, **only ever tightens** (a short's stop only moves down, a long's up), and never sits inside the broker minimum. `InpM15SwingWing` / `InpM15FractalBars` define and bound the M15 fractal scan.
+- **M15 Kijun trail (Stage 2)** — once a **closed M15 candle prints clearly beyond the M15 Kijun** in the trade direction ("clearly" = ≥ `InpM15ClearATR × ATR(M15)` past it), the stop is moved to the **M15 Kijun** itself, padded by `InpM15SLBufferATR × ATR(M15)`. It re-evaluates each new M15 bar — following the Kijun as it drifts — **only ever tightens** (a short's stop only moves down, a long's up), and never sits inside the broker minimum.
 
 ---
 
@@ -92,8 +92,8 @@ Trend up (price above Kumo, Tenkan > Kijun)
                      • TP  = H1 Kijun
                      • SL  = H1 signal-candle high (tight)
                      • then M15 closes clearly below M15 Kijun
-                          → trail SL to 2nd M15 fractal high above price
-                          → keep tightening each M15 bar
+                          → trail SL to the M15 Kijun (padded)
+                          → keep tightening each M15 bar as it drifts
 ```
 
 Buy setups are the exact mirror (downtrend, price below the Kijun, swing lows,
@@ -115,10 +115,9 @@ M5 cross up, M15 closes above the M15 Kijun).
 | Triggers | `InpRaidBarsD1/H4/H1` | 50 / 300 / 500 | Swing-liquidity scan depth per timeframe (0 = off) |
 | Triggers | `InpSwingWing` | 2 | Fractal half-width for raid swings |
 | Triggers | `InpRequireUnraided` | `true` | Require resting (unliquidated) liquidity |
-| Stops | `InpSLBufferATR` | 0.10 | Stop padding (× ATR H1) |
-| Stops | `InpM15TrailFractal` | 2 | Nth M15 fractal to trail the stop to |
-| Stops | `InpM15SwingWing` / `InpM15FractalBars` | 2 / 100 | M15 fractal shape and scan depth |
+| Stops | `InpSLBufferATR` | 0.10 | Initial-stop padding (× ATR H1) |
 | Stops | `InpM15ClearATR` | 0.1 | "Clearly beyond M15 Kijun" buffer (× ATR M15) |
+| Stops | `InpM15SLBufferATR` | 0.1 | Trailed-stop padding beyond the M15 Kijun (× ATR M15) |
 | Risk | `InpATRPeriod` | 14 | ATR period (H1 and M15) |
 | Risk | `InpMaxSpreadPoints` | 60 | Spread filter (0 = off) |
 | Risk | `InpHighEquityRiskPct` | 1.0 | % equity risked per trade above $8000 |
@@ -133,4 +132,4 @@ Full input reference and the shared risk/equity-alert inputs are in the
 - **Not yet compiled/backtested here** — needs an F7 compile in MetaEditor and a Strategy-Tester + demo run before live use.
 - **"Unliquidated" is judged at each timeframe's own resolution** — a daily level is "untouched" if no later *daily* bar's high exceeded it; an intraday poke within the still-forming daily bar isn't captured at daily resolution.
 - **Trend filter vs. flat Kijun** — compatible by design (a strong extension where price ran away and the Kijun flattened underneath), but if live setups get filtered out because the Kijun is still gently sloping, loosen `InpFlatATRMult`.
-- **M15 trail reading** — "two M15 fractal highs up" is implemented as the 2nd fractal on the *stop side of current price* (it trails as price moves), not a fixed level anchored at entry.
+- **M15 trail** — the Stage-2 stop trails to the **M15 Kijun** (padded), re-evaluated each M15 bar and tightening only; it does not use M15 fractal swings.
