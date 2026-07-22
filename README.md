@@ -109,6 +109,59 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ---
 
+## Companion: H1 Reversion EA (`ichimoku-H1-M1-reversion-ea.mq5`)
+
+A separate, standalone EA that trades the **opposite** edge to the trend/alignment builds — mean reversion back to a flat H1 Kijun, grounded in Ichimoku *time theory*. It reuses the same infrastructure (symbol parsing, equity-scaled sizing, state recovery, alerts, weekly equity alert) but replaces the entry/exit entirely. Run it on its own chart/instance — it uses its own magic number (`20260722`) and is intentionally not mixed with the alignment logic on the same symbol (the two would fight each other).
+
+### The idea
+
+After price has stayed **off the H1 Kijun for ~26 candles** (one Ichimoku time cycle, `InpNoTouchBars` ± `InpNoTouchTol`) and the **Kijun is flat**, an extended move is "due" to snap back to the Kijun. The Kijun becomes a magnet; the trade is taken *toward* it.
+
+### Entry
+
+On each new M1 bar, per symbol, a reversion trade opens when **all** of these hold:
+
+1. **Extension** — the last H1 close is at least `InpFarATRMult × ATR(H1)` away from the Kijun. Above the Kijun ⇒ **sell** back down; below ⇒ **buy** back up.
+2. **Time theory** — price has not touched the Kijun for at least `InpNoTouchBars − InpNoTouchTol` consecutive H1 candles (a "touch" = the Kijun falls within a candle's high–low range).
+3. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
+4. **A trigger fires** (either one, both configurable):
+   - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
+   - **Turtle-soup rejection** (`InpUseTurtleSoup`) — the last closed H1 candle pokes beyond the prior swing (stop raid) then closes back inside with a **long thin wick** and a **small body** (a doji to the upside for a sell, to the downside for a buy). Wick ≥ `InpTSWickFrac` of range, body ≤ `InpTSBodyFrac` of range.
+
+### Exit
+
+Exits are **broker-managed** via each order's attached SL and TP:
+
+- **Stop loss** — the current H1 **swing high** (for a sell) or **swing low** (for a buy) over `InpSwingLookback` bars, padded by `InpSLBufferATR × ATR(H1)`, widened to the broker's minimum stop distance if needed.
+- **Take profit** — the **H1 Kijun** (the reversion target), fixed at entry. A setup whose Kijun is closer than the broker's minimum stop distance is skipped.
+
+### Risk
+
+Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk()` picks the order count and lot size from account equity, and above $8000 `RiskBasedLots()` sizes so the swing stop risks `InpHighEquityRiskPct`% of equity across the batch.
+
+### Reversion inputs
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `InpNoTouchBars` | 26 | H1 bars price must stay off the Kijun (time theory cycle) |
+| `InpNoTouchTol` | 2 | ± tolerance on the no-touch count |
+| `InpFarATRMult` | 2.0 | Price must be ≥ this × ATR(H1) from the Kijun to be "far" |
+| `InpFlatBars` | 5 | H1 bars over which the Kijun slope is measured |
+| `InpFlatATRMult` | 0.25 | Kijun is "flat" if its move over `InpFlatBars` ≤ this × ATR(H1) |
+| `InpSwingLookback` | 10 | H1 bars used for the swing-based stop loss (and the turtle-soup raid) |
+| `InpSLBufferATR` | 0.10 | Extra SL padding beyond the swing = this × ATR(H1) |
+| `InpUseM5Cross` | `true` | Enable the fresh-M5-Kijun-cross trigger |
+| `InpUseTurtleSoup` | `true` | Enable the turtle-soup rejection-candle trigger |
+| `InpTSWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
+| `InpTSBodyFrac` | 0.35 | Rejection body ≤ this fraction of the H1 candle range |
+| `InpATRPeriod` | 14 | ATR period (computed on H1) for distance/flatness/buffer |
+| `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity > $8000 |
+
+Installation and the equity/alert inputs are the same as the main EA below — just compile and attach `ichimoku-H1-M1-reversion-ea.mq5` instead of (or on a separate instance from) the alignment build.
+
+---
+
 ## Getting Started
 
 ### Requirements
