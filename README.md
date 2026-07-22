@@ -1,6 +1,18 @@
-# Ichimoku H4-M1 Alignment EA
+# Ichimoku Alignment EAs
 
-A free MetaTrader 5 Expert Advisor that trades multi-timeframe Ichimoku Kinko Hyo alignment — from H4 down to M1 — with built-in ATR-based risk protection and equity-scaled position sizing.
+Free MetaTrader 5 Expert Advisors that trade multi-timeframe Ichimoku Kinko
+Hyo alignment, with built-in ATR-based risk protection and equity-scaled
+position sizing. Two main builds are included:
+
+| EA | File | Timeframes | Exit signal | Magic |
+|----|------|------------|-------------|-------|
+| **H4-M1 Alignment** | `ichimoku-H4-M1-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
+| **H1-M1 Alignment** | `ichimoku-H1-M1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
+
+Both share the same entry rules, risk protection, and equity-sizing logic —
+they differ only in which timeframes must agree and which lower timeframe's
+Kijun triggers the exit. Distinct magic numbers mean they can run on the same
+account (even the same symbol) without interfering with each other.
 
 > **Free to use.** Download it, run it on a demo account, break it, improve it. Feedback and pull requests are welcome — see [Feedback & Contributing](#feedback--contributing) below.
 
@@ -19,11 +31,15 @@ This EA is provided **for educational and research purposes only**. Trading leve
 
 ## What It Does
 
-The EA opens trades on a symbol (defaults to `GOLDm#`, configurable) only when **six timeframes — H4, H1, M30, M15, M5, and M1 — all agree** on trend direction using Ichimoku price *and* Chikou Span confirmation, and the location passes **PO3 dealing-range filters** (enough room to the next strong power-of-three level, and not fighting a recent rejection off a major level). Half of each order batch takes profit at tiered PO3 levels; the rest exits when price crosses the M15 Kijun-sen against the trade direction, backstopped by a hard ATR-based stop loss on every position. Position count and lot size scale automatically with account equity.
+Each EA opens trades on a symbol (defaults to `GOLDm#`, configurable) only
+when **every timeframe from its anchor down to M1 agrees** on trend direction
+using Ichimoku price *and* Chikou Span confirmation. Positions exit when a
+lower-timeframe Kijun-sen is crossed against the trade direction, backstopped
+by a hard ATR-based stop loss on every position. Position count and lot size
+scale automatically with account equity.
 
 **Highlights:**
-- ✅ 6-timeframe Ichimoku alignment filter (trend + Chikou confirmation) — cuts down on false signals from any single timeframe
-- ✅ PO3 dealing-range integration (Hopiplaka) — fixed power-of-three price levels supply entry location filters and tiered take-profit targets
+- ✅ Multi-timeframe Ichimoku alignment filter (trend + Chikou confirmation) — cuts down on false signals from any single timeframe
 - ✅ ATR-based protective stop loss on every trade (respects broker minimum stop distance)
 - ✅ Spread filter to avoid entries during wide/illiquid conditions
 - ✅ Equity-tiered position sizing (auto-scales lot size and order count as your account grows or shrinks)
@@ -38,7 +54,9 @@ The EA opens trades on a symbol (defaults to `GOLDm#`, configurable) only when *
 
 ### Entry Logic
 
-On every new M1 bar close (per symbol), the EA checks all six timeframes (H4 → H1 → M30 → M15 → M5 → M1). A timeframe is considered **bullish** when, on the last confirmed bar:
+On every new M1 bar close (per symbol), the EA checks all of its timeframes
+(H4 → M1 for the H4-M1 build, H1 → M1 for the H1-M1 build). A timeframe is
+considered **bullish** when, on the last confirmed bar:
 
 | Level | Price condition | Chikou (lagging span) condition |
 |-------|-----------------|----------------------------------|
@@ -47,25 +65,33 @@ On every new M1 bar close (per symbol), the EA checks all six timeframes (H4 →
 | Kumo (cloud) | Price above cloud top | Chikou above cloud top at its plotted position |
 | Price action | — | Chikou above the high of the candle at its plotted position |
 
-**Bearish** is the exact mirror (price and Chikou below every level). A trade only opens when **all six timeframes agree** on the same direction, no position is currently open on that symbol, the current spread is within `InpMaxSpreadPoints`, and the PO3 location filters (below) approve.
+**Bearish** is the exact mirror (price and Chikou below every level). A trade
+only opens when **all of its timeframes agree** on the same direction, no
+position is currently open on that symbol, and the current spread is within
+`InpMaxSpreadPoints`.
 
-### PO3 Dealing Ranges
+`CheckAlign()` uses these `CopyBuffer` offsets to read the alignment:
 
-The EA overlays a fixed grid of **power-of-three price levels** (the PO3 dealing-range concept by Hopiplaka): every multiple of `3^n × InpPO3Unit`. On gold with `InpPO3Unit = 1.0` the base grid (`3^4 = 81`) is …3888, 3969, 4050, 4131…; a level whose multiple carries a higher power of 3 outranks its neighbours (3888 = 16 × 3⁵ is a 243-grade level, 4374 = 2 × 3⁷ a 2187-grade one). The dealing range containing price is `floor(price / step) × step` to that plus `step`; its midpoint is **equilibrium**, the lower half **discount**, the upper half **premium**. Ichimoku decides *when* to trade — PO3 decides *whether the location is worth it* and *how far to hold*:
+| Value | Formula | Purpose |
+|-------|---------|---------|
+| `sh = 1` | — | Last confirmed bar |
+| `sh + Kijun` | shift into Senkou buffer | Cloud at bar 1 (Senkou is plotted Kijun bars ahead) |
+| `chShift = sh + Kijun` | chikou's chart position for bar 1 | Where bar 1's chikou is plotted — reference candle, Tenkan, and Kijun are read here |
+| `chCloud = chShift + Kijun` | shift for cloud at chikou's position | Cloud 52 bars before bar 1 — the cloud chikou "sees" |
 
-- **Bias filter** (`InpPO3BiasFilter`): if the recent H4 extreme tagged or raided a major level (`3^InpPO3BiasPower`, default 729-grade) and price was rejected away from it, entries *against* that rejection are blocked until price reclaims the level or an opposite-side tag supersedes it.
-- **Room filter** (`InpPO3RoomFilter`): an entry is skipped when the first strong level (`3^InpPO3StrongPower`, default 243-grade) ahead in the trade direction is closer than `InpPO3MinRR ×` the ATR stop distance — no buying into a ceiling, no selling into a floor.
-- **Tiered take-profits**: half of each order batch targets **TP1**, the nearest base rung worth at least `InpPO3MinRR` R; the other half targets **TP2**, the nearest strong level beyond TP1. Both are front-run by `InpPO3BufferATR × ATR(M15)` since price often stalls just short of a level. A tier with no qualifying level within `InpPO3MaxRR` R gets no TP — those orders stay runners managed by the Kijun exit.
-
-Entry alerts include the PO3 context, e.g. `PO3 243[3888-4131] 39% discount | TP1 3890.12 TP2 runner`. For non-gold symbols set `InpPO3Unit` to the instrument's convention (e.g. `0.0001` for 5-digit FX pairs so a 243 range spans 0.0243; `0.01` for a cents-based intraday grid on metals).
+The chikou *value* itself is taken directly as `close[1]` from rates (not
+from the indicator buffer) — reading Chikou from the indicator buffer at the
+`chShift` offset would actually return the close from that many bars ago,
+silently reducing the chikou filter to a lagged copy of the price check.
 
 ### Exit Logic
 
-Orders that reached their PO3 take-profit close there. Everything remaining is closed when the M15 close crosses the M15 Kijun-sen against the trade's direction:
-- **Long** closes when the M15 close ends *below* the M15 Kijun.
-- **Short** closes when the M15 close ends *above* the M15 Kijun.
+- **H4-M1 build:** closes when the M15 close crosses the M15 Kijun-sen against the trade's direction (long closes below the M15 Kijun, short closes above it).
+- **H1-M1 build:** closes when the M5 close crosses the M5 Kijun-sen against the trade's direction (long closes below the M5 Kijun, short closes above it).
 
-Independently of that signal exit, every position carries an **ATR(M15) × multiplier** stop loss to cap losses from fast adverse moves between M15 closes.
+Independently of that signal exit, every position carries an **ATR(M15) ×
+multiplier** stop loss to cap losses from fast adverse moves between M15
+closes.
 
 ### Risk Protection
 
@@ -75,7 +101,7 @@ Independently of that signal exit, every position carries an **ATR(M15) × multi
 
 ### Equity-Based Position Sizing
 
-`GetEquityRisk()` determines how many orders to open and at what lot size, based on current account equity:
+`GetEquityRisk()` determines how many orders to open and at what lot size, based on current account equity. All counts are even, with the lowest tier opening 2:
 
 | Equity | Orders | Lot size (each) |
 |--------|--------|------------------|
@@ -109,66 +135,6 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ---
 
-## Companion: H1 Reversion EA (`ichimoku-H1-M1-reversion-ea.mq5`)
-
-A separate, standalone EA that trades the **opposite** edge to the trend/alignment builds — mean reversion back to a flat H1 Kijun, grounded in Ichimoku *time theory*. It reuses the same infrastructure (symbol parsing, equity-scaled sizing, state recovery, alerts, weekly equity alert) but replaces the entry/exit entirely. Run it on its own chart/instance — it uses its own magic number (`20260722`) and is intentionally not mixed with the alignment logic on the same symbol (the two would fight each other).
-
-### The idea
-
-After price has stayed **off the H1 Kijun for one of the Ichimoku time cycles** (9, 17, 26, or 33 bars, each ± `InpTimeTol`) and the **Kijun is flat**, an extended move is "due" to snap back to the Kijun. The Kijun becomes a magnet; the trade is taken *toward* it.
-
-### Entry
-
-On each new M1 bar, per symbol, a reversion trade opens when **all** of these hold:
-
-1. **Extension** — the last H1 close is at least `InpFarATRMult × ATR(H1)` away from the Kijun. Above the Kijun ⇒ **sell** back down; below ⇒ **buy** back up.
-2. **Trend to fade** (`InpUseTrendFilter`) — the reversion only fires *against* an established H1 Ichimoku trend: a **sell** needs a bullish H1 trend (close above the Kumo **and** Tenkan above Kijun), a **buy** needs the bearish mirror. This keeps the EA fading genuine over-extended trends, not chop that merely drifted off the Kijun.
-3. **Time theory** — the number of consecutive H1 candles since the last Kijun touch (the H1 "break away" from the Kijun) lands on an **Ichimoku time cycle** — `InpTimeCycles` (default `9,17,26,33`) each within ± `InpTimeTol`. A "touch" = the Kijun falling within a candle's high–low range; the count resets to 0 on any touch, so a streak that falls *between* cycles (e.g. 13 or 30 bars) does **not** qualify.
-4. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
-5. **A trigger fires** (either one, both configurable):
-   - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
-   - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids an unliquidated fractal swing** and closes back inside it. Swing liquidity is mapped across three timeframes — **Daily** (last `InpRaidBarsD1`, default 50 bars), **H4** (last `InpRaidBarsH4`, default 300) and **H1** (last `InpRaidBarsH1`, default 500) — and a raid of any one of them qualifies (set a timeframe's bar count to `0` to switch it off). A swing point is a fractal high/low with `InpSwingWing` lower bars on each side. With `InpRequireUnraided` (default on) the level must still hold **resting liquidity** — no more-recent closed bar *on that timeframe* has exceeded it — so the trade fires on a genuine grab of an untouched high/low, not a level that was already run.
-
-### Exit & stop management
-
-- **Take profit** — the **H1 Kijun** (the reversion target), fixed at entry, attached to the order (broker-managed). A setup whose Kijun is closer than the broker's minimum stop distance is skipped.
-- **Initial stop loss** — the **H1 signal candle's own extreme** (its high for a sell, low for a buy) padded by `InpSLBufferATR × ATR(H1)`, widened to the broker's minimum stop distance if needed. Because the trigger candle is the rejection/raid bar, this is a tight stop just past the wick — **small risk** per trade.
-- **M15 Kijun trail** — once a **closed M15 candle prints clearly beyond the M15 Kijun** in the trade direction (below for a sell, above for a buy — "clearly" = at least `InpM15ClearATR × ATR(M15)` past it), the stop is moved to the **M15 Kijun** itself, padded by `InpM15SLBufferATR × ATR(M15)`. It re-evaluates on each new M15 bar (following the Kijun as it drifts) and **only ever tightens** — a short's stop moves down, a long's up, never back out, and never inside the broker's minimum stop distance.
-
-### Risk
-
-Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk()` picks the order count and lot size from account equity, and above $8000 `RiskBasedLots()` sizes so the initial stop risks `InpHighEquityRiskPct`% of equity across the batch. Because the initial stop is tight (H1 signal-candle extreme), the same % risk buys a larger position than a wide swing stop would.
-
-### Reversion inputs
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `InpTimeCycles` | `9,17,26,33` | Ichimoku time cycles (bars since last Kijun touch) that qualify |
-| `InpTimeTol` | 2 | ± tolerance applied to each time cycle |
-| `InpFarATRMult` | 2.0 | Price must be ≥ this × ATR(H1) from the Kijun to be "far" |
-| `InpFlatBars` | 5 | H1 bars over which the Kijun slope is measured |
-| `InpFlatATRMult` | 0.25 | Kijun is "flat" if its move over `InpFlatBars` ≤ this × ATR(H1) |
-| `InpUseTrendFilter` | `true` | Only fade an established H1 Ichimoku trend (sell in an uptrend, buy in a downtrend) |
-| `InpSLBufferATR` | 0.10 | Extra SL padding beyond the stop level = this × ATR(H1) |
-| `InpM15ClearATR` | 0.1 | "Clearly beyond the M15 Kijun" buffer = this × ATR(M15) |
-| `InpM15SLBufferATR` | 0.1 | Trailed-stop padding beyond the M15 Kijun = this × ATR(M15) |
-| `InpUseM5Cross` | `true` | Enable the fresh-M5-Kijun-cross trigger |
-| `InpUseRejection` | `true` | Enable the swing-liquidity rejection-candle trigger |
-| `InpRejWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
-| `InpRejBodyFrac` | 0.35 | Rejection body ≤ this fraction of the H1 candle range |
-| `InpRaidBarsD1` | 50 | Daily bars scanned for a swing high/low to raid (`0` = off) |
-| `InpRaidBarsH4` | 300 | H4 bars scanned for a swing high/low to raid (`0` = off) |
-| `InpRaidBarsH1` | 500 | H1 bars scanned for a swing high/low to raid (`0` = off) |
-| `InpSwingWing` | 2 | Fractal half-width for a swing point (bars each side) |
-| `InpRequireUnraided` | `true` | Only count swings whose liquidity is not yet raided |
-| `InpATRPeriod` | 14 | ATR period (computed on H1) for distance/flatness/buffer |
-| `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
-| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity > $8000 |
-
-Installation and the equity/alert inputs are the same as the main EA below — just compile and attach `ichimoku-H1-M1-reversion-ea.mq5` instead of (or on a separate instance from) the alignment build.
-
----
-
 ## Getting Started
 
 ### Requirements
@@ -178,7 +144,7 @@ Installation and the equity/alert inputs are the same as the main EA below — j
 
 ### Installation
 
-1. Download `ichimoku-H4-M1-po3-ea.mq5` from this repository (the PO3 build documented here). The pre-PO3 build is preserved as `ichimoku-H4-M1-ea.mq5` for reference.
+1. Download `ichimoku-H4-M1-ea.mq5` and/or `ichimoku-H1-M1-ea.mq5` from this repository, depending on which timeframe anchor you want to trade (or run both — they use distinct magic numbers).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
@@ -197,8 +163,10 @@ Installation and the equity/alert inputs are the same as the main EA below — j
 
 ## Configuration (Inputs)
 
+Both EAs share the same input set:
+
 | Parameter | Default | Description |
-|-----------|---------|-------------|
+|-----------|---------|--------------|
 | `Symbols` | `GOLDm#` | Comma-separated list of symbols to watch (up to 60) |
 | `Tenkan` | 9 | Ichimoku Tenkan-sen period |
 | `Kijun` | 26 | Ichimoku Kijun-sen period |
@@ -209,18 +177,6 @@ Installation and the equity/alert inputs are the same as the main EA below — j
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
-| `InpUsePO3` | `true` | Use PO3 dealing-range levels for take-profits and entry filters |
-| `InpPO3Unit` | 1.0 | Price per PO3 unit (1.0 = whole dollars on gold; 0.0001 for 5-digit FX) |
-| `InpPO3BasePower` | 4 | Base rung = 3^power units (4 → 81) |
-| `InpPO3StrongPower` | 5 | Strong level = 3^power units (5 → 243) |
-| `InpPO3MinRR` | 1.5 | Minimum reward:risk for a level to qualify as a TP (also the room-filter threshold) |
-| `InpPO3MaxRR` | 8.0 | Levels beyond this R-multiple are ignored (order stays a runner) |
-| `InpPO3BufferATR` | 0.25 | Front-run TP buffer = ATR(M15) × this |
-| `InpPO3RoomFilter` | `true` | Skip entries without `MinRR` room to the next strong level |
-| `InpPO3BiasFilter` | `true` | Block entries against a recent rejection off a major level |
-| `InpPO3BiasPower` | 6 | Major level for the bias filter = 3^power units (6 → 729) |
-| `InpPO3BiasBars` | 180 | H4 bars scanned for a major-level rejection |
-| `InpPO3BiasTolFrac` | 0.4 | Rejection tag tolerance, as a fraction of the base rung |
 | `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert |
 | `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline |
 | `InpCheckDay` | Friday | Day of week the equity alert is evaluated |
@@ -229,12 +185,50 @@ Installation and the equity/alert inputs are the same as the main EA below — j
 
 ---
 
+## Timeframe Alignment Order
+
+Timeframes are checked highest to lowest — all must agree before entry.
+
+**H4-M1 Alignment EA:**
+
+| Index | Timeframe | Role |
+|-------|-----------|------|
+| 0 | H4 | Highest — trend anchor |
+| 1 | H1 | Intermediate |
+| 2 | M30 | Intermediate |
+| 3 | M15 | Exit reference |
+| 4 | M5 | Fine filter |
+| 5 | M1 | Trigger bar |
+
+**H1-M1 Alignment EA:**
+
+| Index | Timeframe | Role |
+|-------|-----------|------|
+| 0 | H1 | Highest — trend anchor |
+| 1 | M30 | Intermediate |
+| 2 | M15 | Intermediate |
+| 3 | M5 | Exit reference |
+| 4 | M1 | Trigger bar |
+
+---
+
 ## Technical Notes
 
-- **Magic number:** `20260501` — used to identify and manage only this EA's positions, so it won't interfere with other EAs or manual trades on the same account.
+- **Magic numbers:** `20260501` (H4-M1 build) and `20260502` (H1-M1 build) — each EA only identifies and manages its own positions by its magic number, so they won't interfere with other EAs, each other, or manual trades on the same account.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.
+
+---
+
+## Experimental EAs
+
+This repository also includes experimental strategies — a PO3-enhanced
+variant of the H4-M1 alignment EA, an Ichimoku time-theory mean-reversion EA,
+and a fast M1-M5 breakout alignment EA. They're newer and less
+battle-tested than the two main builds above; each file is prefixed
+`experimental-` to keep it clearly separate. See
+**[EXPERIMENTAL-NOTES.md](EXPERIMENTAL-NOTES.md)** for full details on each.
 
 ---
 
