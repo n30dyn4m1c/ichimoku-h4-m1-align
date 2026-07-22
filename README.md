@@ -126,7 +126,7 @@ On each new M1 bar, per symbol, a reversion trade opens when **all** of these ho
 3. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
 4. **A trigger fires** (either one, both configurable):
    - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
-   - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids beyond a prior fractal swing high/low** from the last `InpRejLookback` bars (default 500) and closes back inside it. With `InpRequireUnraided` (default on) the raided swing must still hold **resting liquidity** — nothing has exceeded it since it formed — so the trade fires on a genuine liquidity grab, not a level that was already run. `InpSwingWing` sets the fractal half-width (bars each side that define a swing point).
+   - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids an unliquidated fractal swing** and closes back inside it. Swing liquidity is mapped across three timeframes — **Daily** (last `InpRaidBarsD1`, default 50 bars), **H4** (last `InpRaidBarsH4`, default 300) and **H1** (last `InpRaidBarsH1`, default 500) — and a raid of any one of them qualifies (set a timeframe's bar count to `0` to switch it off). A swing point is a fractal high/low with `InpSwingWing` lower bars on each side. With `InpRequireUnraided` (default on) the level must still hold **resting liquidity** — no more-recent closed bar *on that timeframe* has exceeded it — so the trade fires on a genuine grab of an untouched high/low, not a level that was already run.
 
 ### Exit
 
@@ -154,7 +154,9 @@ Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk(
 | `InpUseRejection` | `true` | Enable the swing-liquidity rejection-candle trigger |
 | `InpRejWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
 | `InpRejBodyFrac` | 0.35 | Rejection body ≤ this fraction of the H1 candle range |
-| `InpRejLookback` | 500 | H1 bars scanned for prior swing highs/lows to raid |
+| `InpRaidBarsD1` | 50 | Daily bars scanned for a swing high/low to raid (`0` = off) |
+| `InpRaidBarsH4` | 300 | H4 bars scanned for a swing high/low to raid (`0` = off) |
+| `InpRaidBarsH1` | 500 | H1 bars scanned for a swing high/low to raid (`0` = off) |
 | `InpSwingWing` | 2 | Fractal half-width for a swing point (bars each side) |
 | `InpRequireUnraided` | `true` | Only count swings whose liquidity is not yet raided |
 | `InpATRPeriod` | 14 | ATR period (computed on H1) for distance/flatness/buffer |

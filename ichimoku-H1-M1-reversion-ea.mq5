@@ -36,7 +36,9 @@ input bool   InpUseM5Cross      = true; // Trigger on a fresh M5 close cross of 
 input bool   InpUseRejection    = true; // Trigger on a rejection candle raiding swing liquidity
 input double InpRejWickFrac     = 0.55; // Rejection wick >= this fraction of the H1 candle range
 input double InpRejBodyFrac     = 0.35; // Rejection body <= this fraction of the H1 candle range
-input int    InpRejLookback     = 500;  // H1 bars scanned for prior swing highs/lows to raid
+input int    InpRaidBarsD1      = 50;   // D1 bars scanned for a swing high/low to raid (0 = off)
+input int    InpRaidBarsH4      = 300;  // H4 bars scanned for a swing high/low to raid (0 = off)
+input int    InpRaidBarsH1      = 500;  // H1 bars scanned for a swing high/low to raid (0 = off)
 input int    InpSwingWing       = 2;    // Fractal half-width for a swing point (bars each side)
 input bool   InpRequireUnraided = true; // Only count swings whose liquidity is not yet raided
 
@@ -325,22 +327,78 @@ bool M5CrossTrigger(int s, int dir)
    return (c2 <= k2 && c1 > k1);                 // crossed up toward the Kijun
 }
 
-// Proper rejection candle: the last closed H1 bar is a long-wicked, small-body
-// candle whose wick raids beyond a prior fractal swing high/low from the last
-// InpRejLookback bars, then closes back inside it. With InpRequireUnraided the
-// raided swing must still hold resting liquidity (nothing exceeded it since it
-// formed). dir = -1 wants an upper-wick raid above a swing high (doji to the
-// upside); dir = +1 wants a lower-wick raid below a swing low.
-bool RejectionTrigger(int s, int dir)
+// Does the H1 rejection candle (rejH / rejL / rejC) raid an UNLIQUIDATED
+// fractal swing on timeframe tf, within the last `lookback` closed bars?
+//   - fractal: strictly beyond `wing` neighbours on each side (a swing point).
+//   - unraided: no more-recent closed bar on tf has exceeded the level since it
+//     formed (its resting liquidity is still there). Judged at tf's resolution.
+//   - raid: the rejection candle's wick pokes beyond the level and the close
+//     rejects back inside it.
+// tfIsRejection = true when tf is the rejection candle's own timeframe (H1):
+// its index 0 IS the rejection candle, so it is excluded from swing detection
+// and from the prior-raid scan. On higher timeframes index 0 is an ordinary
+// past bar and counts toward both.
+bool RaidsSwing(int s, ENUM_TIMEFRAMES tf, int lookback, int dir,
+                double rejH, double rejL, double rejC, bool tfIsRejection)
 {
+   if(lookback <= 0) return false;
+
    int wing = MathMax(1, InpSwingWing);
-   int need = InpRejLookback + wing + 2;
+   int need = lookback + wing + 2;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_H1, 1, need, rt) < need) return false;
-   ArraySetAsSeries(rt, true);   // rt[0] = rejection candle (last closed H1 bar)
+   if(CopyRates(syms[s], tf, 1, need, rt) < need) return false;
+   ArraySetAsSeries(rt, true);   // rt[0] = last closed bar on tf
 
-   double o = rt[0].open, h = rt[0].high, l = rt[0].low, c = rt[0].close;
+   int n       = ArraySize(rt);
+   int last    = n - 1 - wing;                 // furthest index that can be a fractal centre
+   int startJ  = tfIsRejection ? wing + 1 : wing;
+   int firstRd = tfIsRejection ? 1 : 0;        // first index to test for a prior raid
+
+   for(int j = startJ; j <= last; j++)
+   {
+      double lvl   = (dir == -1) ? rt[j].high : rt[j].low;
+
+      // fractal test against the `wing` neighbours on each side
+      bool isSwing = true;
+      for(int k = 1; k <= wing && isSwing; k++)
+      {
+         if(dir == -1) { if(rt[j-k].high >= lvl || rt[j+k].high >= lvl) isSwing = false; }
+         else          { if(rt[j-k].low  <= lvl || rt[j+k].low  <= lvl) isSwing = false; }
+      }
+      if(!isSwing) continue;
+
+      // the rejection candle must raid the level and close back inside it
+      if(dir == -1) { if(!(rejH > lvl && rejC < lvl)) continue; }
+      else          { if(!(rejL < lvl && rejC > lvl)) continue; }
+
+      // level must not already be liquidated by a more-recent closed bar on tf
+      if(InpRequireUnraided)
+      {
+         bool raided = false;
+         for(int i = firstRd; i < j && !raided; i++)
+         {
+            if(dir == -1) { if(rt[i].high >= lvl) raided = true; }
+            else          { if(rt[i].low  <= lvl) raided = true; }
+         }
+         if(raided) continue;
+      }
+      return true;
+   }
+   return false;
+}
+
+// Proper rejection candle: the last closed H1 bar is a long-wicked, small-body
+// candle whose wick raids an unliquidated fractal swing on the daily, H4, or H1
+// timeframe (see RaidsSwing) and closes back inside it. dir = -1 wants an
+// upper-wick raid above a swing high (doji to the upside); dir = +1 a lower-wick
+// raid below a swing low.
+bool RejectionTrigger(int s, int dir)
+{
+   MqlRates h1[];
+   if(CopyRates(syms[s], PERIOD_H1, 1, 1, h1) <= 0) return false;
+
+   double o = h1[0].open, h = h1[0].high, l = h1[0].low, c = h1[0].close;
    double range = h - l;
    if(range <= 0) return false;
 
@@ -348,57 +406,13 @@ bool RejectionTrigger(int s, int dir)
    double upWick = h - MathMax(o, c);
    double loWick = MathMin(o, c) - l;
    if(body > InpRejBodyFrac * range) return false;
+   if(dir == -1 && upWick < InpRejWickFrac * range) return false;
+   if(dir ==  1 && loWick < InpRejWickFrac * range) return false;
 
-   int n    = ArraySize(rt);
-   int last = n - 1 - wing;      // furthest index that can still be a fractal centre
-
-   if(dir == -1)
-   {
-      if(upWick < InpRejWickFrac * range) return false;
-
-      // Walk from the most recent past swing outward; j > wing keeps the
-      // fractal test off the rejection candle itself (index 0).
-      for(int j = wing + 1; j <= last; j++)
-      {
-         double sh = rt[j].high;
-         bool isSwing = true;
-         for(int k = 1; k <= wing && isSwing; k++)
-            if(rt[j - k].high >= sh || rt[j + k].high >= sh) isSwing = false;
-         if(!isSwing) continue;
-
-         if(!(h > sh && c < sh)) continue;   // wick raids above, close rejects back below
-
-         if(InpRequireUnraided)
-         {
-            bool raided = false;
-            for(int i = 1; i < j && !raided; i++) if(rt[i].high >= sh) raided = true;
-            if(raided) continue;
-         }
-         return true;
-      }
-      return false;
-   }
-
-   if(loWick < InpRejWickFrac * range) return false;
-
-   for(int j = wing + 1; j <= last; j++)
-   {
-      double sl = rt[j].low;
-      bool isSwing = true;
-      for(int k = 1; k <= wing && isSwing; k++)
-         if(rt[j - k].low <= sl || rt[j + k].low <= sl) isSwing = false;
-      if(!isSwing) continue;
-
-      if(!(l < sl && c > sl)) continue;      // wick raids below, close rejects back above
-
-      if(InpRequireUnraided)
-      {
-         bool raided = false;
-         for(int i = 1; i < j && !raided; i++) if(rt[i].low <= sl) raided = true;
-         if(raided) continue;
-      }
-      return true;
-   }
+   // A raid on any configured timeframe qualifies (0 bars disables that TF).
+   if(RaidsSwing(s, PERIOD_D1, InpRaidBarsD1, dir, h, l, c, false)) return true;
+   if(RaidsSwing(s, PERIOD_H4, InpRaidBarsH4, dir, h, l, c, false)) return true;
+   if(RaidsSwing(s, PERIOD_H1, InpRaidBarsH1, dir, h, l, c, true))  return true;
    return false;
 }
 
