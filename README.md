@@ -129,16 +129,15 @@ On each new M1 bar, per symbol, a reversion trade opens when **all** of these ho
    - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
    - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids an unliquidated fractal swing** and closes back inside it. Swing liquidity is mapped across three timeframes — **Daily** (last `InpRaidBarsD1`, default 50 bars), **H4** (last `InpRaidBarsH4`, default 300) and **H1** (last `InpRaidBarsH1`, default 500) — and a raid of any one of them qualifies (set a timeframe's bar count to `0` to switch it off). A swing point is a fractal high/low with `InpSwingWing` lower bars on each side. With `InpRequireUnraided` (default on) the level must still hold **resting liquidity** — no more-recent closed bar *on that timeframe* has exceeded it — so the trade fires on a genuine grab of an untouched high/low, not a level that was already run.
 
-### Exit
+### Exit & stop management
 
-Exits are **broker-managed** via each order's attached SL and TP:
-
-- **Stop loss** — the current H1 **swing high** (for a sell) or **swing low** (for a buy) over `InpSwingLookback` bars, padded by `InpSLBufferATR × ATR(H1)`, widened to the broker's minimum stop distance if needed.
-- **Take profit** — the **H1 Kijun** (the reversion target), fixed at entry. A setup whose Kijun is closer than the broker's minimum stop distance is skipped.
+- **Take profit** — the **H1 Kijun** (the reversion target), fixed at entry, attached to the order (broker-managed). A setup whose Kijun is closer than the broker's minimum stop distance is skipped.
+- **Initial stop loss** — the **H1 signal candle's own extreme** (its high for a sell, low for a buy) padded by `InpSLBufferATR × ATR(H1)`, widened to the broker's minimum stop distance if needed. Because the trigger candle is the rejection/raid bar, this is a tight stop just past the wick — **small risk** per trade.
+- **M15 fractal trail** — once a **closed M15 candle prints clearly beyond the M15 Kijun** in the trade direction (below for a sell, above for a buy — "clearly" = at least `InpM15ClearATR × ATR(M15)` past it), the stop is moved to the **`InpM15TrailFractal`-th M15 fractal** on the protective side of price (default the **2nd** M15 fractal high above price for a sell, low below for a buy). It re-evaluates on each new M15 bar and **only ever tightens** — a short's stop moves down, a long's up, never back out, and never inside the broker's minimum stop distance. An M15 fractal is a swing high/low with `InpM15SwingWing` bars on each side; `InpM15FractalBars` sets how far back it scans.
 
 ### Risk
 
-Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk()` picks the order count and lot size from account equity, and above $8000 `RiskBasedLots()` sizes so the swing stop risks `InpHighEquityRiskPct`% of equity across the batch.
+Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk()` picks the order count and lot size from account equity, and above $8000 `RiskBasedLots()` sizes so the initial stop risks `InpHighEquityRiskPct`% of equity across the batch. Because the initial stop is tight (H1 signal-candle extreme), the same % risk buys a larger position than a wide swing stop would.
 
 ### Reversion inputs
 
@@ -150,8 +149,11 @@ Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk(
 | `InpFlatBars` | 5 | H1 bars over which the Kijun slope is measured |
 | `InpFlatATRMult` | 0.25 | Kijun is "flat" if its move over `InpFlatBars` ≤ this × ATR(H1) |
 | `InpUseTrendFilter` | `true` | Only fade an established H1 Ichimoku trend (sell in an uptrend, buy in a downtrend) |
-| `InpSwingLookback` | 10 | H1 bars used for the swing-based stop loss |
-| `InpSLBufferATR` | 0.10 | Extra SL padding beyond the swing = this × ATR(H1) |
+| `InpSLBufferATR` | 0.10 | Extra SL padding beyond the stop level = this × ATR(H1) |
+| `InpM15TrailFractal` | 2 | Trail the stop to the Nth M15 fractal beyond price after M15 confirms |
+| `InpM15SwingWing` | 2 | M15 fractal half-width (bars each side) |
+| `InpM15FractalBars` | 100 | M15 bars scanned for fractals when trailing |
+| `InpM15ClearATR` | 0.1 | "Clearly beyond the M15 Kijun" buffer = this × ATR(M15) |
 | `InpUseM5Cross` | `true` | Enable the fresh-M5-Kijun-cross trigger |
 | `InpUseRejection` | `true` | Enable the swing-liquidity rejection-candle trigger |
 | `InpRejWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
