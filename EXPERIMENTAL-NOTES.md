@@ -358,3 +358,74 @@ EAs — see the [README](README.md#configuration-inputs).
   top-timeframe trend filter.
 - Not yet extensively backtested here — run it in the Strategy Tester and on
   demo before considering live capital.
+
+---
+
+## 5. H4-M15 Alignment EA
+
+**File:** `experimental-h4-m15-align-ea.mq5`
+**Magic number:** `20260724`
+
+A trimmed clone of the main [H4-M1 EA](README.md#entry-logic) that keeps the
+same H4 top anchor but stops the alignment at **M15** — it aligns **H4, H1,
+M30, M15** and **disregards M5 and M1**. The idea is to keep the multi-hour
+trend context of the H4-M1 build while cutting out the two lowest, noisiest
+timeframes, so entries fire on a cleaner 4-timeframe agreement rather than
+waiting for a full 6-timeframe stack down to M1.
+
+### Entry logic
+
+Runs on every new **M15** bar close, per symbol. `CheckAlign()` on each of
+**H4, H1, M30, M15** requires price *and* Chikou above/below Tenkan, Kijun,
+and the cloud — the same rule table as the main EAs (see
+[README](README.md#entry-logic)). A trade opens only when **all four
+timeframes** agree on direction and no position is already open on that
+symbol. Because M5 and M1 no longer have to line up, setups clear the entry
+filter sooner than the full H4-M1 stack.
+
+### Exit logic
+
+Identical to the H4-M1 EA: all positions close when the **M15 close crosses
+the M15 Kijun-sen** against the trade's direction (long closes below the M15
+Kijun, short closes above it). Independently, every position carries an
+`ATR(M15) × InpATRMultiplier` stop loss — the **same SL logic** as the main
+H4-M1 build.
+
+### Risk protection & equity sizing
+
+**Same risk as the H4-M1 EA** — identical `InpUseStopLoss` /
+`InpMaxSpreadPoints` / `InpHighEquityRiskPct` risk protection and the same
+`GetEquityRisk()` equity-tiered position sizing (see
+[README](README.md#equity-based-position-sizing)). ATR is computed on **M15**,
+exactly as in the H4-M1 EA.
+
+### Inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `Symbols` | `GOLDm#` | Comma-separated list of symbols to watch (up to 60) |
+| `Tenkan` / `Kijun` / `SenkouB` | 9 / 26 / 52 | Ichimoku periods |
+| `Slippage` | 30 | Maximum allowed slippage, in points |
+| `InpUseStopLoss` | `true` | Attach an ATR(M15)-based stop loss to every entry |
+| `InpATRPeriod` | 14 | ATR period, computed on M15 |
+| `InpATRMultiplier` | 3.0 | Stop distance = ATR(M15) × multiplier |
+| `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
+
+The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
+`InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
+EAs — see the [README](README.md#configuration-inputs).
+
+### Technical notes
+
+- **Magic number:** `20260724` — independent from the other EAs, so it can run alongside them (including the base H4-M1 EA) without interfering.
+- **State recovery:** `SyncStateFromPositions()` rebuilds per-symbol direction state from open positions filtered by magic number on every tick, same as the main EAs.
+- **Per-symbol M15 gating:** each symbol only re-evaluates entry/exit logic once per newly closed **M15** bar (the lowest timeframe in the alignment set, vs. M1 in the H4-M1 EA); the weekly equity alert is still gated on a new **H4** bar.
+
+### Status & caveats
+
+- Fewer timeframes to satisfy than the main H4-M1 EA (4 vs. 6) and a
+  coarser entry cadence (M15 bars vs. M1) — expect somewhat earlier, more
+  frequent entries, without the fine M5/M1 timing confirmation.
+- Not yet extensively backtested here — run it in the Strategy Tester and on
+  demo before considering live capital.
