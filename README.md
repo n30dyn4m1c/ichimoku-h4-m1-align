@@ -109,6 +109,66 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ---
 
+## Companion: H1 Reversion EA (`ichimoku-H1-M1-reversion-ea.mq5`)
+
+A separate, standalone EA that trades the **opposite** edge to the trend/alignment builds — mean reversion back to a flat H1 Kijun, grounded in Ichimoku *time theory*. It reuses the same infrastructure (symbol parsing, equity-scaled sizing, state recovery, alerts, weekly equity alert) but replaces the entry/exit entirely. Run it on its own chart/instance — it uses its own magic number (`20260722`) and is intentionally not mixed with the alignment logic on the same symbol (the two would fight each other).
+
+### The idea
+
+After price has stayed **off the H1 Kijun for one of the Ichimoku time cycles** (9, 17, 26, or 33 bars, each ± `InpTimeTol`) and the **Kijun is flat**, an extended move is "due" to snap back to the Kijun. The Kijun becomes a magnet; the trade is taken *toward* it.
+
+### Entry
+
+On each new M1 bar, per symbol, a reversion trade opens when **all** of these hold:
+
+1. **Extension** — the last H1 close is at least `InpFarATRMult × ATR(H1)` away from the Kijun. Above the Kijun ⇒ **sell** back down; below ⇒ **buy** back up.
+2. **Trend to fade** (`InpUseTrendFilter`) — the reversion only fires *against* an established H1 Ichimoku trend: a **sell** needs a bullish H1 trend (close above the Kumo **and** Tenkan above Kijun), a **buy** needs the bearish mirror. This keeps the EA fading genuine over-extended trends, not chop that merely drifted off the Kijun.
+3. **Time theory** — the number of consecutive H1 candles since the last Kijun touch (the H1 "break away" from the Kijun) lands on an **Ichimoku time cycle** — `InpTimeCycles` (default `9,17,26,33`) each within ± `InpTimeTol`. A "touch" = the Kijun falling within a candle's high–low range; the count resets to 0 on any touch, so a streak that falls *between* cycles (e.g. 13 or 30 bars) does **not** qualify.
+4. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
+5. **A trigger fires** (either one, both configurable):
+   - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
+   - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids an unliquidated fractal swing** and closes back inside it. Swing liquidity is mapped across three timeframes — **Daily** (last `InpRaidBarsD1`, default 50 bars), **H4** (last `InpRaidBarsH4`, default 300) and **H1** (last `InpRaidBarsH1`, default 500) — and a raid of any one of them qualifies (set a timeframe's bar count to `0` to switch it off). A swing point is a fractal high/low with `InpSwingWing` lower bars on each side. With `InpRequireUnraided` (default on) the level must still hold **resting liquidity** — no more-recent closed bar *on that timeframe* has exceeded it — so the trade fires on a genuine grab of an untouched high/low, not a level that was already run.
+
+### Exit & stop management
+
+- **Take profit** — the **H1 Kijun** (the reversion target), fixed at entry, attached to the order (broker-managed). A setup whose Kijun is closer than the broker's minimum stop distance is skipped.
+- **Initial stop loss** — the **H1 signal candle's own extreme** (its high for a sell, low for a buy) padded by `InpSLBufferATR × ATR(H1)`, widened to the broker's minimum stop distance if needed. Because the trigger candle is the rejection/raid bar, this is a tight stop just past the wick — **small risk** per trade.
+- **M15 Kijun trail** — once a **closed M15 candle prints clearly beyond the M15 Kijun** in the trade direction (below for a sell, above for a buy — "clearly" = at least `InpM15ClearATR × ATR(M15)` past it), the stop is moved to the **M15 Kijun** itself, padded by `InpM15SLBufferATR × ATR(M15)`. It re-evaluates on each new M15 bar (following the Kijun as it drifts) and **only ever tightens** — a short's stop moves down, a long's up, never back out, and never inside the broker's minimum stop distance.
+
+### Risk
+
+Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk()` picks the order count and lot size from account equity, and above $8000 `RiskBasedLots()` sizes so the initial stop risks `InpHighEquityRiskPct`% of equity across the batch. Because the initial stop is tight (H1 signal-candle extreme), the same % risk buys a larger position than a wide swing stop would.
+
+### Reversion inputs
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `InpTimeCycles` | `9,17,26,33` | Ichimoku time cycles (bars since last Kijun touch) that qualify |
+| `InpTimeTol` | 2 | ± tolerance applied to each time cycle |
+| `InpFarATRMult` | 2.0 | Price must be ≥ this × ATR(H1) from the Kijun to be "far" |
+| `InpFlatBars` | 5 | H1 bars over which the Kijun slope is measured |
+| `InpFlatATRMult` | 0.25 | Kijun is "flat" if its move over `InpFlatBars` ≤ this × ATR(H1) |
+| `InpUseTrendFilter` | `true` | Only fade an established H1 Ichimoku trend (sell in an uptrend, buy in a downtrend) |
+| `InpSLBufferATR` | 0.10 | Extra SL padding beyond the stop level = this × ATR(H1) |
+| `InpM15ClearATR` | 0.1 | "Clearly beyond the M15 Kijun" buffer = this × ATR(M15) |
+| `InpM15SLBufferATR` | 0.1 | Trailed-stop padding beyond the M15 Kijun = this × ATR(M15) |
+| `InpUseM5Cross` | `true` | Enable the fresh-M5-Kijun-cross trigger |
+| `InpUseRejection` | `true` | Enable the swing-liquidity rejection-candle trigger |
+| `InpRejWickFrac` | 0.55 | Rejection wick ≥ this fraction of the H1 candle range |
+| `InpRejBodyFrac` | 0.35 | Rejection body ≤ this fraction of the H1 candle range |
+| `InpRaidBarsD1` | 50 | Daily bars scanned for a swing high/low to raid (`0` = off) |
+| `InpRaidBarsH4` | 300 | H4 bars scanned for a swing high/low to raid (`0` = off) |
+| `InpRaidBarsH1` | 500 | H1 bars scanned for a swing high/low to raid (`0` = off) |
+| `InpSwingWing` | 2 | Fractal half-width for a swing point (bars each side) |
+| `InpRequireUnraided` | `true` | Only count swings whose liquidity is not yet raided |
+| `InpATRPeriod` | 14 | ATR period (computed on H1) for distance/flatness/buffer |
+| `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity > $8000 |
+
+Installation and the equity/alert inputs are the same as the main EA below — just compile and attach `ichimoku-H1-M1-reversion-ea.mq5` instead of (or on a separate instance from) the alignment build.
+
+---
+
 ## Getting Started
 
 ### Requirements
