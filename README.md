@@ -122,9 +122,10 @@ After price has stayed **off the H1 Kijun for one of the Ichimoku time cycles** 
 On each new M1 bar, per symbol, a reversion trade opens when **all** of these hold:
 
 1. **Extension** — the last H1 close is at least `InpFarATRMult × ATR(H1)` away from the Kijun. Above the Kijun ⇒ **sell** back down; below ⇒ **buy** back up.
-2. **Time theory** — the number of consecutive H1 candles since the last Kijun touch lands on an **Ichimoku time cycle** — `InpTimeCycles` (default `9,17,26,33`) each within ± `InpTimeTol`. A "touch" = the Kijun falling within a candle's high–low range; the count resets to 0 on any touch, so a streak that falls *between* cycles (e.g. 13 or 30 bars) does **not** qualify.
-3. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
-4. **A trigger fires** (either one, both configurable):
+2. **Trend to fade** (`InpUseTrendFilter`) — the reversion only fires *against* an established H1 Ichimoku trend: a **sell** needs a bullish H1 trend (close above the Kumo **and** Tenkan above Kijun), a **buy** needs the bearish mirror. This keeps the EA fading genuine over-extended trends, not chop that merely drifted off the Kijun.
+3. **Time theory** — the number of consecutive H1 candles since the last Kijun touch (the H1 "break away" from the Kijun) lands on an **Ichimoku time cycle** — `InpTimeCycles` (default `9,17,26,33`) each within ± `InpTimeTol`. A "touch" = the Kijun falling within a candle's high–low range; the count resets to 0 on any touch, so a streak that falls *between* cycles (e.g. 13 or 30 bars) does **not** qualify.
+4. **Flat Kijun** — the Kijun's move over the last `InpFlatBars` H1 bars is ≤ `InpFlatATRMult × ATR(H1)`.
+5. **A trigger fires** (either one, both configurable):
    - **M5 Kijun cross** (`InpUseM5Cross`) — a *fresh* M5 close cross of the M5 Kijun in the reversion direction (the H1 "breakout close" confirmation on the lower timeframe).
    - **Rejection candle** (`InpUseRejection`) — the last closed H1 candle is a long-wicked, small-body candle (wick ≥ `InpRejWickFrac` of range, body ≤ `InpRejBodyFrac` of range) whose wick **raids an unliquidated fractal swing** and closes back inside it. Swing liquidity is mapped across three timeframes — **Daily** (last `InpRaidBarsD1`, default 50 bars), **H4** (last `InpRaidBarsH4`, default 300) and **H1** (last `InpRaidBarsH1`, default 500) — and a raid of any one of them qualifies (set a timeframe's bar count to `0` to switch it off). A swing point is a fractal high/low with `InpSwingWing` lower bars on each side. With `InpRequireUnraided` (default on) the level must still hold **resting liquidity** — no more-recent closed bar *on that timeframe* has exceeded it — so the trade fires on a genuine grab of an untouched high/low, not a level that was already run.
 
@@ -148,6 +149,7 @@ Identical equity-scaled sizing to the breakout/alignment EAs — `GetEquityRisk(
 | `InpFarATRMult` | 2.0 | Price must be ≥ this × ATR(H1) from the Kijun to be "far" |
 | `InpFlatBars` | 5 | H1 bars over which the Kijun slope is measured |
 | `InpFlatATRMult` | 0.25 | Kijun is "flat" if its move over `InpFlatBars` ≤ this × ATR(H1) |
+| `InpUseTrendFilter` | `true` | Only fade an established H1 Ichimoku trend (sell in an uptrend, buy in a downtrend) |
 | `InpSwingLookback` | 10 | H1 bars used for the swing-based stop loss |
 | `InpSLBufferATR` | 0.10 | Extra SL padding beyond the swing = this × ATR(H1) |
 | `InpUseM5Cross` | `true` | Enable the fresh-M5-Kijun-cross trigger |

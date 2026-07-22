@@ -28,6 +28,7 @@ input int    InpTimeTol       = 2;     // +/- tolerance applied to each time cyc
 input double InpFarATRMult    = 2.0;   // Price must be >= this * ATR(H1) from the Kijun
 input int    InpFlatBars      = 5;     // Bars over which the Kijun slope is measured
 input double InpFlatATRMult   = 0.25;  // Kijun is "flat" if its move over InpFlatBars <= this * ATR(H1)
+input bool   InpUseTrendFilter = true; // Only fade an established H1 Ichimoku trend (sell in an uptrend)
 input int    InpSwingLookback = 10;    // H1 bars used for the stop-loss swing high/low
 input double InpSLBufferATR   = 0.10;  // Extra SL padding beyond the swing = this * ATR(H1)
 
@@ -287,6 +288,30 @@ bool KijunFlat(int s, double atr)
    return MathAbs(kNow - kPast) <= InpFlatATRMult * atr;
 }
 
+// Usual Ichimoku trend on the last closed H1 bar: +1 bullish (close above the
+// cloud and Tenkan above Kijun), -1 bearish (mirror), 0 neither. The cloud that
+// sits under the current bar is read Kijun bars into the Senkou buffers, since
+// the spans are plotted Kijun periods ahead (same offset the alignment EA uses).
+int CheckH1Trend(int s)
+{
+   int sh = 1;
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   if(CopyBuffer(ichH1[s], 0, sh,         1, tenkan) <= 0) return 0;
+   if(CopyBuffer(ichH1[s], 1, sh,         1, kijun)  <= 0) return 0;
+   if(CopyBuffer(ichH1[s], 2, sh + Kijun, 1, senA)   <= 0) return 0;
+   if(CopyBuffer(ichH1[s], 3, sh + Kijun, 1, senB)   <= 0) return 0;
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], PERIOD_H1, sh, 1, rt) <= 0) return 0;
+   double close    = rt[0].close;
+   double cloudTop = MathMax(senA[0], senB[0]);
+   double cloudBot = MathMin(senA[0], senB[0]);
+
+   if(close > cloudTop && tenkan[0] > kijun[0]) return  1;
+   if(close < cloudBot && tenkan[0] < kijun[0]) return -1;
+   return 0;
+}
+
 double SwingHigh(int s)
 {
    MqlRates rt[];
@@ -445,8 +470,12 @@ int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig
    // Above the Kijun -> sell back down; below -> buy back up.
    int dir = (dist > 0) ? -1 : 1;
 
-   // Time theory: bars since the last Kijun touch must land on an Ichimoku
-   // cycle (9 / 17 / 26 / 33 by default) within +/- InpTimeTol.
+   // Only fade an established Ichimoku trend: a sell reversion (dir -1) needs a
+   // bullish H1 trend to fade, a buy reversion (dir +1) needs a bearish one.
+   if(InpUseTrendFilter && CheckH1Trend(s) != -dir) return 0;
+
+   // Time theory: bars since the last Kijun touch (H1 break away from the Kijun)
+   // must land on an Ichimoku cycle (9 / 17 / 26 / 33 by default) +/- InpTimeTol.
    barsSince = CountNoTouch(s);
    if(!InTimeWindow(barsSince)) return 0;
 
