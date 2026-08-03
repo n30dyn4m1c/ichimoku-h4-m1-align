@@ -22,6 +22,7 @@ input int    InpATRPeriod         = 14;     // ATR period (M15)
 input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
+input int    InpReentryCooldownSec = 0;     // Min seconds after an exit before re-entering same symbol (0 = none)
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -44,6 +45,7 @@ int      atr[MAX_SYMS];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
+datetime noReentryUntil[MAX_SYMS];
 datetime lastH1bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
@@ -82,6 +84,7 @@ int OnInit()
    {
       state[s] = 0;
       lastM1bar[s] = 0;
+      noReentryUntil[s] = 0;
       for(int t = 0; t < TF_COUNT; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
@@ -162,6 +165,8 @@ void SyncStateFromPositions()
 {
    // Rebuild from scratch so positions closed by SL or manually free the
    // symbol for re-entry instead of leaving stale state behind.
+   int prevState[MAX_SYMS];
+   for(int s = 0; s < symsCount; s++) prevState[s] = state[s];
    for(int s = 0; s < symsCount; s++) state[s] = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -180,6 +185,14 @@ void SyncStateFromPositions()
       {
          if(syms[s] == sym) { state[s] = dir; break; }
       }
+   }
+
+   // A position that vanished since the last sync (SL hit, manual close) frees
+   // the symbol; arm the optional re-entry cooldown so it can't flip instantly.
+   for(int s = 0; s < symsCount; s++)
+   {
+      if(prevState[s] != 0 && state[s] == 0)
+         noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
    }
 }
 
@@ -203,38 +216,44 @@ int CheckAlign(int s, int tfIdx)
    if(ArraySize(rt) <= chCloud) return 0;
 
    double tenkan[1], kijun[1], senA[1], senB[1];
-   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
 
    // price bar sh: tenkan, kijun, cloud
    if(CopyBuffer(ich[s][tfIdx], 0, sh,         1, tenkan)    <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, sh,         1, kijun)     <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)      <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)      <= 0) return 0;
+
+   double closeP = rt[sh].close;
+   double cHi    = MathMax(senA[0], senB[0]);
+   double cLo    = MathMin(senA[0], senB[0]);
+
+   // Short-circuit: most bars aren't aligned, so skip the chikou-side buffers
+   // unless the close is already clearly on one side of tenkan/kijun/cloud.
+   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
+   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
+   if(!above && !below) return 0;
+
    // tenkan, kijun, cloud at chikou's chart position
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
    if(CopyBuffer(ich[s][tfIdx], 0, chShift,    1, tenkan_ch) <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, chShift,    1, kijun_ch)  <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch)   <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch)   <= 0) return 0;
 
-   double closeP = rt[sh].close;
    // The chikou span for bar sh IS its close, plotted Kijun bars back.
    // Compare it against the candle and Ichimoku levels at that chart position.
    double chik   = closeP;
-   double cHi    = MathMax(senA[0], senB[0]);
-   double cLo    = MathMin(senA[0], senB[0]);
    double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
    // bullish: price above tenkan, kijun, and cloud; chikou clear above price,
    // tenkan, kijun, and cloud at its plotted position
-   if(closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi &&
-      chik > rt[chShift].high &&
+   if(above && chik > rt[chShift].high &&
       chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
 
    // bearish: price below tenkan, kijun, and cloud; chikou clear below price,
    // tenkan, kijun, and cloud at its plotted position
-   if(closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo &&
-      chik < rt[chShift].low &&
+   if(below && chik < rt[chShift].low &&
       chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
 
    return 0;
@@ -425,8 +444,7 @@ void OnTick()
       CheckEquityAlert();
    }
 
-   SyncStateFromPositions();
-
+   bool synced = false;
    for(int s = 0; s < symsCount; s++)
    {
       // Per-symbol M1 bar gating — only act on a new closed M1 bar for this symbol
@@ -435,6 +453,10 @@ void OnTick()
       ArraySetAsSeries(m1, true);
       if(m1[1].time == lastM1bar[s]) continue;
       lastM1bar[s] = m1[1].time;
+
+      // Sync position state once per tick on the first new M1 bar instead of
+      // rebuilding it on every single tick.
+      if(!synced) { SyncStateFromPositions(); synced = true; }
 
       // Exit check: close all when M5 closes against direction across M5 kijun
       if(state[s] != 0 && CheckM5Exit(s, state[s]))
@@ -445,10 +467,11 @@ void OnTick()
 
          ClosePositions(syms[s]);
          state[s] = 0;
+         noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
       }
 
       // Entry check: all timeframes H1→M1 must align, spread must be sane
-      if(state[s] == 0 && SpreadOK(syms[s]))
+      if(state[s] == 0 && TimeCurrent() >= noReentryUntil[s] && SpreadOK(syms[s]))
       {
          int st = CheckAllAlign(s);
          if(st != 0)

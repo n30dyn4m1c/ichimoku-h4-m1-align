@@ -22,6 +22,7 @@ input int    InpATRPeriod         = 14;     // ATR period (M15)
 input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
+input int    InpReentryCooldownSec = 0;     // Min seconds after an exit before re-entering same symbol (0 = none)
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -44,6 +45,7 @@ int      atr[MAX_SYMS];
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
+datetime noReentryUntil[MAX_SYMS];
 datetime lastH4bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
@@ -82,6 +84,7 @@ int OnInit()
    {
       state[s] = 0;
       lastM1bar[s] = 0;
+      noReentryUntil[s] = 0;
       for(int t = 0; t < TF_COUNT; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
@@ -162,6 +165,8 @@ void SyncStateFromPositions()
 {
    // Rebuild from scratch so positions closed by SL or manually free the
    // symbol for re-entry instead of leaving stale state behind.
+   int prevState[MAX_SYMS];
+   for(int s = 0; s < symsCount; s++) prevState[s] = state[s];
    for(int s = 0; s < symsCount; s++) state[s] = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -181,6 +186,14 @@ void SyncStateFromPositions()
          if(syms[s] == sym) { state[s] = dir; break; }
       }
    }
+
+   // A position that vanished since the last sync (SL hit, manual close) frees
+   // the symbol; arm the optional re-entry cooldown so it can't flip instantly.
+   for(int s = 0; s < symsCount; s++)
+   {
+      if(prevState[s] != 0 && state[s] == 0)
+         noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
+   }
 }
 
 //==============================================================
@@ -192,49 +205,54 @@ int CheckAlign(int s, int tfIdx)
 {
    ENUM_TIMEFRAMES tf = tfs[tfIdx];
 
-   MqlRates rt[];
-   if(CopyRates(syms[s], tf, 0, 120, rt) <= 0) return 0;
-   ArraySetAsSeries(rt, true);
-
    int sh      = 1;              // last closed bar
    int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
    int chCloud = chShift + Kijun;// senkou buffer offset for the cloud at chikou's position
 
+   MqlRates rt[];
+   if(CopyRates(syms[s], tf, 0, chCloud + 1, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+
    if(ArraySize(rt) <= chCloud) return 0;
 
-   double tenkan[1], kijun[1], senA[1], senB[1];
-   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
-
    // price bar sh: tenkan, kijun, cloud
+   double tenkan[1], kijun[1], senA[1], senB[1];
    if(CopyBuffer(ich[s][tfIdx], 0, sh,         1, tenkan)    <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, sh,         1, kijun)     <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)      <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)      <= 0) return 0;
+
+   double closeP = rt[sh].close;
+   double cHi    = MathMax(senA[0], senB[0]);
+   double cLo    = MathMin(senA[0], senB[0]);
+
+   // Short-circuit: most bars aren't aligned, so skip the chikou-side buffers
+   // unless the close is already clearly on one side of tenkan/kijun/cloud.
+   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
+   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
+   if(!above && !below) return 0;
+
    // tenkan, kijun, cloud at chikou's chart position
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
    if(CopyBuffer(ich[s][tfIdx], 0, chShift,    1, tenkan_ch) <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, chShift,    1, kijun_ch)  <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch)   <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch)   <= 0) return 0;
 
-   double closeP = rt[sh].close;
    // The chikou span for bar sh IS its close, plotted Kijun bars back.
    // Compare it against the candle and Ichimoku levels at that chart position.
    double chik   = closeP;
-   double cHi    = MathMax(senA[0], senB[0]);
-   double cLo    = MathMin(senA[0], senB[0]);
    double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
    // bullish: price above tenkan, kijun, and cloud; chikou clear above price,
    // tenkan, kijun, and cloud at its plotted position
-   if(closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi &&
-      chik > rt[chShift].high &&
+   if(above && chik > rt[chShift].high &&
       chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
 
    // bearish: price below tenkan, kijun, and cloud; chikou clear below price,
    // tenkan, kijun, and cloud at its plotted position
-   if(closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo &&
-      chik < rt[chShift].low &&
+   if(below && chik < rt[chShift].low &&
       chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
 
    return 0;
@@ -375,15 +393,9 @@ double BuildStopLoss(int s, bool isBuy, double price, double dist)
    return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
-int OpenPositions(int s, bool isBuy)
+int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
 {
    string sym = syms[s];
-
-   double dist = 0.0;
-   if(InpUseStopLoss && !GetStopDistance(s, dist)) return 0;   // ATR unavailable — skip entry
-
-   int count; double lots;
-   GetEquityRisk(sym, dist, count, lots);
 
    trade.SetExpertMagicNumber(MAGIC);
 
@@ -431,16 +443,19 @@ void OnTick()
       CheckEquityAlert();
    }
 
-   SyncStateFromPositions();
-
+   bool synced = false;
    for(int s = 0; s < symsCount; s++)
    {
       // Per-symbol M1 bar gating — only act on a new closed M1 bar for this symbol
       MqlRates m1[];
-      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) <= 0) continue;
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) continue;
       ArraySetAsSeries(m1, true);
       if(m1[1].time == lastM1bar[s]) continue;
       lastM1bar[s] = m1[1].time;
+
+      // Sync position state once per tick on the first new M1 bar instead of
+      // rebuilding it on every single tick.
+      if(!synced) { SyncStateFromPositions(); synced = true; }
 
       // Exit check: close all when M15 closes against direction across M15 kijun
       if(state[s] != 0 && CheckM15Exit(s, state[s]))
@@ -451,29 +466,37 @@ void OnTick()
 
          ClosePositions(syms[s]);
          state[s] = 0;
+         noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
       }
 
       // Entry check: all timeframes H4→M1 must align, spread must be sane
-      if(state[s] == 0 && SpreadOK(syms[s]))
+      if(state[s] == 0 && TimeCurrent() >= noReentryUntil[s] && SpreadOK(syms[s]))
       {
          int st = CheckAllAlign(s);
          if(st != 0)
          {
-            bool   isBuy  = (st == 1);
-            string action = isBuy ? "Buy" : "Sell";
-            double msgDist = 0.0;
-            if(InpUseStopLoss) GetStopDistance(s, msgDist);
-            int msgCount; double msgLots;
-            GetEquityRisk(syms[s], msgDist, msgCount, msgLots);
-            string msg = PCTime() + " | " + action + " " + syms[s] +
-                         " x" + IntegerToString(msgCount) +
-                         " @ " + DoubleToString(msgLots, 2) + " (H4-M1)";
-            Print(msg); Alert(msg); SendNotification(msg);
+            bool   isBuy = (st == 1);
+            double dist  = 0.0;
+            if(InpUseStopLoss && !GetStopDistance(s, dist)) continue;   // ATR unavailable — skip entry
+
+            int count; double lots;
+            GetEquityRisk(syms[s], dist, count, lots);
 
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
-            if(OpenPositions(s, isBuy) > 0)
+            // Alert reports the actual fill count, not the requested count.
+            int filled = OpenPositions(s, isBuy, dist, count, lots);
+            if(filled > 0)
+            {
                state[s] = st;
+               string action = isBuy ? "Buy" : "Sell";
+               string msg = PCTime() + " | " + action + " " + syms[s] +
+                            " x" + IntegerToString(filled) +
+                            " @ " + DoubleToString(lots, 2) + " (H4-M1)";
+               Print(msg); Alert(msg); SendNotification(msg);
+            }
+            else
+               Print(PCTime() + " | " + syms[s] + " entry signal but no order filled");
          }
       }
    }
