@@ -14,6 +14,15 @@ they differ only in which timeframes must agree and which lower timeframe's
 Kijun triggers the exit. Distinct magic numbers mean they can run on the same
 account (even the same symbol) without interfering with each other.
 
+Each also ships a **VPS build** — same strategy, trimmed for unattended
+running on a low-spec VPS (no popup alerts, no weekly equity check, far less
+per-tick work). See [VPS Builds](#vps-builds).
+
+| VPS EA | File | Default magic |
+|--------|------|---------------|
+| **H4-M1 Alignment (VPS)** | `ichimoku-H4-M1-ea-vps.mq5` | `20260801` |
+| **H1-M1 Alignment (VPS)** | `ichimoku-H1-M1-ea-vps.mq5` | `20260802` |
+
 > **Free to use.** Download it, run it on a demo account, break it, improve it. Feedback and pull requests are welcome — see [Feedback & Contributing](#feedback--contributing) below.
 
 ---
@@ -144,7 +153,7 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ### Installation
 
-1. Download `ichimoku-H4-M1-ea.mq5` and/or `ichimoku-H1-M1-ea.mq5` from this repository, depending on which timeframe anchor you want to trade (or run both — they use distinct magic numbers).
+1. Download `ichimoku-H4-M1-ea.mq5` and/or `ichimoku-H1-M1-ea.mq5` from this repository, depending on which timeframe anchor you want to trade (or run both — they use distinct magic numbers). Running on a VPS? Take the `-vps` variant of the same file instead — see [VPS Builds](#vps-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
@@ -218,6 +227,55 @@ Timeframes are checked highest to lowest — all must agree before entry.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.
+
+---
+
+## VPS Builds
+
+`ichimoku-H4-M1-ea-vps.mq5` and `ichimoku-H1-M1-ea-vps.mq5` are drop-in
+variants of the two main builds for running unattended on a VPS. **The
+strategy is identical** — same alignment rules, same exit signals, same ATR
+stop loss, same equity table. Only the plumbing around it changed.
+
+### What was removed
+
+- **All popup alerts.** Every `Alert()` call is gone. `Alert()` opens a modal window and plays a sound on the terminal — on a headless VPS nobody sees it, and each unacknowledged popup stays resident. Entries and exits now go to the Experts log and (optionally) push notification only.
+- **The weekly Friday equity check.** `InitEquityAlert()` / `CheckEquityAlert()`, their four inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`, `InpCheckDay`, `InpResetBaseline`), the two account-scoped global variables, and the anchor-timeframe `CopyRates` call that drove them on every tick are all gone. It was a reminder to bank profit, not a trading function — nothing to see it on a VPS.
+
+### What was optimised
+
+| Change | Effect |
+|--------|--------|
+| **Per-timeframe alignment cache** | An Ichimoku reading taken on closed bars only changes when *that* timeframe prints a new bar. The result is cached against the bar it came from, so the H4 reading is computed once per H4 bar instead of once per M1 bar — 240× less work on the anchor timeframe, ~60× on H1, and so on down the stack. Biggest single saving in the build. |
+| **Tick-gated work** | A tick with no newly closed M1 bar now costs one `iTime()` per symbol and nothing else. The originals ran `SyncStateFromPositions()` — a full scan of every open position — on *every* tick, which on a busy symbol like gold is several times a second with 10 positions open. It now runs once per acting pass. |
+| **Single-value price reads** | `CheckAlign()` copied a 53–120 bar `MqlRates` window per timeframe per evaluation to read three numbers. Replaced with `iClose()` / `iHigh()` / `iLow()`, dropping the array allocation and copy entirely. |
+| **No duplicated risk math** | The H4-M1 original computed the ATR stop distance and walked the equity table twice per entry (once to build the alert text, once to trade). The VPS build computes them once and passes them through. |
+| **Magic number as an input** | `InpMagic` defaults to a fresh number so a VPS build can run alongside the original. Set it to `20260501` / `20260502` to have the VPS build adopt and manage the positions the non-VPS EA already opened. |
+| **Logging switch** | `InpLogTrades` (default `true`) gates log writes. Turn it off if you want the Experts log to stay near-silent — logs are disk I/O and MT5 keeps them forever. |
+
+### VPS build inputs
+
+The VPS builds have the same inputs as the originals, minus the five under
+"Equity Alert Settings", plus:
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpMagic` | `20260801` / `20260802` | Magic number. Set to the non-VPS EA's magic to take over its open positions |
+| `InpSendPush` | `true` | Push notification on entry/exit (set `false` for zero outbound alert traffic) |
+| `InpLogTrades` | `true` | Write entry/exit lines to the Experts log |
+
+### Terminal-side settings that matter more than the code
+
+Most of an idle MT5 instance's CPU and RAM goes to the terminal, not the EA.
+Worth doing on the VPS:
+
+1. **Cap history in memory.** Tools → Options → Charts → *Max bars in chart* — set it to something like 5000 (default is unlimited/100M). This is usually the single largest RAM saving.
+2. **Run one chart.** The EA manages every symbol in its `Symbols` input internally, so it only needs one chart as an anchor. Close everything else, and use a blank/minimal template (no indicators drawn, no grid, no objects) for the anchor chart.
+3. **Trim Market Watch.** Right-click → *Hide All*, then show only the symbols you actually trade. Every visible symbol is a live tick stream the terminal has to process.
+4. **Disable the news feed and Market/Signals tabs** (Tools → Options → Community/Server) — background network and disk churn you don't need.
+5. **Keep the symbol list short.** Each symbol costs 6 Ichimoku handles + 1 ATR handle in the H4-M1 build (5 + 1 in the H1-M1 build), and each handle is a full indicator recalculated by the terminal. Ten symbols is 70 live indicator instances.
+6. **Clear old logs periodically.** `MQL5/Logs/` and `Logs/` grow without bound on a long-running VPS.
+7. **Don't run both the VPS and non-VPS build of the same strategy on one account** unless you mean to — they'll open independent position stacks on the same signal.
 
 ---
 
