@@ -1,0 +1,21 @@
+# MQL5 compiled binaries
+*.ex5
+*.ex4
+
+# MetaEditor / terminal local files
+*.log
+*.mqh.bak
+*.mq5.bak
+
+# OS / editor clutter
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Local tester / report output (if ever committed by mistake)
+Tester/
+Reports/
