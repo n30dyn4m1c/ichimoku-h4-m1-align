@@ -244,4 +244,6 @@ This project is shared for free so others can learn from it, use it, and make it
 
 ## License
 
-Released for free personal and educational use. No warranty is provided — see the [Disclaimer](#️-disclaimer) above.
+This project is licensed under the [MIT License](LICENSE).
+
+You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software, subject to the conditions in the license. The software is provided **as is**, without warranty of any kind — see the [Disclaimer](#️-disclaimer) above and the full text in [LICENSE](LICENSE).
