@@ -1,5 +1,12 @@
 # Ichimoku Alignment EAs
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform](https://img.shields.io/badge/Platform-MetaTrader%205-blue.svg)](https://www.metatrader5.com/)
+[![Language](https://img.shields.io/badge/Language-MQL5-orange.svg)](https://www.mql5.com/)
+[![Strategy](https://img.shields.io/badge/Strategy-Ichimoku%20Alignment-green.svg)](https://github.com/n30dyn4m1c/ichimoku-h4-m1-align)
+
+**MetaTrader 5 Expert Advisors for multi-timeframe Ichimoku Kinko Hyo alignment with ATR risk protection and equity-scaled position sizing.**
+
 Free MetaTrader 5 Expert Advisors that trade multi-timeframe Ichimoku Kinko
 Hyo alignment, with built-in ATR-based risk protection and equity-scaled
 position sizing. Four non-experimental builds are included — two standard and
