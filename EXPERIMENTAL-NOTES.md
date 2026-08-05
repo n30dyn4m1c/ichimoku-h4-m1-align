@@ -6,7 +6,10 @@ forward-test on a demo account before risking capital. See the top-level
 [Disclaimer](README.md#️-disclaimer).
 
 All experimental EA files are prefixed `experimental-` so they're easy to
-tell apart from the two main builds at a glance.
+tell apart from the two main builds at a glance. The MS-W1-D1 build (section
+6) is an exception: it lives in the main README table but is new and
+unbacktested, so it's documented and tracked here alongside the
+experimental builds until it has earned main-build status.
 
 ---
 
@@ -429,3 +432,116 @@ EAs — see the [README](README.md#configuration-inputs).
   frequent entries, without the fine M5/M1 timing confirmation.
 - Not yet extensively backtested here — run it in the Strategy Tester and on
   demo before considering live capital.
+
+---
+
+## 6. MS-W1-D1 Alignment EA (and companion Python monitor)
+
+**File:** `ichimoku-ms-w1-d1-ea.mq5`
+**Magic number:** `20260806`
+
+The slowest, rarest member of the family. Instead of aligning down to M1, it
+requires **only three timeframes — MS (monthly) → W1 (weekly) → D1 (daily),
+highest to lowest** — to agree. It targets multi-week/month trend trades, so
+lower timeframes (H4 down to M1) are deliberately dropped: they would veto
+almost every valid signal. Expect a handful of signals per year per symbol.
+
+Because the signal is so rare, the companion **Python monitor** below is the
+recommended way to watch for it (no VPS, no chart, no EA running) — use the EA
+itself for backtesting in the Strategy Tester and for automated execution once
+you trust the signal.
+
+### Entry logic
+
+`CheckAlign()` on each of MS, W1, and D1 requires price *and* Chikou above/
+below Tenkan, Kijun, and the cloud — the same rule table as the main EAs (see
+[README](README.md#entry-logic)). A trade opens only when **all three
+timeframes** agree on direction, no position is open on the symbol, and the
+live spread passes `InpMaxSpreadPoints`. The stack and gating:
+
+| Index | Timeframe | Role |
+|-------|-----------|------|
+| 0 | MS (PERIOD_MN1) | Highest — trend anchor |
+| 1 | W1 | Intermediate |
+| 2 | D1 | Lowest — bar-gating and exit reference (default) |
+
+### Exit logic
+
+All positions close when the close crosses the Kijun-sen **against** the trade
+direction on `InpExitTF` (default **D1**; set it to **W1** to give trends more
+room). Independently, every position carries an
+`ATR(InpATRTF) × InpATRMultiplier` stop loss — `InpATRTF` defaults to **D1**
+(an M15 stop is meaningless for a multi-week hold).
+
+### Inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `Symbols` | `GOLDm#` | Comma-separated list of symbols to watch (up to 60) |
+| `Tenkan` / `Kijun` / `SenkouB` | 9 / 26 / 52 | Ichimoku periods |
+| `Slippage` | 30 | Maximum allowed slippage, in points |
+| `InpUseStopLoss` | `true` | Attach an ATR-based stop loss to every entry |
+| `InpATRPeriod` | 14 | ATR period, computed on `InpATRTF` |
+| `InpATRTF` | `PERIOD_D1` | ATR timeframe for the stop distance |
+| `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
+| `InpExitTF` | `PERIOD_D1` | Exit when close crosses kijun on this TF (D1 or W1) |
+| `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
+| `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
+| `InpReentryCooldownSec` | 0 | Min seconds after an exit before re-entering the same symbol |
+
+The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
+`InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
+EAs — see the [README](README.md#configuration-inputs).
+
+### Technical notes
+
+- **Magic number:** `20260806` — independent from the other EAs.
+- **State recovery:** `SyncStateFromPositions()` rebuilds per-symbol direction
+  state from open positions filtered by magic number on every tick, same as
+  the main EAs.
+- **Per-symbol D1 gating:** each symbol only re-evaluates entry/exit logic
+  once per newly closed **D1** bar (the lowest timeframe in the alignment
+  set); the weekly equity alert is gated on a new D1 bar.
+- **Backtesting:** test per-symbol in the Strategy Tester (set `Symbols` to a
+  single symbol). Verify the monitor and EA agree on historical signals before
+  trusting either.
+
+### Status & caveats
+
+- Very rare signals by design — a few per year per symbol. Do not judge it by
+  trade count; the edge is a small number of large multi-week/month winners.
+- The strict chikou condition (chikou must clear the reference candle's
+  high/low 26 bars back) filters heavily even during clean trends — expect
+  the monitor to read unaligned on many days where price looks "obviously"
+  trending.
+- ATR computed on D1 by default; if backtests show stops being hit in normal
+  pullbacks, raise `InpATRMultiplier` before loosening the exit timeframe.
+
+### Companion monitor (Python + GitHub Actions, no VPS)
+
+A daily, free monitor that computes the *exact same* MS→W1→D1 alignment from
+independent daily OHLC data and pushes a **Telegram** message when it fires —
+no VPS, no chart, no EA needed. Located in `monitor/`, documented in the
+[README](README.md#ms-w1-d1-signal-monitor-python--github-actions).
+
+- **Symbols:** BTC/USD, ETH/USD, XAUUSD, XAGUSD, US100, US30, EURUSD,
+  GBPUSD, USDJPY, AUDUSD, USDCAD (edit `monitor/config.py`). The FX list is
+  limited to common trending majors — high-volatility crosses like GBPJPY are
+  deliberately excluded.
+- **Data:** Yahoo Finance daily bars via `yfinance`; metals use the COMEX
+  futures (`GC=F`, `SI=F`) as proxies for the XM spot symbols because Yahoo's
+  spot symbols are delisted.
+- **Logic:** `monitor/ichimoku.py` is a faithful port of `CheckAlign()` in
+  the EA, including the chikou-offset handling — so the monitor and EA should
+  agree on the signal.
+- **Dedupe:** `state/state.json` remembers the last notified direction per
+  symbol, so a signal that persists for weeks won't spam you daily. It only
+  notifies on *new* alignments, direction flips, and clears.
+- **Scheduling:** `.github/workflows/ms-w1-d1-monitor.yml` runs it daily at
+  22:30 UTC on GitHub Actions for free, persisting the dedupe state between
+  runs as a workflow artifact. Needs `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID` secrets.
+- **Status:** the Python port was verified against real data (it correctly
+  flags fully-aligned trends and clears partial ones) but has not yet been
+  cross-checked against the EA's backtest output — validate both before
+  relying on either for execution decisions.

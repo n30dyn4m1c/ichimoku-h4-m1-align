@@ -18,6 +18,7 @@ two VPS deployment variants:
 | **H1-M1 Alignment** | `ichimoku-h1-m1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
 | **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
 | **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
+| **MS-W1-D1 Alignment** | `ichimoku-ms-w1-d1-ea.mq5` | MS → W1 → D1 (3 TFs) | D1 or W1 Kijun cross | `20260806` |
 
 All four share the same entry rules, risk protection, and equity-sizing
 logic — they differ only in which timeframes must agree, which lower
@@ -90,6 +91,72 @@ three practical ways:
 
 Because the VPS builds reuse the same magic numbers as their standard
 counterparts, run only one variant of each anchor per account/symbol.
+
+---
+
+## MS-W1-D1 Alignment Build
+
+`ichimoku-ms-w1-d1-ea.mq5` is a much slower, rarer variant aimed at
+multi-week/month trend trades. Its alignment stack is only **MS → W1 → D1**
+(monthly → weekly → daily, 3 timeframes from highest to lowest) — the full M1
+stack is dropped because lower timeframes would veto almost every valid
+signal. Key differences from the H4/H1 builds:
+
+- **Entry:** all of MS, W1, and D1 must align (price + chikou vs tenkan,
+  kijun, and cloud) on the last closed bar of each timeframe.
+- **Exit:** `InpExitTF` Kijun cross against the trade direction (default D1;
+  try W1 if you want to give trends more room). An ATR-based stop is computed
+  on `InpATRTF` (default D1) rather than M15 — an M15 stop is meaningless for
+  a multi-week hold.
+- **Cadence:** gated once per new D1 bar close, so it's cheap to run and
+  needs almost no attention.
+
+Expect a handful of signals per year per symbol. Because it's so rare, the
+**Python monitor** below is the recommended way to watch for the signal
+instead of running the EA on a VPS; use the EA itself for backtesting
+(Strategy Tester) and for automated execution once you trust the signal.
+
+---
+
+## MS-W1-D1 Signal Monitor (Python + GitHub Actions)
+
+A daily, free monitor that computes the *exact same* MS→W1→D1 alignment from
+independent daily OHLC data and pushes a Telegram message when it fires — no
+VPS, no chart, no EA needed. Located in [`monitor/`](monitor/).
+
+- **Symbols:** BTC/USD, ETH/USD, XAUUSD, XAGUSD, US100, US30, EURUSD,
+  GBPUSD, USDJPY, AUDUSD, USDCAD — the FX list is limited to common trending
+  majors (high-volatility crosses like GBPJPY are excluded; edit
+  `monitor/config.py`).
+- **Data:** Yahoo Finance daily bars via `yfinance`. Metals use the COMEX
+  futures (`GC=F`, `SI=F`) as proxies for the XM spot symbols.
+- **Logic:** `monitor/ichimoku.py` is a faithful port of `CheckAlign()` in
+  the EA, including the chikou-offset handling — so the monitor and EA
+  should agree on the signal.
+- **Dedupe:** `state/state.json` remembers the last notified direction per
+  symbol, so a signal that persists for weeks won't spam you daily. It only
+  notifies on *new* alignments, direction flips, and clears.
+
+### Run it
+
+```bash
+pip install -r monitor/requirements.txt
+export TELEGRAM_BOT_TOKEN=...   # from @BotFather
+export TELEGRAM_CHAT_ID=...     # your chat id
+python monitor/monitor.py
+```
+
+### Or schedule it free on GitHub Actions
+
+1. Push this repo to GitHub.
+2. In repo **Settings → Secrets and variables → Actions**, add
+   `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+3. The workflow `.github/workflows/ms-w1-d1-monitor.yml` runs it daily at
+   22:30 UTC automatically (also triggered manually via
+   **Actions → MS-W1-D1 Ichimoku Monitor → Run workflow**).
+
+The workflow persists the dedupe state between runs as a workflow artifact,
+so the "only notify on change" behavior works across the ephemeral runners.
 
 ---
 
@@ -222,7 +289,7 @@ The standard builds share the same input set:
 | `SenkouB` | 52 | Ichimoku Senkou Span B period |
 | `Slippage` | 30 | Maximum allowed slippage, in points |
 | `InpUseStopLoss` | `true` | Attach an ATR-based stop loss to every entry |
-| `InpATRPeriod` | 14 | ATR period, computed on M15 |
+| `InpATRPeriod` | 14 | ATR period, computed on M15 (on `InpATRTF` for the MS-W1-D1 build) |
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
@@ -262,6 +329,14 @@ Timeframes are checked highest to lowest — all must agree before entry.
 | 3 | M5 | Exit reference |
 | 4 | M1 | Trigger bar |
 
+**MS-W1-D1 Alignment EA:**
+
+| Index | Timeframe | Role |
+|-------|-----------|------|
+| 0 | MS | Highest — trend anchor |
+| 1 | W1 | Intermediate |
+| 2 | D1 | Lowest — bar-gating and exit reference (default) |
+
 The VPS deployment builds use exactly the same timeframe stacks as their
 standard counterparts.
 
@@ -269,7 +344,7 @@ standard counterparts.
 
 ## Technical Notes
 
-- **Magic numbers:** `20260501` (H4-M1 build) and `20260502` (H1-M1 build) — each EA only identifies and manages its own positions by its magic number, so they won't interfere with other EAs, each other, or manual trades on the same account. The VPS deployment builds reuse these same magic numbers, so they should replace (not run alongside) the standard builds.
+- **Magic numbers:** `20260501` (H4-M1 build), `20260502` (H1-M1 build), and `20260806` (MS-W1-D1 build) — each EA only identifies and manages its own positions by its magic number, so they won't interfere with other EAs, each other, or manual trades on the same account. The VPS deployment builds reuse these same magic numbers, so they should replace (not run alongside) the standard builds.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.
@@ -286,8 +361,12 @@ shorter-anchor M30-M1 breakout alignment clone
 (`experimental-m30-m1-breakout-ea.mq5`), and an H4-M15 alignment clone that
 trims the stack down to M15 (`experimental-h4-m15-align-ea.mq5`). They're
 newer and less battle-tested than the main builds above; each file is
-prefixed `experimental-` to keep it clearly separate. See
-**[EXPERIMENTAL-NOTES.md](EXPERIMENTAL-NOTES.md)** for full details on each.
+prefixed `experimental-` to keep it clearly separate.
+
+The **MS-W1-D1 build** and its **Python + GitHub Actions monitor** — both new
+and unbacktested — are also documented in
+**[EXPERIMENTAL-NOTES.md](EXPERIMENTAL-NOTES.md)** (section 6) until they've
+earned main-build status.
 
 ---
 

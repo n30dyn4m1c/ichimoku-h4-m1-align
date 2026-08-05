@@ -19,3 +19,8 @@ Thumbs.db
 # Local tester / report output (if ever committed by mistake)
 Tester/
 Reports/
+
+# Python monitor runtime state (dedupe cache — regenerated each run)
+monitor/state/
+__pycache__/
+*.pyc
