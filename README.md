@@ -7,8 +7,8 @@ two VPS deployment variants:
 
 | EA | File | Timeframes | Exit signal | Magic |
 |----|------|------------|-------------|-------|
-| **H4-M1 Alignment** | `ichimoku-H4-M1-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
-| **H1-M1 Alignment** | `ichimoku-H1-M1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
+| **H4-M1 Alignment** | `ichimoku-h4-m1-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
+| **H1-M1 Alignment** | `ichimoku-h1-m1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
 | **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
 | **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
 
@@ -186,7 +186,7 @@ withdraw funds automatically.
 
 ### Installation
 
-1. Download the build you want from this repository. For hands-on trading use `ichimoku-H4-M1-ea.mq5` and/or `ichimoku-H1-M1-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead — see [VPS Deployment Builds](#vps-deployment-builds).
+1. Download the build you want from this repository. For hands-on trading use `ichimoku-h4-m1-ea.mq5` and/or `ichimoku-h1-m1-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead — see [VPS Deployment Builds](#vps-deployment-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
