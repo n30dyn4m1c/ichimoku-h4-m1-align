@@ -2,17 +2,24 @@
 
 Free MetaTrader 5 Expert Advisors that trade multi-timeframe Ichimoku Kinko
 Hyo alignment, with built-in ATR-based risk protection and equity-scaled
-position sizing. Two main builds are included:
+position sizing. Four non-experimental builds are included — two standard and
+two VPS deployment variants:
 
 | EA | File | Timeframes | Exit signal | Magic |
 |----|------|------------|-------------|-------|
 | **H4-M1 Alignment** | `ichimoku-H4-M1-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
 | **H1-M1 Alignment** | `ichimoku-H1-M1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
+| **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
+| **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
 
-Both share the same entry rules, risk protection, and equity-sizing logic —
-they differ only in which timeframes must agree and which lower timeframe's
-Kijun triggers the exit. Distinct magic numbers mean they can run on the same
-account (even the same symbol) without interfering with each other.
+All four share the same entry rules, risk protection, and equity-sizing
+logic — they differ only in which timeframes must agree, which lower
+timeframe's Kijun triggers the exit, and whether they're tuned for unattended
+VPS use. The two standard builds carry distinct magic numbers so they can run
+on the same account (even the same symbol) without interfering with each
+other. The VPS builds reuse their anchor's magic number, so treat the standard
+and VPS variants of an anchor as alternatives, not companions — see
+[VPS Deployment Builds](#vps-deployment-builds).
 
 > **Free to use.** Download it, run it on a demo account, break it, improve it. Feedback and pull requests are welcome — see [Feedback & Contributing](#feedback--contributing) below.
 
@@ -46,7 +53,36 @@ scale automatically with account equity.
 - ✅ Multi-symbol support (comma-separated watch list, up to 60 symbols)
 - ✅ Crash/restart-safe — rebuilds internal state from open positions on every tick
 - ✅ Push notifications, terminal alerts, and log messages on every entry/exit
-- ✅ Weekly equity-growth alert with a suggested profit-withdrawal amount
+- ✅ Weekly equity-growth alert with a suggested profit-withdrawal amount (standard builds only)
+- ✅ VPS deployment builds — once-per-minute gating, push alerts, and an optional re-entry cooldown (see below)
+
+---
+
+## VPS Deployment Builds
+
+The `ichimoku-h4-m1-vps-ea.mq5` and `ichimoku-h1-m1-vps-ea.mq5` files are
+deployment-oriented variants of the two standard builds, tuned for running
+unattended on a cheap VPS. Their trading logic is identical — same entry/exit
+rules, risk protection, equity sizing, and magic numbers — but they differ in
+three practical ways:
+
+- **Once-per-minute gating.** `OnTick()` returns immediately unless a new
+  closed M1 bar has appeared (`lastMinuteKey = TimeCurrent() / 60`), so the
+  EA does almost no work between bars and burns negligible CPU/network on a
+  24/7 VPS. The standard builds evaluate on every tick.
+- **No equity alert, push-only notifications.** The weekly equity-growth /
+  profit-withdrawal reminder (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
+  `InpCheckDay`, `InpResetBaseline`) and the `InpSendPush` toggle are removed
+  entirely. Every entry/exit sends a `SendNotification` push and a journal
+  `Print`; the terminal `Alert()` popups are dropped to keep the VPS session
+  quiet.
+- **Optional re-entry cooldown.** A new `InpReentryCooldownSec` input (default
+  `0`) adds a minimum wait in seconds after an exit before the same symbol can
+  be re-entered — handy for stopping the EA from instantly flip-flopping right
+  after a stop-out.
+
+Because the VPS builds reuse the same magic numbers as their standard
+counterparts, run only one variant of each anchor per account/symbol.
 
 ---
 
@@ -131,7 +167,13 @@ If a batch of orders is only partially filled (e.g. the broker runs out of margi
 
 ### Weekly Equity Alert
 
-Every `InpCheckDay` (default Friday), the EA compares current equity to a stored baseline. If profit since the baseline exceeds `InpMinProfitTrigger`, it alerts you with a suggested withdrawal amount (`InpWithdrawProfitPct`% of the profit) — a simple nudge to bank gains periodically. This is informational only; it does **not** withdraw funds automatically.
+This feature exists only in the standard builds — the
+[VPS deployment builds](#vps-deployment-builds) drop it. Every `InpCheckDay`
+(default Friday), the EA compares current equity to a stored baseline. If
+profit since the baseline exceeds `InpMinProfitTrigger`, it alerts you with a
+suggested withdrawal amount (`InpWithdrawProfitPct`% of the profit) — a simple
+nudge to bank gains periodically. This is informational only; it does **not**
+withdraw funds automatically.
 
 ---
 
@@ -144,7 +186,7 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ### Installation
 
-1. Download `ichimoku-H4-M1-ea.mq5` and/or `ichimoku-H1-M1-ea.mq5` from this repository, depending on which timeframe anchor you want to trade (or run both — they use distinct magic numbers).
+1. Download the build you want from this repository. For hands-on trading use `ichimoku-H4-M1-ea.mq5` and/or `ichimoku-H1-M1-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead — see [VPS Deployment Builds](#vps-deployment-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
@@ -163,7 +205,7 @@ Every `InpCheckDay` (default Friday), the EA compares current equity to a stored
 
 ## Configuration (Inputs)
 
-Both EAs share the same input set:
+The standard builds share the same input set:
 
 | Parameter | Default | Description |
 |-----------|---------|--------------|
@@ -177,13 +219,16 @@ Both EAs share the same input set:
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
-| `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert |
-| `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline |
-| `InpCheckDay` | Friday | Day of week the equity alert is evaluated |
-| `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity |
+| `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert (standard builds) |
+| `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline (standard builds) |
+| `InpCheckDay` | Friday | Day of week the equity alert is evaluated (standard builds) |
+| `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (standard builds) |
 | `InpSendPush` | `true` | Send push notifications for alerts (entries, exits, equity alert) |
+| `InpReentryCooldownSec` | 0 | Min seconds after an exit before re-entering the same symbol (VPS builds) |
 
----
+> The VPS deployment builds replace the four equity-alert inputs and
+> `InpSendPush` with `InpReentryCooldownSec` instead — see
+> [VPS Deployment Builds](#vps-deployment-builds).
 
 ## Timeframe Alignment Order
 
@@ -210,11 +255,14 @@ Timeframes are checked highest to lowest — all must agree before entry.
 | 3 | M5 | Exit reference |
 | 4 | M1 | Trigger bar |
 
+The VPS deployment builds use exactly the same timeframe stacks as their
+standard counterparts.
+
 ---
 
 ## Technical Notes
 
-- **Magic numbers:** `20260501` (H4-M1 build) and `20260502` (H1-M1 build) — each EA only identifies and manages its own positions by its magic number, so they won't interfere with other EAs, each other, or manual trades on the same account.
+- **Magic numbers:** `20260501` (H4-M1 build) and `20260502` (H1-M1 build) — each EA only identifies and manages its own positions by its magic number, so they won't interfere with other EAs, each other, or manual trades on the same account. The VPS deployment builds reuse these same magic numbers, so they should replace (not run alongside) the standard builds.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.
@@ -223,11 +271,15 @@ Timeframes are checked highest to lowest — all must agree before entry.
 
 ## Experimental EAs
 
-This repository also includes experimental strategies — a PO3-enhanced
-variant of the H4-M1 alignment EA, an Ichimoku time-theory mean-reversion EA,
-and a fast M1-M5 breakout alignment EA. They're newer and less
-battle-tested than the two main builds above; each file is prefixed
-`experimental-` to keep it clearly separate. See
+This repository also includes five experimental strategies — a PO3-enhanced
+variant of the H4-M1 alignment EA (`experimental-h4-m1-po3-ea.mq5`), an
+Ichimoku time-theory mean-reversion EA (`experimental-h1-m1-reversion-ea.mq5`),
+a fast M1-M5 breakout alignment EA (`experimental-m1-m5-breakout-ea.mq5`), a
+shorter-anchor M30-M1 breakout alignment clone
+(`experimental-m30-m1-breakout-ea.mq5`), and an H4-M15 alignment clone that
+trims the stack down to M15 (`experimental-h4-m15-align-ea.mq5`). They're
+newer and less battle-tested than the main builds above; each file is
+prefixed `experimental-` to keep it clearly separate. See
 **[EXPERIMENTAL-NOTES.md](EXPERIMENTAL-NOTES.md)** for full details on each.
 
 ---
