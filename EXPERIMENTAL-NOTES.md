@@ -258,8 +258,12 @@ trailing stop** takes over: the stop is re-computed every new M1 bar as
 `highest high since entry − InpTrailATR × ATR(M5)` for longs (`lowest low +
 InpTrailATR × ATR(M5)` for shorts), using the extreme of the M5 bar that is
 still forming so a peak is locked in before it retraces. The trail only ever
-tightens and never sits inside the broker's minimum stop distance; disable it
-with `InpUseChandelierTrail = false`. The M5 kijun-cross close remains as the
+tightens and never sits inside the broker's minimum stop distance. Its
+behavior is set by `InpTrailMode`: `0` disables the trail entirely (the
+original Kijun-only exit), `1` trails every profitable trade, and `2`
+(default) trails only when the market is choppy — ADX(M5) below
+`InpChopADXLevel` (default 22) — standing down in trending markets so the M5
+kijun-cross close rides the trend. The M5 kijun-cross close remains as the
 final fallback exit for trades that never arm the trail.
 
 ### Risk protection & equity sizing
@@ -281,9 +285,11 @@ as the main EAs — see [README](README.md#equity-based-position-sizing).
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR(M1) × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
-| `InpUseChandelierTrail` | `true` | Trail the SL behind the peak once the trade is in profit |
+| `InpTrailMode` | `TRAIL_CHOPPY` | 0 = off, 1 = always, 2 = choppy-only via ADX(M5) |
 | `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M5) × multiplier |
 | `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ ATR(M5) × multiplier |
+| `InpADXPeriod` | 14 | ADX period for choppy-market detection (M5) |
+| `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode |
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
@@ -334,9 +340,13 @@ chandelier trailing stop** takes over: the stop is re-computed every new M1
 bar as `highest high since entry − InpTrailATR × ATR(M5)` for longs (`lowest
 low + InpTrailATR × ATR(M5)` for shorts), using the extreme of the M5 bar
 that is still forming so a peak is locked in before it retraces. The trail
-only ever tightens and never sits inside the broker's minimum stop distance;
-disable it with `InpUseChandelierTrail = false`. The M5 kijun-cross close
-remains as the final fallback exit for trades that never arm the trail.
+only ever tightens and never sits inside the broker's minimum stop distance.
+Its behavior is set by `InpTrailMode`: `0` disables the trail entirely (the
+original Kijun-only exit), `1` trails every profitable trade, and `2`
+(default) trails only when the market is choppy — ADX(M5) below
+`InpChopADXLevel` (default 22) — standing down in trending markets so the M5
+kijun-cross close rides the trend. The M5 kijun-cross close remains as the
+final fallback exit for trades that never arm the trail.
 
 ### Risk protection & equity sizing
 
@@ -357,9 +367,11 @@ computed on **M15** (as in the H1-M1 EA), not M1.
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR(M15) × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
-| `InpUseChandelierTrail` | `true` | Trail the SL behind the peak once the trade is in profit |
+| `InpTrailMode` | `TRAIL_CHOPPY` | 0 = off, 1 = always, 2 = choppy-only via ADX(M5) |
 | `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M5) × multiplier |
 | `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ ATR(M5) × multiplier |
+| `InpADXPeriod` | 14 | ADX period for choppy-market detection (M5) |
+| `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode |
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main

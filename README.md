@@ -208,6 +208,14 @@ silently reducing the chikou filter to a lagged copy of the price check.
 - **H1-M1 build:** identical chandelier trail, but referenced to the **M5**
   bar extremes and `ATR(M5)`, with the **M5 Kijun-sen cross** as the fallback.
 
+The trail's behavior is controlled by `InpTrailMode`:
+
+| Mode | Value | Behavior |
+|------|-------|----------|
+| `TRAIL_OFF` | 0 | No trail — original Kijun-cross exit only |
+| `TRAIL_ALWAYS` | 1 | Trail every profitable trade |
+| `TRAIL_CHOPPY` | 2 (default) | Trail only when the market is choppy: ADX on the exit timeframe (M15 for H4-M1, M5 for H1-M1) below `InpChopADXLevel` (default 22) means no trend, so the trail is allowed; when ADX shows a trending market, the trail stands down and the Kijun-cross exit rides the trend. An already-armed trail stop stays in place when the regime flips to trending — it simply stops tightening and the Kijun exit takes over.
+
 Independently of the trail and signal exit, every position carries an
 **ATR(M15) × multiplier** stop loss to cap losses from fast adverse moves
 between M15 closes.
@@ -308,9 +316,11 @@ The standard builds share the same input set:
 | `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (standard builds) |
 | `InpSendPush` | `true` | Send push notifications for alerts (entries, exits, equity alert) |
 | `InpReentryCooldownSec` | 0 | Min seconds after an exit before re-entering the same symbol (VPS builds) |
-| `InpUseChandelierTrail` | `true` | Trail the SL behind the peak once the trade is in profit (standard builds) |
+| `InpTrailMode` | `TRAIL_CHOPPY` | 0 = off, 1 = always, 2 = choppy-only via ADX (standard builds) |
 | `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M15) × multiplier for H4-M1, ATR(M5) × multiplier for H1-M1 (standard builds) |
 | `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ trail-timeframe ATR × multiplier (standard builds) |
+| `InpADXPeriod` | 14 | ADX period for choppy-market detection (exit timeframe, standard builds) |
+| `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode (standard builds) |
 
 > The VPS deployment builds replace the four equity-alert inputs and
 > `InpSendPush` with `InpReentryCooldownSec` instead — see

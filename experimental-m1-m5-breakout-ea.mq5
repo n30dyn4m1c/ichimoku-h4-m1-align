@@ -29,10 +29,15 @@ input double InpATRMultiplier     = 3.0;    // SL distance = ATR(M1) * multiplie
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 
+//--- Trail mode: off, always on, or choppy-only (ADX regime filter)
+enum ENUM_TRAIL_MODE { TRAIL_OFF = 0, TRAIL_ALWAYS = 1, TRAIL_CHOPPY = 2 };
+
 input group  "Exit Management"
-input bool   InpUseChandelierTrail = true;  // Trail SL behind the peak once profitable
-input double InpTrailATR           = 2.0;   // Trail distance = ATR(M5) * multiplier
-input double InpTrailActivateATR   = 1.0;   // Arm the trail once profit >= ATR(M5) * multiplier
+input ENUM_TRAIL_MODE InpTrailMode        = TRAIL_CHOPPY;  // 0=off, 1=always, 2=choppy-only (ADX)
+input double          InpTrailATR         = 2.0;   // Trail distance = ATR(M5) * multiplier
+input double          InpTrailActivateATR = 1.0;   // Arm the trail once profit >= ATR(M5) * multiplier
+input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (M5)
+input double          InpChopADXLevel     = 22.0;  // ADX below this = choppy -> trail on in auto mode
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -51,6 +56,7 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = { PERIOD_M5, PERIOD_M1 };
 
 int      ich[MAX_SYMS][TF_COUNT];
 int      atr[MAX_SYMS][TF_COUNT];
+int      adx[MAX_SYMS];   // ADX(M5) handle for choppy-market regime detection
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -107,6 +113,13 @@ int OnInit()
             atr[s][t] = iATR(syms[s], tfs[t], InpATRPeriod);
             if(atr[s][t] == INVALID_HANDLE) return(INIT_FAILED);
          }
+      }
+
+      adx[s] = INVALID_HANDLE;
+      if(InpTrailMode == TRAIL_CHOPPY)
+      {
+         adx[s] = iADX(syms[s], PERIOD_M5, InpADXPeriod);
+         if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
@@ -167,6 +180,7 @@ void OnDeinit(const int reason)
          IndicatorRelease(ich[s][t]);
          if(atr[s][t] != INVALID_HANDLE) IndicatorRelease(atr[s][t]);
       }
+      if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
    }
 }
 
@@ -345,6 +359,19 @@ bool CheckM5Exit(int s, int dir)
 }
 
 //==============================================================
+// Choppy-market detection: ADX(M5) below InpChopADXLevel means no
+// trend, so the trail is allowed. An unready/unknown ADX value is
+// treated as choppy (trail on) to match the always-on default.
+//==============================================================
+
+bool IsChoppy(int s)
+{
+   double d[1];
+   if(CopyBuffer(adx[s], 0, 1, 1, d) <= 0 || d[0] <= 0) return true;
+   return d[0] < InpChopADXLevel;
+}
+
+//==============================================================
 // Exit Trail: ATR chandelier stop once the trade is in profit.
 // The reference point is the extreme (high/low) of the M5 bar
 // that is still forming, so a peak is locked in before it
@@ -354,7 +381,8 @@ bool CheckM5Exit(int s, int dir)
 
 void ManageTrail(int s)
 {
-   if(state[s] == 0 || !InpUseChandelierTrail || !InpUseStopLoss) return;
+   if(state[s] == 0 || InpTrailMode == TRAIL_OFF || !InpUseStopLoss) return;
+   if(InpTrailMode == TRAIL_CHOPPY && !IsChoppy(s)) return;
 
    double atrVal;
    if(!GetATRValue(s, IDX_M5, atrVal)) return;
