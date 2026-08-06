@@ -30,7 +30,8 @@ TENKAN  = 9
 KIJUN   = 26
 SENKOU_B = 52
 
-# How much daily history to fetch. Monthly alignment needs ~78 months of
-# completed monthly bars (52 for Senkou B + 26 for the chikou offset) so
-# ~7+ years is the practical minimum; "max" is safe on all Yahoo symbols.
+# How much daily history to fetch. Monthly alignment needs the cloud value at
+# the chikou's plotted position, i.e. 2*KIJUN + SENKOU_B + 1 = 105 completed
+# monthly bars (see ichimoku.align_last_bar), so ~9 years is the practical
+# minimum; "max" is safe on all Yahoo symbols.
 HISTORY = "max"

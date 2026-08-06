@@ -7,9 +7,12 @@ tenkan-sen, kijun-sen, and kumo on that timeframe.
 
 Bar/offset conventions (mirroring the EA):
   * `df` is oldest -> newest; the LAST row is the last closed bar.
-  * The price-side tenkan/kijun/cloud are read at the last closed bar.
+  * The price-side tenkan/kijun are read at the last closed bar; the cloud
+    there is the Senkou value computed Kijun rows earlier (the spans are
+    plotted Kijun bars into the future).
   * The chikou value equals the close of the last closed bar, plotted Kijun
-    bars back; the reference candle, tenkan, kijun, and cloud are read there.
+    bars back; the reference candle and tenkan/kijun are read there, and the
+    cloud at that position another Kijun rows further back.
 """
 
 import pandas as pd
@@ -30,7 +33,10 @@ def compute_levels(df):
 def align_last_bar(df):
     """Return 1 (bullish), -1 (bearish), or 0 (not aligned) for the last bar."""
     n = len(df)
-    if n < config.KIJUN + 1:
+    # Enough bars for every level read below: the chikou-side cloud is read
+    # 2*KIJUN rows before the last closed bar, and Senkou B there needs its
+    # own SENKOU_B-bar window before that.
+    if n < config.SENKOU_B + 2 * config.KIJUN + 1:
         return 0
 
     tenkan, kijun, senkou_a, senkou_b = compute_levels(df)
@@ -39,21 +45,28 @@ def align_last_bar(df):
     i0 = n - 1
     close_p = float(df["close"].iloc[i0])
 
+    # The Senkou spans are plotted Kijun bars into the future, so the cloud
+    # shown under the last closed bar is the Senkou value computed Kijun bars
+    # earlier (mirrors the EA's CopyBuffer(..., sh + Kijun) read).
+    iPriceCloud = n - 1 - config.KIJUN
+
     above = (
         close_p > tenkan.iloc[i0]
         and close_p > kijun.iloc[i0]
-        and close_p > max(senkou_a.iloc[i0], senkou_b.iloc[i0])
+        and close_p > max(senkou_a.iloc[iPriceCloud], senkou_b.iloc[iPriceCloud])
     )
     below = (
         close_p < tenkan.iloc[i0]
         and close_p < kijun.iloc[i0]
-        and close_p < min(senkou_a.iloc[i0], senkou_b.iloc[i0])
+        and close_p < min(senkou_a.iloc[iPriceCloud], senkou_b.iloc[iPriceCloud])
     )
     if not above and not below:
         return 0
 
     # chikou position: last closed bar, Kijun bars back
     i1 = n - 1 - config.KIJUN
+    # Cloud at the chikou's plotted position: another Kijun bars further back.
+    i2 = n - 1 - 2 * config.KIJUN
     chik = close_p  # the chikou span for the last closed bar is its close
 
     if above:
@@ -61,7 +74,7 @@ def align_last_bar(df):
             chik > df["high"].iloc[i1]
             and chik > tenkan.iloc[i1]
             and chik > kijun.iloc[i1]
-            and chik > max(senkou_a.iloc[i1], senkou_b.iloc[i1])
+            and chik > max(senkou_a.iloc[i2], senkou_b.iloc[i2])
         ):
             return 1
         return 0
@@ -71,7 +84,7 @@ def align_last_bar(df):
             chik < df["low"].iloc[i1]
             and chik < tenkan.iloc[i1]
             and chik < kijun.iloc[i1]
-            and chik < min(senkou_a.iloc[i1], senkou_b.iloc[i1])
+            and chik < min(senkou_a.iloc[i2], senkou_b.iloc[i2])
         ):
             return -1
         return 0

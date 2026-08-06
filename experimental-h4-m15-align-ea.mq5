@@ -439,7 +439,7 @@ void OnTick()
       // Per-symbol M15 bar gating — only act on a new closed M15 bar for this
       // symbol (M15 is the lowest timeframe in the alignment set)
       MqlRates m15[];
-      if(CopyRates(syms[s], PERIOD_M15, 0, 2, m15) <= 0) continue;
+      if(CopyRates(syms[s], PERIOD_M15, 0, 2, m15) < 2) continue;
       ArraySetAsSeries(m15, true);
       if(m15[1].time == lastM15bar[s]) continue;
       lastM15bar[s] = m15[1].time;

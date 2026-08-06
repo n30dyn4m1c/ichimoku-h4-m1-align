@@ -132,7 +132,14 @@ VPS, no chart, no EA needed. Located in [`monitor/`](monitor/).
   futures (`GC=F`, `SI=F`) as proxies for the XM spot symbols.
 - **Logic:** `monitor/ichimoku.py` is a faithful port of `CheckAlign()` in
   the EA, including the chikou-offset handling — so the monitor and EA
-  should agree on the signal.
+  should agree on the signal. The Senkou (cloud) values are read at the same
+  offsets the EA uses: the price-side cloud is the Senkou value computed
+  Kijun rows before the last closed bar, and the cloud at the chikou's
+  plotted position sits another Kijun rows further back (see the offset
+  table below). Because of that chikou-side cloud read, a timeframe needs
+  at least `SENKOU_B + 2 × KIJUN + 1` bars (105 for the default periods)
+  before it can be evaluated — `HISTORY = "max"` in `monitor/config.py`
+  covers that for every symbol on Yahoo.
 - **Dedupe:** `state/state.json` remembers the last notified direction per
   symbol, so a signal that persists for weeks won't spam you daily. It only
   notifies on *new* alignments, direction flips, and clears.
@@ -193,6 +200,10 @@ The chikou *value* itself is taken directly as `close[1]` from rates (not
 from the indicator buffer) — reading Chikou from the indicator buffer at the
 `chShift` offset would actually return the close from that many bars ago,
 silently reducing the chikou filter to a lagged copy of the price check.
+
+The Python monitor maps the same table onto its oldest→newest rows: row
+`n-1` is bar 1, the price-side cloud is read at row `n-1-Kijun`, and the
+chikou-side cloud at row `n-1-2×Kijun`.
 
 ### Exit Logic
 

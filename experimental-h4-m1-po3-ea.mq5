@@ -656,7 +656,7 @@ void OnTick()
    {
       // Per-symbol M1 bar gating — only act on a new closed M1 bar for this symbol
       MqlRates m1[];
-      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) <= 0) continue;
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) continue;
       ArraySetAsSeries(m1, true);
       if(m1[1].time == lastM1bar[s]) continue;
       lastM1bar[s] = m1[1].time;
