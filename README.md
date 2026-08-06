@@ -196,12 +196,21 @@ silently reducing the chikou filter to a lagged copy of the price check.
 
 ### Exit Logic
 
-- **H4-M1 build:** closes when the M15 close crosses the M15 Kijun-sen against the trade's direction (long closes below the M15 Kijun, short closes above it).
-- **H1-M1 build:** closes when the M5 close crosses the M5 Kijun-sen against the trade's direction (long closes below the M5 Kijun, short closes above it).
+- **H4-M1 build:** once the trade is in profit by at least
+  `InpTrailActivateATR × ATR(M15)`, an **ATR chandelier trailing stop** takes
+  over: the stop is re-computed on every new M1 bar as *highest high since
+  entry − InpTrailATR × ATR(M15)* for longs (*lowest low + InpTrailATR ×
+  ATR(M15)* for shorts), tracking the extreme of the M15 bar that is still
+  forming so a peak is locked in before it retraces. It only ever tightens and
+  never sits inside the broker's minimum stop distance. The **M15 Kijun-sen
+  cross** against the trade direction remains as the final fallback exit for
+  trades that never arm the trail.
+- **H1-M1 build:** identical chandelier trail, but referenced to the **M5**
+  bar extremes and `ATR(M5)`, with the **M5 Kijun-sen cross** as the fallback.
 
-Independently of that signal exit, every position carries an **ATR(M15) ×
-multiplier** stop loss to cap losses from fast adverse moves between M15
-closes.
+Independently of the trail and signal exit, every position carries an
+**ATR(M15) × multiplier** stop loss to cap losses from fast adverse moves
+between M15 closes.
 
 ### Risk Protection
 
@@ -299,6 +308,9 @@ The standard builds share the same input set:
 | `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (standard builds) |
 | `InpSendPush` | `true` | Send push notifications for alerts (entries, exits, equity alert) |
 | `InpReentryCooldownSec` | 0 | Min seconds after an exit before re-entering the same symbol (VPS builds) |
+| `InpUseChandelierTrail` | `true` | Trail the SL behind the peak once the trade is in profit (standard builds) |
+| `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M15) × multiplier for H4-M1, ATR(M5) × multiplier for H1-M1 (standard builds) |
+| `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ trail-timeframe ATR × multiplier (standard builds) |
 
 > The VPS deployment builds replace the four equity-alert inputs and
 > `InpSendPush` with `InpReentryCooldownSec` instead — see

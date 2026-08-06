@@ -3,7 +3,8 @@
 //| Entry: M5 and M1 price+chikou all above/below tenkan,kijun,      |
 //|        cloud, each close clear of its cloud by a minimum ATR     |
 //|        distance                                                  |
-//| Exit:  M5 close crosses M5 kijun against trade direction,        |
+//| Exit:  ATR chandelier trailing stop once profitable (locks in    |
+//|        the peak), M5 close crosses M5 kijun as final fallback,   |
 //|        or ATR-based protective stop loss                         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -28,6 +29,11 @@ input double InpATRMultiplier     = 3.0;    // SL distance = ATR(M1) * multiplie
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 
+input group  "Exit Management"
+input bool   InpUseChandelierTrail = true;  // Trail SL behind the peak once profitable
+input double InpTrailATR           = 2.0;   // Trail distance = ATR(M5) * multiplier
+input double InpTrailActivateATR   = 1.0;   // Arm the trail once profit >= ATR(M5) * multiplier
+
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
 input double            InpWithdrawProfitPct = 50.0;       // Percentage of the PROFIT to withdraw
@@ -50,6 +56,10 @@ int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime lastAlertBar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
+
+double   entryPrice[MAX_SYMS];  // reference entry price per symbol (trail arming)
+double   trailHigh[MAX_SYMS];   // highest high since entry (long chandelier reference)
+double   trailLow[MAX_SYMS];    // lowest low since entry (short chandelier reference)
 
 int MAGIC = 20260717;
 
@@ -168,7 +178,8 @@ void SyncStateFromPositions()
 {
    // Rebuild from scratch so positions closed by SL or manually free the
    // symbol for re-entry instead of leaving stale state behind.
-   for(int s = 0; s < symsCount; s++) state[s] = 0;
+   bool hasPos[MAX_SYMS];
+   for(int s = 0; s < symsCount; s++) { state[s] = 0; hasPos[s] = false; }
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -184,7 +195,31 @@ void SyncStateFromPositions()
 
       for(int s = 0; s < symsCount; s++)
       {
-         if(syms[s] == sym) { state[s] = dir; break; }
+         if(syms[s] == sym)
+         {
+            state[s] = dir;
+            hasPos[s] = true;
+            // EA (re)started mid-trade — rebuild the trail from the open price
+            // and let it accumulate fresh extremes from here.
+            if(entryPrice[s] == 0.0)
+            {
+               entryPrice[s] = PositionGetDouble(POSITION_PRICE_OPEN);
+               trailHigh[s]  = entryPrice[s];
+               trailLow[s]   = entryPrice[s];
+            }
+            break;
+         }
+      }
+   }
+
+   // Symbols with no open position get their trail memory cleared
+   for(int s = 0; s < symsCount; s++)
+   {
+      if(!hasPos[s])
+      {
+         entryPrice[s] = 0.0;
+         trailHigh[s]  = 0.0;
+         trailLow[s]   = 0.0;
       }
    }
 }
@@ -310,6 +345,66 @@ bool CheckM5Exit(int s, int dir)
 }
 
 //==============================================================
+// Exit Trail: ATR chandelier stop once the trade is in profit.
+// The reference point is the extreme (high/low) of the M5 bar
+// that is still forming, so a peak is locked in before it
+// retraces. Re-evaluated on every new M1 bar; only ever
+// tightens and never sits inside the broker minimum stop.
+//==============================================================
+
+void ManageTrail(int s)
+{
+   if(state[s] == 0 || !InpUseChandelierTrail || !InpUseStopLoss) return;
+
+   double atrVal;
+   if(!GetATRValue(s, IDX_M5, atrVal)) return;
+
+   MqlRates m5[];
+   if(CopyRates(syms[s], PERIOD_M5, 0, 1, m5) <= 0) return;
+   ArraySetAsSeries(m5, true);
+
+   bool isLong = (state[s] == 1);
+   if(isLong)
+   {
+      if(m5[0].high > trailHigh[s]) trailHigh[s] = m5[0].high;
+   }
+   else
+   {
+      if(m5[0].low < trailLow[s]) trailLow[s] = m5[0].low;
+   }
+
+   double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
+   int    digits  = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+
+   // Not profitable enough yet to arm the trail
+   if(isLong && SymbolInfoDouble(syms[s], SYMBOL_BID) < entryPrice[s] + InpTrailActivateATR * atrVal) return;
+   if(!isLong && SymbolInfoDouble(syms[s], SYMBOL_ASK) > entryPrice[s] - InpTrailActivateATR * atrVal) return;
+
+   double price = isLong ? SymbolInfoDouble(syms[s], SYMBOL_BID)
+                         : SymbolInfoDouble(syms[s], SYMBOL_ASK);
+   double slNew = isLong ? trailHigh[s] - InpTrailATR * atrVal
+                         : trailLow[s] + InpTrailATR * atrVal;
+   slNew = NormalizeDouble(slNew, digits);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != syms[s]) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
+
+      double slCur = PositionGetDouble(POSITION_SL);
+
+      // Only ever tighten, and keep out of the broker's minimum stop distance
+      if(isLong && slNew > slCur + point && slNew < price - minDist)
+         trade.PositionModify(ticket, slNew, 0);
+      if(!isLong && slNew < slCur - point && slNew > price + minDist)
+         trade.PositionModify(ticket, slNew, 0);
+   }
+}
+
+//==============================================================
 // Utility Functions
 //==============================================================
 
@@ -410,13 +505,14 @@ double BuildStopLoss(int s, bool isBuy, double price, double dist)
    return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
-int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
+int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double &firstFill)
 {
    string sym = syms[s];
 
    trade.SetExpertMagicNumber(MAGIC);
 
    int filled = 0;
+   firstFill = 0.0;
    for(int i = 0; i < count; i++)
    {
       double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
@@ -426,6 +522,7 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
       bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy M1-M5")
                       : trade.Sell(lots, sym, price, sl, 0, "Sell M1-M5");
       if(!ok) break;   // out of margin or rejected — don't hammer the server
+      if(firstFill == 0.0) firstFill = price;
       filled++;
    }
    return filled;
@@ -482,6 +579,9 @@ void OnTick()
          state[s] = 0;
       }
 
+      // Chandelier trail: tighten stops behind the peak on each new M1 bar
+      if(state[s] != 0) ManageTrail(s);
+
       // Entry check: M5 and M1 must both align, spread must be sane
       if(state[s] == 0 && SpreadOK(syms[s]))
       {
@@ -498,10 +598,14 @@ void OnTick()
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
             // Alert reports the actual fill count, not the requested count.
-            int filled = OpenPositions(s, isBuy, dist, count, lots);
+            double firstFill = 0.0;
+            int filled = OpenPositions(s, isBuy, dist, count, lots, firstFill);
             if(filled > 0)
             {
                state[s] = st;
+               entryPrice[s] = firstFill;   // chandelier trail reference
+               trailHigh[s]  = firstFill;
+               trailLow[s]   = firstFill;
                string action = isBuy ? "Buy" : "Sell";
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +

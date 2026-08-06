@@ -251,10 +251,16 @@ agree on direction and no position is already open on that symbol.
 
 ### Exit logic
 
-All positions close when the M5 close crosses the M5 Kijun-sen against the
-trade's direction (long closes below the M5 Kijun, short closes above it).
-Independently, every position carries an `ATR(M1) × InpATRMultiplier` stop
-loss (note: ATR is computed on **M1** here, not M15 as in the main EAs).
+Every position carries an `ATR(M1) × InpATRMultiplier` stop loss (note: ATR
+is computed on **M1** here, not M15 as in the main EAs). Once a trade is in
+profit by at least `InpTrailActivateATR × ATR(M5)`, an **ATR chandelier
+trailing stop** takes over: the stop is re-computed every new M1 bar as
+`highest high since entry − InpTrailATR × ATR(M5)` for longs (`lowest low +
+InpTrailATR × ATR(M5)` for shorts), using the extreme of the M5 bar that is
+still forming so a peak is locked in before it retraces. The trail only ever
+tightens and never sits inside the broker's minimum stop distance; disable it
+with `InpUseChandelierTrail = false`. The M5 kijun-cross close remains as the
+final fallback exit for trades that never arm the trail.
 
 ### Risk protection & equity sizing
 
@@ -275,6 +281,9 @@ as the main EAs — see [README](README.md#equity-based-position-sizing).
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR(M1) × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
+| `InpUseChandelierTrail` | `true` | Trail the SL behind the peak once the trade is in profit |
+| `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M5) × multiplier |
+| `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ ATR(M5) × multiplier |
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
@@ -319,10 +328,15 @@ than the main H1-M1 build.
 
 ### Exit logic
 
-All positions close when the **M5 close crosses the M5 Kijun-sen** against the
-trade's direction (long closes below the M5 Kijun, short closes above it) —
-identical to the H1-M1 EA's exit. Independently, every position carries an
-`ATR(M15) × InpATRMultiplier` stop loss.
+Every position carries an `ATR(M15) × InpATRMultiplier` stop loss. Once a
+trade is in profit by at least `InpTrailActivateATR × ATR(M5)`, an **ATR
+chandelier trailing stop** takes over: the stop is re-computed every new M1
+bar as `highest high since entry − InpTrailATR × ATR(M5)` for longs (`lowest
+low + InpTrailATR × ATR(M5)` for shorts), using the extreme of the M5 bar
+that is still forming so a peak is locked in before it retraces. The trail
+only ever tightens and never sits inside the broker's minimum stop distance;
+disable it with `InpUseChandelierTrail = false`. The M5 kijun-cross close
+remains as the final fallback exit for trades that never arm the trail.
 
 ### Risk protection & equity sizing
 
@@ -343,6 +357,9 @@ computed on **M15** (as in the H1-M1 EA), not M1.
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR(M15) × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 |
+| `InpUseChandelierTrail` | `true` | Trail the SL behind the peak once the trade is in profit |
+| `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M5) × multiplier |
+| `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ ATR(M5) × multiplier |
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
