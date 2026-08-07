@@ -386,15 +386,18 @@ standard counterparts.
 
 ## Experimental EAs
 
-This repository also includes five experimental strategies — a PO3-enhanced
+This repository also includes six experimental strategies — a PO3-enhanced
 variant of the H4-M1 alignment EA (`experimental-h4-m1-po3-ea.mq5`), an
 Ichimoku time-theory mean-reversion EA (`experimental-h1-m1-reversion-ea.mq5`),
 a fast M1-M5 breakout alignment EA (`experimental-m1-m5-breakout-ea.mq5`), a
 shorter-anchor M30-M1 breakout alignment clone
-(`experimental-m30-m1-breakout-ea.mq5`), and an H4-M15 alignment clone that
-trims the stack down to M15 (`experimental-h4-m15-align-ea.mq5`). They're
-newer and less battle-tested than the main builds above; each file is
-prefixed `experimental-` to keep it clearly separate.
+(`experimental-m30-m1-breakout-ea.mq5`), an H4-M15 alignment clone that
+trims the stack down to M15 (`experimental-h4-m15-align-ea.mq5`), and a
+Kijun-pullback variant of the H4-M1 build
+(`experimental-h4-m1-pullback-ea.mq5`) that re-enters the trend when price
+bounces off the H4 Kijun after a full-alignment breakout. They're newer and
+less battle-tested than the main builds above; each file is prefixed
+`experimental-` to keep it clearly separate.
 
 The **MS-W1-D1 build** and its **Python + GitHub Actions monitor** — both new
 and unbacktested — are also documented in

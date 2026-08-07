@@ -574,3 +574,119 @@ no VPS, no chart, no EA needed. Located in `monitor/`, documented in the
   flags fully-aligned trends and clears partial ones) but has not yet been
   cross-checked against the EA's backtest output — validate both before
   relying on either for execution decisions.
+
+---
+
+## 7. H4-M1 Kijun-Pullback EA (breakout exhaustion study)
+
+**File:** `experimental-h4-m1-pullback-ea.mq5`
+**Magic number:** `20260807` (independent of every other EA)
+
+A fork of the main H4-M1 Alignment EA that adds a **pullback entry**: instead
+of waiting for a full 6-TF re-alignment to re-enter after an exit, it buys
+the trend's retracement to the **H4 Kijun** while the higher timeframes are
+still aligned — trading WITH the trend, never against it.
+
+### The study that motivated it
+
+Empirical analysis on 2 years of hourly gold (`GC=F` from Yahoo, resampled to
+H4 — a proxy for `GOLDm#`), using a faithful port of `CheckAlign()`:
+
+| Finding (124 fresh H4 bullish episodes) | Rate |
+|---|---|
+| Retraced to touch the H4 Kijun | **96.8%** (median ~1.3 days) |
+| Touched the H1 Kijun first | 100% (72% touch H1 Kijun before H4) |
+| Touched the H4 cloud top / bottom | 66.9% / 41.9% |
+| Entered the H4 cloud | 21.1% |
+| Made a new high after the retrace | **95.2%** |
+
+The retracement to the Kijun is the **rule, not the exception** — and it is
+overwhelmingly a **continuation dip**, not a reversal. Key condition-split
+results for buying the pullback (SL = touch-bar low − 0.1 ATR, TP = breakout
+high):
+
+| Condition | Win rate |
+|---|---|
+| All pullback buys | 51.7% |
+| **Touch bar closes back above the H4 Kijun** | **61.6%** (vs 26.5% when it closes below) |
+| Breakout extension ≥ 2 ATR(H4) | 60.5% (vs 47.6%) |
+| Kijun flat | 59.6% (vs 45.6%) |
+| ADX(H4) ≥ 30 | 53.4% (vs 48.9%) |
+
+**Fading the breakout back to the Kijun (counter-trend) won 0/13** on the same
+data — even conditioned on high ADX or large extension. This EA therefore
+only enters WITH the trend; the counter-trend fade idea lives (conservatively,
+with more gates) in the H1-M1 Reversion EA (section 2).
+
+Caveat: only the H4 anchor level is reproducible from Yahoo 1h data — the
+full 6-TF stack cannot be. The MT5 Strategy Tester on the real EA is the
+definitive test of these filters at the stack level.
+
+### Entry logic
+
+Three modes via `InpEntryMode`:
+
+| Mode | Behavior |
+|------|----------|
+| `ENTRY_BREAKOUT` (0) | Identical to the main H4-M1 EA — full 6-TF alignment only |
+| `ENTRY_PULLBACK` (1, default) | H4 Kijun bounce entries only |
+| `ENTRY_BOTH` (2) | Full alignment first, pullback if it doesn't fire |
+
+**Pullback setup** — all gates must pass (checked per new M1 bar, per symbol):
+
+1. **Prior breakout:** a full 6-TF alignment signal fired while the symbol was
+   flat (memorized with its H4 extension in ATR units). Reset to "none" once a
+   position opens, so each pullback needs a fresh breakout.
+2. **Trend intact:** the top `InpPullTrendTFs` timeframes (default 2 → H4 + H1)
+   are still aligned in the breakout direction.
+3. **Retracement:** within the last `InpBounceLookbackH4` closed H4 bars
+   (default 3), a bar's range contained the **H4 Kijun** — price actually
+   pulled back to it.
+4. **Bounce confirmation:** the most recent touch bar closed on the trend side
+   of the H4 Kijun (`InpTouchCloseAbove`, default on — the single strongest
+   filter in the study: 61.6% vs 26.5%).
+5. **Proximity:** price is still on the trend side of the H4 Kijun and within
+   `InpMaxEntryDistATR` × ATR(H4) of it (default 1.5 — keeps entries fresh,
+   not stale re-touches days later).
+6. **Study filters (optional):** breakout extension ≥ `InpMinBreakoutExtATR`
+   (default 2.0 ATR; 0 = off) and ADX(H4) ≥ `InpMinADX` (default 30; 0 = off).
+
+Direction always equals the breakout direction (with-trend only). Entries use
+the same equity-scaled sizing and ATR(M15) stop as the main EA.
+
+### Exit logic
+
+Identical to the main H4-M1 EA: ATR chandelier trail once in profit
+(choppy-only via ADX(M15) by default), M15 Kijun cross as the fallback, and
+the ATR(M15) × `InpATRMultiplier` protective stop on every position.
+
+### Pullback inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpEntryMode` | `ENTRY_PULLBACK` | 0 = breakout only, 1 = pullback only, 2 = both |
+| `InpPullTrendTFs` | 2 | Top-N timeframes that must stay aligned (2 = H4+H1, 3 = +M30, …) |
+| `InpBounceLookbackH4` | 3 | H4 bars back to search for the Kijun touch |
+| `InpTouchCloseAbove` | `true` | Touch bar must close on the trend side of the H4 Kijun |
+| `InpMaxEntryDistATR` | 1.5 | Max \|price − H4 Kijun\| for entry (× ATR H4) |
+| `InpMinBreakoutExtATR` | 2.0 | Prior breakout must be ≥ this × ATR(H4) extended (0 = off) |
+| `InpMinADX` | 30.0 | Min ADX(H4) for a pullback entry (0 = off) |
+
+All other inputs are identical to the main H4-M1 EA (see
+[README](README.md#configuration-inputs)).
+
+### Status & caveats
+
+- **Not yet backtested.** The study numbers above are H4-anchor-only from an
+  independent data source; the EA itself has not been run in the Strategy
+  Tester. Suggested first pass: compare `ENTRY_PULLBACK` vs `ENTRY_BREAKOUT`
+  (mode 0) on the same symbol/period — the breakout mode is the known
+  baseline.
+- The pullback SL is the ATR(M15) × 3 stop (as shipped) — *not* the tight
+  touch-bar-low stop from the study. Expect lower win rate but larger winners
+  than the study's headline numbers; test `InpATRMultiplier` if stops sting.
+- When `InpMinBreakoutExtATR` blocks an entry, it blocks all pullbacks until a
+  *new* full-alignment breakout — a stale, low-extension breakout can idle the
+  EA for a long stretch in side-slipping trends.
+- `InpTouchCloseAbove = false` is the raw "touch the Kijun" version — the study
+  says that halves the win rate (26.5%); leave it on unless you're testing.
