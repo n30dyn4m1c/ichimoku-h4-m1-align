@@ -305,20 +305,21 @@ int CheckAlign(int s, int tfIdx)
 
    int sh      = 1;              // last closed bar
    int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
-   int chCloud = chShift + Kijun;// senkou buffer offset for the cloud at chikou's position
+   // MT5's iIchimoku Senkou buffers are pre-shifted: the value at shift p
+   // is the cloud as drawn at chart position p — no extra offset needed.
 
    MqlRates rt[];
-   if(CopyRates(syms[s], tf, 0, chCloud + 1, rt) <= 0) return 0;
+   if(CopyRates(syms[s], tf, 0, chShift + 1, rt) <= 0) return 0;
    ArraySetAsSeries(rt, true);
 
-   if(ArraySize(rt) <= chCloud) return 0;
+   if(ArraySize(rt) <= chShift) return 0;
 
-   // price bar sh: tenkan, kijun, cloud
+   // price bar sh: tenkan, kijun, cloud (cloud read at sh = drawn at sh)
    double tenkan[1], kijun[1], senA[1], senB[1];
-   if(CopyBuffer(ich[s][tfIdx], 0, sh,         1, tenkan)    <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 1, sh,         1, kijun)     <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 2, sh + Kijun, 1, senA)      <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 3, sh + Kijun, 1, senB)      <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 0, sh,    1, tenkan)    <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, sh,    1, kijun)     <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, sh,    1, senA)      <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, sh,    1, senB)      <= 0) return 0;
 
    double closeP = rt[sh].close;
    double cHi    = MathMax(senA[0], senB[0]);
@@ -330,12 +331,13 @@ int CheckAlign(int s, int tfIdx)
    bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
    if(!above && !below) return 0;
 
-   // tenkan, kijun, cloud at chikou's chart position
+   // tenkan, kijun, cloud at chikou's chart position (cloud read at
+   // chShift = drawn at chikou's plotted bar)
    double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
    if(CopyBuffer(ich[s][tfIdx], 0, chShift,    1, tenkan_ch) <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, chShift,    1, kijun_ch)  <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 2, chCloud,    1, senA_ch)   <= 0) return 0;
-   if(CopyBuffer(ich[s][tfIdx], 3, chCloud,    1, senB_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, chShift,    1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, chShift,    1, senB_ch)   <= 0) return 0;
 
    // The chikou span for bar sh IS its close, plotted Kijun bars back.
    // Compare it against the candle and Ichimoku levels at that chart position.
