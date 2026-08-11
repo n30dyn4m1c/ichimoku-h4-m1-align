@@ -16,9 +16,10 @@
 //|        (9/17/26/33/42/51). Nested: D1 is checked first, then H4   |
 //|        (then H1, off by default) — each must be clear (not on a   |
 //|        cycle) before the next is consulted                        |
-//| Swing risk: % of equity risked per ladder (20% heavy test),       |
-//|        split evenly across a 4-order ladder; caps by              |
-//|        InpMaxRiskPct (0 = off) and by free margin; exits are      |
+//| Risk:  flat risk-based tiers across a 4-order ladder: 20% risk |
+//|        up to $15k, 10% risk $15k-$20k, 5% risk above $20k;     |
+//|        caps by InpMaxRiskPct (0 = off) and by free margin;      |
+//|        exits are verified so failed closes retry               |
 //| VPS: no Alert popups or equity alerts; all logic runs only on     |
 //|        closed H1 bars (once per hour) to cut CPU usage            |
 //| Author: Neo Malesa                                               |
@@ -39,7 +40,6 @@ input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to eve
 input int    InpATRPeriod         = 14;     // ATR period (H1)
 input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
-input double InpHighEquityRiskPct = 20.0;   // % of equity risked per trade (heavy risk test)
 input int    InpReentryCooldownSec = 0;     // Min seconds after an exit before re-entering same symbol (0 = none)
 input double InpMaxRiskPct         = 0.0;   // Cap total initial-stop risk per ladder as % of equity (0 = no cap)
 
@@ -673,11 +673,11 @@ string PCTime()
 // Risk Management
 //==============================================================
 
-// Lot size that risks InpHighEquityRiskPct% of equity, split evenly across
+// Lot size that risks riskPct% of equity, split evenly across
 // 'count' concurrent orders, if the ATR stop loss is hit on all of them.
 // Falls back to a conservative fixed lot when the stop distance or the
 // symbol's tick value/size aren't available (e.g. InpUseStopLoss = false).
-double RiskBasedLots(string sym, double eq, double stopDist, int count)
+double RiskBasedLots(string sym, double eq, double stopDist, int count, double riskPct)
 {
    double fallback = 0.10;
    if(stopDist <= 0 || count <= 0) return fallback;
@@ -689,7 +689,7 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count)
    double moneyPerLot = (stopDist / tickSize) * tickValue;
    if(moneyPerLot <= 0) return fallback;
 
-   double riskMoney = eq * (InpHighEquityRiskPct / 100.0) / count;
+   double riskMoney = eq * (riskPct / 100.0) / count;
    double lots      = riskMoney / moneyPerLot;
 
    double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
@@ -701,13 +701,14 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count)
    return (lots > 0) ? lots : fallback;
 }
 
-// Swing ladder: fixed 4-order ladder, each order risks an even share
-// of InpHighEquityRiskPct% of equity. count stays 4; only the lot
-// size adapts to the stop distance.
+// Flat risk-based tiers across a 4-order ladder: 20% risk up to
+// $15k, 10% risk $15k-$20k, 5% risk above $20k.
 void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 {
-   count = 4;   // swing ladder — up to 4 concurrent orders per signal
-   lots = RiskBasedLots(sym, AccountInfoDouble(ACCOUNT_EQUITY), stopDist, count);
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(eq <= 15000){ count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 20.0); }
+   else if(eq <= 20000){ count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 10.0); }
+   else                { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 5.0); }
 }
 
 // Scale the ladder down so the initial stop on all orders risks at most
