@@ -9,15 +9,14 @@
 //|        break even + a few points to cover the spread (BE30)      |
 //| Time theory: optional kihon suchi filter — a breakout is skipped |
 //|        when the H1/M30/M15/M5 move count (bars since the last    |
-//|        Kijun touch) equals a kihon suchi number up to 100 exactly|
-//|        (9/17/26/33/42/51/65/76/83/97). Nested: H1 is checked     |
-//|        first, then M30, then M15, then M5 — each must be clear   |
-//|        (not on a cycle) before the next is checked; all clear    |
-//|        => trade proceeds                                         |
+//|        Kijun touch) equals a kihon suchi number up to 51 exactly |
+//|        (9/17/26/33/42/51). Nested: H1 is checked first, then M30,|
+//|        then M15, then M5 — each must be clear (not on a cycle)   |
+//|        before the next is checked; all clear => trade proceeds   |
 //| VPS: no Alert popups or equity alerts; all logic runs only on    |
 //|        closed M1 bars (once per minute) to cut CPU usage         |
-//| Risk:   ladder orders capped by InpMaxRiskPct of equity and by   |
-//|        free margin; exits are verified so failed closes retry    |
+//| Risk:   ladder optionally capped by InpMaxRiskPct (0 = off) and  |
+//|        by free margin; exits are verified so failed closes retry |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -37,8 +36,8 @@ input int    InpATRPeriod         = 14;     // ATR period (M15)
 input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
-input int    InpReentryCooldownSec = 1800;  // Cooldown after an exit before re-entering same symbol (30 min default; 0 = none)
-input double InpMaxRiskPct         = 10.0;  // Cap total initial-stop risk per ladder as % of equity
+input int    InpReentryCooldownSec = 0;     // Min seconds after an exit before re-entering same symbol (0 = none)
+input double InpMaxRiskPct         = 0.0;   // Cap total initial-stop risk per ladder as % of equity (0 = no cap)
 
 //--- Trail mode: off, always on, or choppy-only (ADX regime filter)
 enum ENUM_TRAIL_MODE { TRAIL_OFF = 0, TRAIL_ALWAYS = 1, TRAIL_CHOPPY = 2 };
@@ -58,8 +57,8 @@ input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers
 
 input group  "Time Theory (Kihon Suchi)"
 input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
-input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97"; // Ichimoku kihon suchi cycles up to the cap: bars since last Kijun touch
-input bool   InpTimeFilterH1   = true;    // Check H1 first (exact match, up to cycle 100)
+input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch
+input bool   InpTimeFilterH1   = true;    // Check H1 first (exact match, up to cycle 51)
 input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
 input bool   InpTimeFilterM15  = true;    // Check M15 next, only if M30 is clear
 input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
@@ -68,7 +67,7 @@ input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
 #define MAX_SYMS  60
 #define TF_COUNT  5
 #define IDX_M5    3   // index of M5 in tfs[] — used for exit check
-#define KIHON_MAX_CYCLE 100   // cycle cap on every timeframe: older moves are never "mature"
+#define KIHON_MAX_CYCLE 51   // cycle cap on every timeframe: older moves are never "mature"
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
    PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
@@ -375,7 +374,7 @@ void ParseCycles(string list)
 
 // True when the count exactly equals a cycle <= maxCycle (mature move).
 // Cycles beyond maxCycle are ignored — all timeframes cap at
-// KIHON_MAX_CYCLE (100).
+// KIHON_MAX_CYCLE (51).
 bool InTimeWindow(int count, int maxCycle)
 {
    for(int i = 0; i < g_cycleCount; i++)
@@ -390,7 +389,7 @@ bool InTimeWindow(int count, int maxCycle)
 // the move's side of the Kijun (above it for a long, below for a short).
 // Stops at the first touch or side violation — the count is the age of
 // the current move in bars on that timeframe. Lookback is bounded by
-// maxCycle so shallow history suffices (100 bars on any timeframe).
+// maxCycle so shallow history suffices (51 bars on any timeframe).
 int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
 {
    int want = maxCycle + 10;
@@ -738,7 +737,7 @@ void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 // InpMaxRiskPct% of equity. count never drops below 1.
 void CapToRisk(string sym, double dist, int &count, double &lots)
 {
-   if(count <= 0 || lots <= 0 || dist <= 0) return;
+   if(count <= 0 || lots <= 0 || dist <= 0 || InpMaxRiskPct <= 0) return;
    double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
    double tickSize  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
    if(tickValue <= 0 || tickSize <= 0) return;

@@ -84,16 +84,16 @@ differ from the standard builds in a few practical ways:
   entirely. Every entry/exit sends a `SendNotification` push and a journal
   `Print`; the terminal `Alert()` popups are dropped to keep the VPS session
   quiet.
-- **Re-entry cooldown on by default.** `InpReentryCooldownSec` (default
-  `1800`, i.e. 30 minutes) waits after an exit before the same symbol can be
-  re-entered, stopping the EA from instantly flip-flopping right after a
-  stop-out while a persistent H1/H4 alignment is still in place.
+- **Re-entry cooldown.** `InpReentryCooldownSec` (default `0`) adds a minimum
+  wait in seconds after an exit before the same symbol can be re-entered —
+  handy for stopping the EA from instantly flip-flopping right after a
+  stop-out. Off by default to match the standard builds' behavior.
 - **Capped ladder sizing.** The equity-tiered order ladder is scaled down by
   two extra guards before any order is sent: `CapToRisk()` limits the worst
   case — the initial ATR stop being hit on *every* order — to
-  `InpMaxRiskPct`% of equity (default `10`), and `CapToMargin()` uses
-  `OrderCalcMargin` so the ladder always fits the free margin instead of
-  silently partial-filling.
+  `InpMaxRiskPct`% of equity (default `0` = no cap, matching the standard
+  builds), and `CapToMargin()` uses `OrderCalcMargin` so the ladder always
+  fits the free margin instead of silently partial-filling.
 - **Verified exits.** `ClosePositions()` re-scans after closing and only
   clears the symbol's state when zero positions remain — a failed close
   (requote, market halt) is retried on the next M1 bar instead of allowing a
@@ -106,9 +106,9 @@ differ from the standard builds in a few practical ways:
 
 The VPS builds carry their own magic numbers (`20260815` for H4-M1,
 `20260814` for H1-M1), so they can run alongside the standard builds and
-each other on the same account. They also use an extended kihon suchi cycle
-cap of 100 instead of the standard builds' 51 — see
-[Time Theory Filter](#time-theory-filter-kihon-suchi).
+each other on the same account — see
+[Time Theory Filter](#time-theory-filter-kihon-suchi) for the shared
+cycle-filter behavior.
 
 ---
 
@@ -243,10 +243,9 @@ there is room for the move to continue to the next number.
   chain blocks the entry. Each timeframe's check is gated by its own input
   flag (`InpTimeFilterH4` / `InpTimeFilterH1` / `InpTimeFilterM30` /
   `InpTimeFilterM15` / `InpTimeFilterM5`).
-- **Cycle cap:** cycle numbers above the cap are ignored — 51 on the
-  standard builds, 100 on the VPS builds (`KIHON_MAX_CYCLE`). The VPS builds
-  ship `InpTimeCycles` trimmed to the cap; extra entries on the standard
-  builds are simply inert.
+- **Cycle cap:** cycle numbers above 51 (`KIHON_MAX_CYCLE`) are ignored on
+  every build — the classic 65 / 76 / 83 / 97 / 101 / … numbers in the
+  default `InpTimeCycles` list are simply inert.
 
 ### Exit Logic
 
@@ -371,15 +370,15 @@ The standard builds share the same input set:
 | `InpCheckDay` | Friday | Day of week the equity alert is evaluated (standard builds) |
 | `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (standard builds) |
 | `InpSendPush` | `true` | Send push notifications for alerts (entries, exits, equity alert) |
-| `InpReentryCooldownSec` | 1800 | Cooldown (seconds) after an exit before re-entering the same symbol — 30 min default, `0` disables (VPS builds) |
-| `InpMaxRiskPct` | 10.0 | Cap the worst-case ladder loss (initial ATR stop hit on every order) as % of equity (VPS builds) |
+| `InpReentryCooldownSec` | 0 | Cooldown (seconds) after an exit before re-entering the same symbol — `0` disables (VPS builds) |
+| `InpMaxRiskPct` | 0.0 | Cap the worst-case ladder loss (initial ATR stop hit on every order) as % of equity — `0` disables (VPS builds) |
 | `InpTrailMode` | `TRAIL_CHOPPY` | 0 = off, 1 = always, 2 = choppy-only via ADX |
 | `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M15) × multiplier for H4-M1, ATR(M5) × multiplier for H1-M1 |
 | `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ trail-timeframe ATR × multiplier |
 | `InpADXPeriod` | 14 | ADX period for choppy-market detection (exit timeframe) |
 | `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode |
 | `InpUseTimeFilter` | `true` | Skip entries when a TF move count exactly equals a kihon suchi cycle (see [Time Theory Filter](#time-theory-filter-kihon-suchi)) |
-| `InpTimeCycles` | 9,17,…,97 | Kihon suchi cycle numbers; counts above the cap are ignored |
+| `InpTimeCycles` | 9,17,…,676 | Kihon suchi cycle numbers; counts above 51 are ignored |
 | `InpTimeFilterH4` / `InpTimeFilterH1` | `true` | Enable the anchor-timeframe cycle check (H4 build / H1 build) |
 | `InpTimeFilterM30` / `InpTimeFilterM15` / `InpTimeFilterM5` | `true` | Enable the next cycle checks down the cascade |
 
