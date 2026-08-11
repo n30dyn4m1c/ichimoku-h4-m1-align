@@ -9,25 +9,25 @@
 
 Free MetaTrader 5 Expert Advisors that trade multi-timeframe Ichimoku Kinko
 Hyo alignment, with built-in ATR-based risk protection and equity-scaled
-position sizing. Four non-experimental builds are included — two standard and
-two VPS deployment variants:
+position sizing. Five non-experimental builds are included — two standard
+alignment builds, two VPS deployment variants, and the slow MS-W1-D1 build:
 
 | EA | File | Timeframes | Exit signal | Magic |
 |----|------|------------|-------------|-------|
 | **H4-M1 Alignment** | `ichimoku-h4-m1-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
 | **H1-M1 Alignment** | `ichimoku-h1-m1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
-| **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
-| **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
+| **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260815` |
+| **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260814` |
 | **MS-W1-D1 Alignment** | `ichimoku-ms-w1-d1-ea.mq5` | MS → W1 → D1 (3 TFs) | D1 or W1 Kijun cross | `20260806` |
 
-All four share the same entry rules, risk protection, and equity-sizing
+All builds share the same entry rules, risk protection, and equity-sizing
 logic — they differ only in which timeframes must agree, which lower
 timeframe's Kijun triggers the exit, and whether they're tuned for unattended
-VPS use. The two standard builds carry distinct magic numbers so they can run
-on the same account (even the same symbol) without interfering with each
-other. The VPS builds reuse their anchor's magic number, so treat the standard
-and VPS variants of an anchor as alternatives, not companions — see
-[VPS Deployment Builds](#vps-deployment-builds).
+VPS use. Every build carries its own magic number, so the standard and VPS
+variants — and the two VPS builds together — can run on the same account,
+even on the same symbol, without interfering with each other. See
+[VPS Deployment Builds](#vps-deployment-builds) for what the VPS variants
+add on top.
 
 > **Free to use.** Download it, run it on a demo account, break it, improve it. Feedback and pull requests are welcome — see [Feedback & Contributing](#feedback--contributing) below.
 
@@ -62,7 +62,7 @@ scale automatically with account equity.
 - ✅ Crash/restart-safe — rebuilds internal state from open positions on every tick
 - ✅ Push notifications, terminal alerts, and log messages on every entry/exit
 - ✅ Weekly equity-growth alert with a suggested profit-withdrawal amount (standard builds only)
-- ✅ VPS deployment builds — once-per-minute gating, push alerts, and an optional re-entry cooldown (see below)
+- ✅ VPS deployment builds — once-per-minute gating, push alerts, risk/margin-capped sizing, and a re-entry cooldown (see below)
 
 ---
 
@@ -71,8 +71,8 @@ scale automatically with account equity.
 The `ichimoku-h4-m1-vps-ea.mq5` and `ichimoku-h1-m1-vps-ea.mq5` files are
 deployment-oriented variants of the two standard builds, tuned for running
 unattended on a cheap VPS. Their trading logic is identical — same entry/exit
-rules, risk protection, equity sizing, and magic numbers — but they differ in
-three practical ways:
+rules and risk protection — but they add several layers of hardening and
+differ from the standard builds in a few practical ways:
 
 - **Once-per-minute gating.** `OnTick()` returns immediately unless a new
   closed M1 bar has appeared (`lastMinuteKey = TimeCurrent() / 60`), so the
@@ -84,13 +84,31 @@ three practical ways:
   entirely. Every entry/exit sends a `SendNotification` push and a journal
   `Print`; the terminal `Alert()` popups are dropped to keep the VPS session
   quiet.
-- **Optional re-entry cooldown.** A new `InpReentryCooldownSec` input (default
-  `0`) adds a minimum wait in seconds after an exit before the same symbol can
-  be re-entered — handy for stopping the EA from instantly flip-flopping right
-  after a stop-out.
+- **Re-entry cooldown on by default.** `InpReentryCooldownSec` (default
+  `1800`, i.e. 30 minutes) waits after an exit before the same symbol can be
+  re-entered, stopping the EA from instantly flip-flopping right after a
+  stop-out while a persistent H1/H4 alignment is still in place.
+- **Capped ladder sizing.** The equity-tiered order ladder is scaled down by
+  two extra guards before any order is sent: `CapToRisk()` limits the worst
+  case — the initial ATR stop being hit on *every* order — to
+  `InpMaxRiskPct`% of equity (default `10`), and `CapToMargin()` uses
+  `OrderCalcMargin` so the ladder always fits the free margin instead of
+  silently partial-filling.
+- **Verified exits.** `ClosePositions()` re-scans after closing and only
+  clears the symbol's state when zero positions remain — a failed close
+  (requote, market halt) is retried on the next M1 bar instead of allowing a
+  fresh entry to stack on top of a live position.
+- **Quiet, efficient operation.** Failed orders/modifies log their broker
+  retcode, time-filter skip lines are deduplicated to one per episode (not
+  one per minute), duplicate symbols in the watch list are ignored, and the
+  trailing stop skips microscopic improvements (less than 0.3×ATR) to cut
+  broker request volume.
 
-Because the VPS builds reuse the same magic numbers as their standard
-counterparts, run only one variant of each anchor per account/symbol.
+The VPS builds carry their own magic numbers (`20260815` for H4-M1,
+`20260814` for H1-M1), so they can run alongside the standard builds and
+each other on the same account. They also use an extended kihon suchi cycle
+cap of 100 instead of the standard builds' 51 — see
+[Time Theory Filter](#time-theory-filter-kihon-suchi).
 
 ---
 
@@ -205,6 +223,31 @@ The Python monitor maps the same table onto its oldest→newest rows: row
 `n-1` is bar 1, the price-side cloud is read at row `n-1-Kijun`, and the
 chikou-side cloud at row `n-1-2×Kijun`.
 
+### Time Theory Filter (Kihon Suchi)
+
+Both H4/H1 builds include an optional Ichimoku time-theory filter
+(`InpUseTimeFilter`, default on): before entering on an aligned breakout,
+the EA counts how many candles the current move has already printed on each
+timeframe since the last touch of the Kijun-sen. If that count **exactly
+equals** one of the kihon suchi cycle numbers — the classic
+9 / 17 / 26 / 33 / 42 / 51 / 65 / 76 / 83 / 97 — the move is considered
+"mature" and the breakout is skipped as low probability; between cycles
+there is room for the move to continue to the next number.
+
+- **Count definition:** consecutive closed bars whose whole range stayed on
+  the move's side of the Kijun (above it for a long, below for a short); the
+  first touch or side violation stops the count.
+- **Cascade:** the anchor timeframe is checked first (H4 on the H4-M1 build,
+  H1 on the H1-M1 build), then the next lower one, and so on down to the exit
+  timeframe (M15 for H4-M1, M5 for H1-M1). A mature count anywhere in the
+  chain blocks the entry. Each timeframe's check is gated by its own input
+  flag (`InpTimeFilterH4` / `InpTimeFilterH1` / `InpTimeFilterM30` /
+  `InpTimeFilterM15` / `InpTimeFilterM5`).
+- **Cycle cap:** cycle numbers above the cap are ignored — 51 on the
+  standard builds, 100 on the VPS builds (`KIHON_MAX_CYCLE`). The VPS builds
+  ship `InpTimeCycles` trimmed to the cap; extra entries on the standard
+  builds are simply inert.
+
 ### Exit Logic
 
 - **H4-M1 build:** once the trade is in profit by at least
@@ -267,6 +310,8 @@ Above $8000, lot size is no longer fixed — it's computed by `RiskBasedLots()` 
 
 If a batch of orders is only partially filled (e.g. the broker runs out of margin partway through), the EA still tracks the position and exit logic correctly for whatever did open.
 
+The VPS builds add two more caps before the ladder is sent: `CapToRisk()` keeps the worst-case loss (the initial ATR stop hit on every order) at or below `InpMaxRiskPct`% of equity, and `CapToMargin()` shrinks the ladder until it fits the free margin so partial fills are the exception rather than the rule — see [VPS Deployment Builds](#vps-deployment-builds).
+
 ### Weekly Equity Alert
 
 This feature exists only in the standard builds — the
@@ -288,7 +333,7 @@ withdraw funds automatically.
 
 ### Installation
 
-1. Download the build you want from this repository. For hands-on trading use `ichimoku-h4-m1-ea.mq5` and/or `ichimoku-h1-m1-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead — see [VPS Deployment Builds](#vps-deployment-builds).
+1. Download the build you want from this repository. For hands-on trading use `ichimoku-h4-m1-ea.mq5` and/or `ichimoku-h1-m1-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead or alongside them — all five builds can share one account — see [VPS Deployment Builds](#vps-deployment-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
@@ -326,16 +371,21 @@ The standard builds share the same input set:
 | `InpCheckDay` | Friday | Day of week the equity alert is evaluated (standard builds) |
 | `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (standard builds) |
 | `InpSendPush` | `true` | Send push notifications for alerts (entries, exits, equity alert) |
-| `InpReentryCooldownSec` | 0 | Min seconds after an exit before re-entering the same symbol (VPS builds) |
-| `InpTrailMode` | `TRAIL_CHOPPY` | 0 = off, 1 = always, 2 = choppy-only via ADX (standard builds) |
-| `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M15) × multiplier for H4-M1, ATR(M5) × multiplier for H1-M1 (standard builds) |
-| `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ trail-timeframe ATR × multiplier (standard builds) |
-| `InpADXPeriod` | 14 | ADX period for choppy-market detection (exit timeframe, standard builds) |
-| `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode (standard builds) |
+| `InpReentryCooldownSec` | 1800 | Cooldown (seconds) after an exit before re-entering the same symbol — 30 min default, `0` disables (VPS builds) |
+| `InpMaxRiskPct` | 10.0 | Cap the worst-case ladder loss (initial ATR stop hit on every order) as % of equity (VPS builds) |
+| `InpTrailMode` | `TRAIL_CHOPPY` | 0 = off, 1 = always, 2 = choppy-only via ADX |
+| `InpTrailATR` | 2.0 | Chandelier trail distance = ATR(M15) × multiplier for H4-M1, ATR(M5) × multiplier for H1-M1 |
+| `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ trail-timeframe ATR × multiplier |
+| `InpADXPeriod` | 14 | ADX period for choppy-market detection (exit timeframe) |
+| `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode |
+| `InpUseTimeFilter` | `true` | Skip entries when a TF move count exactly equals a kihon suchi cycle (see [Time Theory Filter](#time-theory-filter-kihon-suchi)) |
+| `InpTimeCycles` | 9,17,…,97 | Kihon suchi cycle numbers; counts above the cap are ignored |
+| `InpTimeFilterH4` / `InpTimeFilterH1` | `true` | Enable the anchor-timeframe cycle check (H4 build / H1 build) |
+| `InpTimeFilterM30` / `InpTimeFilterM15` / `InpTimeFilterM5` | `true` | Enable the next cycle checks down the cascade |
 
 > The VPS deployment builds replace the four equity-alert inputs and
-> `InpSendPush` with `InpReentryCooldownSec` instead — see
-> [VPS Deployment Builds](#vps-deployment-builds).
+> `InpSendPush` with `InpReentryCooldownSec` and `InpMaxRiskPct` instead —
+> see [VPS Deployment Builds](#vps-deployment-builds).
 
 ## Timeframe Alignment Order
 
@@ -377,7 +427,11 @@ standard counterparts.
 
 ## Technical Notes
 
-- **Magic numbers:** `20260501` (H4-M1 build), `20260502` (H1-M1 build), and `20260806` (MS-W1-D1 build) — each EA only identifies and manages its own positions by its magic number, so they won't interfere with other EAs, each other, or manual trades on the same account. The VPS deployment builds reuse these same magic numbers, so they should replace (not run alongside) the standard builds.
+- **Magic numbers:** `20260501` (H4-M1 build), `20260502` (H1-M1 build),
+  `20260806` (MS-W1-D1 build), `20260815` (H4-M1 VPS), `20260814` (H1-M1 VPS)
+  — each EA only identifies and manages its own positions by its magic
+  number, so they won't interfere with other EAs, each other, or manual
+  trades on the same account. All five builds can run together.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.

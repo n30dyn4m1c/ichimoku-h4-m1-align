@@ -9,12 +9,15 @@
 //|        break even + a few points to cover the spread (BE30)      |
 //| Time theory: optional kihon suchi filter — a breakout is skipped |
 //|        when the H1/M30/M15/M5 move count (bars since the last    |
-//|        Kijun touch) equals a kihon suchi number up to 51 exactly |
-//|        (9/17/26/33/42/51). Nested: H1 is checked first, then M30,|
-//|        then M15, then M5 — each must be clear (not on a cycle)   |
-//|        before the next is checked; all clear => trade proceeds   |
+//|        Kijun touch) equals a kihon suchi number up to 100 exactly|
+//|        (9/17/26/33/42/51/65/76/83/97). Nested: H1 is checked     |
+//|        first, then M30, then M15, then M5 — each must be clear   |
+//|        (not on a cycle) before the next is checked; all clear    |
+//|        => trade proceeds                                         |
 //| VPS: no Alert popups or equity alerts; all logic runs only on    |
 //|        closed M1 bars (once per minute) to cut CPU usage         |
+//| Risk:   ladder orders capped by InpMaxRiskPct of equity and by   |
+//|        free margin; exits are verified so failed closes retry    |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -34,7 +37,8 @@ input int    InpATRPeriod         = 14;     // ATR period (M15)
 input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
-input int    InpReentryCooldownSec = 0;     // Min seconds after an exit before re-entering same symbol (0 = none)
+input int    InpReentryCooldownSec = 1800;  // Cooldown after an exit before re-entering same symbol (30 min default; 0 = none)
+input double InpMaxRiskPct         = 10.0;  // Cap total initial-stop risk per ladder as % of equity
 
 //--- Trail mode: off, always on, or choppy-only (ADX regime filter)
 enum ENUM_TRAIL_MODE { TRAIL_OFF = 0, TRAIL_ALWAYS = 1, TRAIL_CHOPPY = 2 };
@@ -54,8 +58,8 @@ input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers
 
 input group  "Time Theory (Kihon Suchi)"
 input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
-input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch
-input bool   InpTimeFilterH1   = true;    // Check H1 first (exact match, up to cycle 51)
+input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97"; // Ichimoku kihon suchi cycles up to the cap: bars since last Kijun touch
+input bool   InpTimeFilterH1   = true;    // Check H1 first (exact match, up to cycle 100)
 input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
 input bool   InpTimeFilterM15  = true;    // Check M15 next, only if M30 is clear
 input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
@@ -64,7 +68,7 @@ input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
 #define MAX_SYMS  60
 #define TF_COUNT  5
 #define IDX_M5    3   // index of M5 in tfs[] — used for exit check
-#define KIHON_MAX_CYCLE 51   // cycle cap on every timeframe: older moves are never "mature"
+#define KIHON_MAX_CYCLE 100   // cycle cap on every timeframe: older moves are never "mature"
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
    PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
@@ -78,6 +82,7 @@ string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime noReentryUntil[MAX_SYMS];
+int      lastSkipKey[MAX_SYMS];   // dedup time-filter skip logs (tfIdx * 10000 + count)
 int      lastMinuteKey = -1;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
@@ -109,6 +114,11 @@ int ParseSymbols(string list)
       string sym = parts[i];
       StringTrimLeft(sym);
       StringTrimRight(sym);
+      if(StringLen(sym) == 0) continue;
+      bool dup = false;
+      for(int j = 0; j < cnt; j++)
+         if(syms[j] == sym) { dup = true; break; }
+      if(dup) continue;
       if(SymbolSelect(sym, true)) syms[cnt++] = sym;
    }
    return cnt;
@@ -127,6 +137,7 @@ int OnInit()
       state[s] = 0;
       lastM1bar[s] = 0;
       noReentryUntil[s] = 0;
+      lastSkipKey[s] = -1;
       entryTime[s] = 0;
       beMoved[s] = false;
       for(int t = 0; t < TF_COUNT; t++)
@@ -364,7 +375,7 @@ void ParseCycles(string list)
 
 // True when the count exactly equals a cycle <= maxCycle (mature move).
 // Cycles beyond maxCycle are ignored — all timeframes cap at
-// KIHON_MAX_CYCLE (51).
+// KIHON_MAX_CYCLE (100).
 bool InTimeWindow(int count, int maxCycle)
 {
    for(int i = 0; i < g_cycleCount; i++)
@@ -379,7 +390,7 @@ bool InTimeWindow(int count, int maxCycle)
 // the move's side of the Kijun (above it for a long, below for a short).
 // Stops at the first touch or side violation — the count is the age of
 // the current move in bars on that timeframe. Lookback is bounded by
-// maxCycle so shallow history suffices (51 bars on any timeframe).
+// maxCycle so shallow history suffices (100 bars on any timeframe).
 int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
 {
    int want = maxCycle + 10;
@@ -408,9 +419,19 @@ int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
    return count;
 }
 
+// One skip line per (timeframe, count) episode instead of one per minute.
+void LogTimeSkip(int s, int tfIdx, int count, string tfName)
+{
+   int key = tfIdx * 10000 + count;
+   if(lastSkipKey[s] == key) return;
+   lastSkipKey[s] = key;
+   Print(PCTime() + " | " + syms[s] + " skip entry: " + tfName + " time cycle mature (count " + IntegerToString(count) + ")");
+}
+
 // Nested kihon suchi cascade: H1 -> M30 -> M15 -> M5. Each timeframe
 // must be clear (count not exactly on a cycle) before the next is
 // checked; a mature count anywhere in the chain blocks the breakout.
+// Each timeframe's check is gated by its own input flag.
 // Returns true when the entry was skipped.
 bool TimeFilterBlocks(int s, int st)
 {
@@ -421,35 +442,35 @@ bool TimeFilterBlocks(int s, int st)
       int c1 = CountNoTouchTF(s, 0, st, KIHON_MAX_CYCLE);
       if(InTimeWindow(c1, KIHON_MAX_CYCLE))
       {
-         Print(PCTime() + " | " + syms[s] + " skip entry: H1 time cycle mature (count " + IntegerToString(c1) + ")");
+         LogTimeSkip(s, 0, c1, "H1");
          return true;
       }
-      if(InpTimeFilterM30)
+   }
+   if(InpTimeFilterM30)
+   {
+      int c30 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
+      if(InTimeWindow(c30, KIHON_MAX_CYCLE))
       {
-         int c30 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
-         if(InTimeWindow(c30, KIHON_MAX_CYCLE))
-         {
-            Print(PCTime() + " | " + syms[s] + " skip entry: M30 time cycle mature (count " + IntegerToString(c30) + ")");
-            return true;
-         }
-         if(InpTimeFilterM15)
-         {
-            int c15 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
-            if(InTimeWindow(c15, KIHON_MAX_CYCLE))
-            {
-               Print(PCTime() + " | " + syms[s] + " skip entry: M15 time cycle mature (count " + IntegerToString(c15) + ")");
-               return true;
-            }
-            if(InpTimeFilterM5)
-            {
-               int c5 = CountNoTouchTF(s, IDX_M5, st, KIHON_MAX_CYCLE);
-               if(InTimeWindow(c5, KIHON_MAX_CYCLE))
-               {
-                  Print(PCTime() + " | " + syms[s] + " skip entry: M5 time cycle mature (count " + IntegerToString(c5) + ")");
-                  return true;
-               }
-            }
-         }
+         LogTimeSkip(s, 1, c30, "M30");
+         return true;
+      }
+   }
+   if(InpTimeFilterM15)
+   {
+      int c15 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
+      if(InTimeWindow(c15, KIHON_MAX_CYCLE))
+      {
+         LogTimeSkip(s, 2, c15, "M15");
+         return true;
+      }
+   }
+   if(InpTimeFilterM5)
+   {
+      int c5 = CountNoTouchTF(s, IDX_M5, st, KIHON_MAX_CYCLE);
+      if(InTimeWindow(c5, KIHON_MAX_CYCLE))
+      {
+         LogTimeSkip(s, IDX_M5, c5, "M5");
+         return true;
       }
    }
    return false;
@@ -542,11 +563,20 @@ void ManageTrail(int s)
 
       double slCur = PositionGetDouble(POSITION_SL);
 
-      // Only ever tighten, and keep out of the broker's minimum stop distance
-      if(isLong && slNew > slCur + point && slNew < price - minDist)
-         trade.PositionModify(ticket, slNew, 0);
-      if(!isLong && slNew < slCur - point && slNew > price + minDist)
-         trade.PositionModify(ticket, slNew, 0);
+      // Only ever tighten, keep out of the broker's minimum stop distance,
+      // and skip microscopic improvements (0.3x ATR) to cut request volume.
+      if(isLong && slNew > slCur + point && slNew < price - minDist &&
+         slNew - slCur >= 0.3 * atrVal)
+      {
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " trail SL modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+      }
+      if(!isLong && slNew < slCur - point && slNew > price + minDist &&
+         slCur - slNew >= 0.3 * atrVal)
+      {
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " trail SL modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+      }
    }
 }
 
@@ -585,6 +615,7 @@ void ManageBE(int s)
    double avg = AvgOpenPrice(s);
    if(avg <= 0) return;
 
+   if(atr[s] == INVALID_HANDLE) return;
    double a[1];
    if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
    double atrVal = a[0];
@@ -619,13 +650,17 @@ void ManageBE(int s)
       // Only ever tighten, and keep out of the broker's minimum stop distance
       if(isLong && slNew > slCur + point && slNew < price - minDist)
       {
-         trade.PositionModify(ticket, slNew, 0);
-         beMoved[s] = true;
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " BE SL modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+         else
+            beMoved[s] = true;
       }
       if(!isLong && slNew < slCur - point && slNew > price + minDist)
       {
-         trade.PositionModify(ticket, slNew, 0);
-         beMoved[s] = true;
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " BE SL modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+         else
+            beMoved[s] = true;
       }
    }
 }
@@ -699,6 +734,40 @@ void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
    else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count); }
 }
 
+// Scale the ladder down so the initial stop on all orders risks at most
+// InpMaxRiskPct% of equity. count never drops below 1.
+void CapToRisk(string sym, double dist, int &count, double &lots)
+{
+   if(count <= 0 || lots <= 0 || dist <= 0) return;
+   double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0 || tickSize <= 0) return;
+
+   double lossPerOrder = (dist / tickSize) * tickValue * lots;
+   if(lossPerOrder <= 0) return;
+
+   double budget = AccountInfoDouble(ACCOUNT_EQUITY) * (InpMaxRiskPct / 100.0);
+   int maxByRisk = (int)MathFloor(budget / lossPerOrder);
+   if(maxByRisk < 1) maxByRisk = 1;
+   if(count > maxByRisk) count = maxByRisk;
+}
+
+// Scale the ladder down to the free margin so the orders fill fully
+// instead of silently breaking mid-way. count never drops below 1.
+void CapToMargin(string sym, bool isBuy, int &count, double &lots)
+{
+   if(count <= 0 || lots <= 0) return;
+   double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                        : SymbolInfoDouble(sym, SYMBOL_BID);
+   double marginOne = 0.0;
+   if(!OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, sym, lots, price, marginOne))
+      return;
+   if(marginOne <= 0) return;
+   int maxByMargin = (int)MathFloor(AccountInfoDouble(ACCOUNT_MARGIN_FREE) / marginOne);
+   if(maxByMargin < 1) maxByMargin = 1;
+   if(count > maxByMargin) count = maxByMargin;
+}
+
 //==============================================================
 // Trading Functions
 //==============================================================
@@ -752,7 +821,10 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double
    return filled;
 }
 
-void ClosePositions(string sym)
+// Close all positions for the symbol; returns true only when none remain
+// open, so a failed close (requote, halt) is retried instead of freeing
+// the symbol for a fresh entry.
+bool ClosePositions(string sym)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -762,9 +834,19 @@ void ClosePositions(string sym)
       if(PositionGetString(POSITION_SYMBOL) == sym &&
          (int)PositionGetInteger(POSITION_MAGIC) == MAGIC)
       {
-         trade.PositionClose(ticket);
+         if(!trade.PositionClose(ticket))
+            Print(PCTime() + " | " + sym + " close failed, retcode " + IntegerToString(trade.ResultRetcode()));
       }
    }
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) == sym &&
+         (int)PositionGetInteger(POSITION_MAGIC) == MAGIC) return false;
+   }
+   return true;
 }
 
 //==============================================================
@@ -800,9 +882,13 @@ void OnTick()
          string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M5 kijun crossed)";
          Print(msg); SendNotification(msg);
 
-         ClosePositions(syms[s]);
-         state[s] = 0;
-         noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
+         if(ClosePositions(syms[s]))
+         {
+            state[s] = 0;
+            noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
+         }
+         else
+            Print(PCTime() + " | " + syms[s] + " exit signal but positions still open — will retry");
       }
 
       // Chandelier trail: tighten stops behind the peak on each new M1 bar
@@ -829,6 +915,8 @@ void OnTick()
 
             int count; double lots;
             GetEquityRisk(syms[s], dist, count, lots);
+            CapToRisk(syms[s], dist, count, lots);
+            CapToMargin(syms[s], isBuy, count, lots);
 
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
