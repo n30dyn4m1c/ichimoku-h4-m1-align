@@ -770,7 +770,47 @@ counts — no credit for a trade that flickered profitable and faded.
 
 Identical to the main H4-M1 EA: H4→M1 price+chikou alignment, spread gate,
 same equity-scaled lot sizing, and the ATR(M15) × 3 protective stop on
-every position.
+every position — plus the optional **kihon suchi time-theory filter**
+below.
+
+### Time theory (kihon suchi) filter
+
+At the breakout moment the EA counts, per timeframe, the consecutive
+closed bars since the last **Kijun touch** (a candle whose high–low
+straddles the Kijun, or slips to the wrong side of it, ends the streak) —
+the same count convention as the H1-M1 reversion EA (section 2). The count
+is the age of the move on that timeframe.
+
+- **On a cycle** — the H4 or M15 count lands within `InpTimeTol` of a
+  kihon suchi number (`9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676`
+  by default): the
+  move has **matured**
+  and a direction change is due ⇒ the breakout is **skipped** (logged as
+  `skip entry: time cycle mature`, with the offending counts).
+- **Between cycles** — neither count is near a cycle: the move has room to
+  run until the next number ⇒ the breakout qualifies as a **continuation**
+  and the entry proceeds.
+
+Counts past the largest cycle are always allowed (long trends don't get
+starved). This is a filter only — entries are gated, nothing else changes.
+
+**Timeframe caps** — both H4 and M15 only check cycles up to 51, so the
+deep cycles (`65…676`) are never used and older moves are never flagged
+mature. The lookback stays shallow: 51 H4 bars ≈ 8.5 days, 51 M15 bars
+≈ 12.75 hours.
+
+| Timeframe | Cap | Cycles checked |
+|-----------|-----|----------------|
+| H4 | `51` bars | `9,17,26,33,42,51` |
+| M15 | `51` bars | `9,17,26,33,42,51` |
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpUseTimeFilter` | `true` | Master switch for the time-theory filter |
+| `InpTimeCycles` | `9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676` | Kihon suchi cycle list (comma-separated) |
+| `InpTimeTol` | 2 | ± bars around a cycle treated as mature |
+| `InpTimeFilterH4` | `true` | Apply the cycle filter on H4 |
+| `InpTimeFilterM15` | `true` | Apply the cycle filter on M15 |
 
 ### Break-even (BE15) logic
 
