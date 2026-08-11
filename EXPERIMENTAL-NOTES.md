@@ -690,3 +690,135 @@ All other inputs are identical to the main H4-M1 EA (see
   EA for a long stretch in side-slipping trends.
 - `InpTouchCloseAbove = false` is the raw "touch the Kijun" version — the study
   says that halves the win rate (26.5%); leave it on unless you're testing.
+
+## 8. H4-M1 BE30 Alignment EA (break-even stop experiment)
+
+**File:** `experimental-h4-m1-be30-ea.mq5`
+
+A fork of the main H4-M1 Alignment EA that adds one exit-management
+experiment: if price reaches a profitable position within `InpBE30Minutes`
+of entry, the stop loss is moved **to break even plus a few points** (to
+cover the spread) instead of leaving the full ATR(M15) protective stop
+exposed. The idea is to cut losers to breakeven early and ride winners —
+a cheaper safety net than the chandelier trail, which only arms once
+profit reaches 1.0 × ATR(M15).
+
+### Entry logic
+
+Identical to the main H4-M1 EA: H4→M1 price+chikou alignment, spread gate,
+same equity-scaled lot sizing, and the ATR(M15) × 3 protective stop on
+every position.
+
+### Break-even (BE30) logic
+
+Checked once per new M1 bar while a position is open:
+
+1. **Window:** the trade must turn profitable within `InpBE30Minutes`
+   (default 30) of entry. After the window closes without profit, the
+   stop stays where it is for that trade — no second chance.
+2. **Profitability:** for a long, `bid ≥ average open price + 0.5 ×
+   ATR(M15)` (`InpBE30ActivateATR`); mirrored for shorts with `ask`. The
+   average open price is volume-weighted across the batch, so a
+   multi-fill entry uses its true breakeven point.
+3. **Move:** the stop is set to `average open ± InpBE30CoverPoints` points
+   (default 15) — break even plus a small buffer to cover the spread.
+   The move is tighten-only (never lowers the existing stop) and respects
+   the broker's minimum stop distance.
+
+The move is one-shot per trade (`beMoved`); afterwards the chandelier
+trail (if enabled) may tighten the stop further as the peak grows. On an
+EA restart mid-trade, the window is rebuilt from the position's open time.
+
+### BE30 inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpBE30Enabled` | `true` | Move SL to break even when profitable in time |
+| `InpBE30Minutes` | 30 | Profit window after entry (minutes) |
+| `InpBE30ActivateATR` | 0.5 | Min profit to arm BE (× ATR M15) |
+| `InpBE30CoverPoints` | 15 | Points beyond break even (covers spread) |
+
+All other inputs are identical to the main H4-M1 EA (see
+[README](README.md#configuration-inputs)).
+
+### Status & caveats
+
+- **Not yet backtested.** Suggested first pass: run the same symbol/period
+  with `InpBE30Enabled = true` vs `false` on otherwise identical settings —
+  the `false` run is the known H4-M1 baseline.
+- With the default `InpTrailMode = TRAIL_CHOPPY`, the chandelier trail can
+  tighten stops above the BE30 level once profit grows; BE30 mainly
+  protects the stretch between entry and trail activation.
+- `InpBE30ActivateATR = 0` arms BE at the first tick price moves past
+  entry — expect the stop to trigger on small noise; a small activation
+  buffer is what makes the "few points of cover" meaningful.
+- Like the trail, BE30 needs the ATR(M15) handle, so it is inactive when
+  `InpUseStopLoss = false`.
+
+## 9. H4-M1 BE15 Alignment EA (profit-streak break-even experiment)
+
+**File:** `experimental-h4-m1-be15-ea.mq5`
+
+A fork of the main H4-M1 Alignment EA testing the reverse timing of the
+BE30 experiment (section 8): instead of a fixed window from entry, the
+stop loss moves to **break even plus a few points** once the trade has
+been **in profit continuously for `InpBE15Minutes`** (default 15). A dip
+back to break even resets the streak, so only sustained profit time
+counts — no credit for a trade that flickered profitable and faded.
+
+### Entry logic
+
+Identical to the main H4-M1 EA: H4→M1 price+chikou alignment, spread gate,
+same equity-scaled lot sizing, and the ATR(M15) × 3 protective stop on
+every position.
+
+### Break-even (BE15) logic
+
+Checked once per new M1 bar while a position is open:
+
+1. **In profit?** for a long, `bid ≥ average open price + 0.5 × ATR(M15)`
+   (`InpBE15ActivateATR`); mirrored for shorts with `ask`. The average
+   open price is volume-weighted across the batch.
+2. **Streak:** each bar in profit continues the timer; any bar back at or
+   below break even resets it to zero. When the streak reaches
+   `InpBE15Minutes` the stop moves — even if the trade is no longer at the
+   activation buffer at that exact moment, as long as it never dipped
+   below break even.
+3. **Move:** the stop is set to `average open ± InpBE15CoverPoints` points
+   (default 15) — break even plus a small buffer to cover the spread.
+   The move is tighten-only and respects the broker's minimum stop
+   distance.
+
+The move is one-shot per trade (`beMoved`); afterwards the chandelier
+trail (if enabled) may tighten the stop further. On an EA restart
+mid-trade the streak starts fresh — how long the trade was already in
+profit cannot be recovered.
+
+### BE15 inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpBE15Enabled` | `true` | Move SL to break even after time in profit |
+| `InpBE15Minutes` | 15 | Consecutive minutes in profit required |
+| `InpBE15ActivateATR` | 0.5 | Min profit to count as "in profit" (× ATR M15) |
+| `InpBE15CoverPoints` | 15 | Points beyond break even (covers spread) |
+
+All other inputs are identical to the main H4-M1 EA (see
+[README](README.md#configuration-inputs)).
+
+### Status & caveats
+
+- **Not yet backtested.** Suggested first pass: run the same symbol/period
+  with `InpBE15Enabled = true` vs `false` on otherwise identical settings,
+  ideally side-by-side with the BE30 build — the two break-even timings
+  (window-from-entry vs continuous-profit-streak) are the variable under
+  test.
+- The streak resets on any dip below break even, so a trade that keeps
+  teasing its entry point may never arm the break-even stop even though
+  BE30 (section 8) would have moved it on the first 30-minute profitable
+  window.
+- With the default `InpTrailMode = TRAIL_CHOPPY`, the chandelier trail can
+  tighten stops above the BE15 level once profit grows; BE15 mainly
+  protects the stretch between entry and trail activation.
+- Like the trail, BE15 needs the ATR(M15) handle, so it is inactive when
+  `InpUseStopLoss = false`.
