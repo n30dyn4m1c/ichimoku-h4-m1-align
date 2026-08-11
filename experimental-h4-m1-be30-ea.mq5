@@ -718,23 +718,23 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count)
 void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq <= 30)        { count = 2;  lots = 0.10; }
-   else if(eq <= 50)   { count = 2;  lots = 0.10; }
-   else if(eq <= 70)   { count = 4;  lots = 0.10; }
-   else if(eq <= 100)  { count = 4;  lots = 0.10; }
-   else if(eq <= 130)  { count = 6;  lots = 0.10; }
-   else if(eq <= 150)  { count = 8;  lots = 0.10; }
-   else if(eq <= 170)  { count = 10; lots = 0.10; }
-   else if(eq <= 200)  { count = 6;  lots = 0.20; }
-   else if(eq <= 300)  { count = 4;  lots = 0.30; }
-   else if(eq <= 400)  { count = 6;  lots = 0.30; }
-   else if(eq <= 500)  { count = 6;  lots = 0.30; }
-   else if(eq <= 600)  { count = 8;  lots = 0.30; }
-   else if(eq <= 1000) { count = 4;  lots = 0.50; }
-   else if(eq <= 3000) { count = 4;  lots = 0.30; }
-   else if(eq <= 5000) { count = 4;  lots = 0.20; }
-   else if(eq <= 8000) { count = 4;  lots = 0.10; }
-   else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count); }
+   if(eq <= 30)        { count = 4;  lots = 0.10; }
+   else if(eq <= 50)   { count = 4;  lots = 0.10; }
+   else if(eq <= 70)   { count = 8;  lots = 0.10; }
+   else if(eq <= 100)  { count = 8;  lots = 0.10; }
+   else if(eq <= 130)  { count = 12;  lots = 0.10; }
+   else if(eq <= 150)  { count = 16;  lots = 0.10; }
+   else if(eq <= 170)  { count = 20; lots = 0.10; }
+   else if(eq <= 200)  { count = 12;  lots = 0.20; }
+   else if(eq <= 300)  { count = 8;  lots = 0.30; }
+   else if(eq <= 400)  { count = 12;  lots = 0.30; }
+   else if(eq <= 500)  { count = 12;  lots = 0.30; }
+   else if(eq <= 600)  { count = 16;  lots = 0.30; }
+   else if(eq <= 1000) { count = 8;  lots = 0.50; }
+   else if(eq <= 3000) { count = 8;  lots = 0.30; }
+   else if(eq <= 5000) { count = 8;  lots = 0.20; }
+   else if(eq <= 8000) { count = 8;  lots = 0.10; }
+   else                { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count); }
 }
 
 //==============================================================
