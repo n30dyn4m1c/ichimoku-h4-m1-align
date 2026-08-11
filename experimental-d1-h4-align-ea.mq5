@@ -17,7 +17,7 @@
 //|        (then H1, off by default) — each must be clear (not on a   |
 //|        cycle) before the next is consulted                        |
 //| Risk:  flat risk-based tiers across a 4-order ladder: 20% risk |
-//|        up to $15k, 10% risk $15k-$20k, 5% risk above $20k;     |
+//|        up to $8k, 10% risk $8k-$13k, 5% risk above $13k;       |
 //|        caps by InpMaxRiskPct (0 = off) and by free margin;      |
 //|        exits are verified so failed closes retry               |
 //| VPS: no Alert popups or equity alerts; all logic runs only on     |
@@ -702,12 +702,12 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count, double r
 }
 
 // Flat risk-based tiers across a 4-order ladder: 20% risk up to
-// $15k, 10% risk $15k-$20k, 5% risk above $20k.
+// $8k, 10% risk $8k-$13k, 5% risk above $13k.
 void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq <= 15000){ count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 20.0); }
-   else if(eq <= 20000){ count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 10.0); }
+   if(eq <= 8000){ count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 20.0); }
+   else if(eq <= 13000){ count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 10.0); }
    else                { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count, 5.0); }
 }
 
