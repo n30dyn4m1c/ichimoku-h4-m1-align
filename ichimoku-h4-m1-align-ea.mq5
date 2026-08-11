@@ -1,20 +1,18 @@
 //+------------------------------------------------------------------+
-//| Ichimoku H1-M1 Alignment EA (BE30) — VPS build                   |
-//| Entry: H1→M1 price+chikou all above/below tenkan,kijun,cloud    |
+//| Ichimoku H4-M1 Alignment EA (BE30)                               |
+//| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
 //| Exit:  ATR chandelier trailing stop once profitable (locks in    |
-//|        the peak), M5 close crosses M5 kijun as final fallback,   |
+//|        the peak), M15 close crosses M15 kijun as final fallback, |
 //|        or ATR-based protective stop loss                         |
 //| Experiment: if price reaches a profitable position within        |
 //|        InpBE30Minutes of entry, the stop loss moves up to        |
 //|        break even + a few points to cover the spread (BE30)      |
 //| Time theory: optional kihon suchi filter — a breakout is skipped |
-//|        when the H1/M30/M15/M5 move count (bars since the last    |
+//|        when the H4/H1/M30/M15 move count (bars since the last    |
 //|        Kijun touch) equals a kihon suchi number up to 51 exactly |
-//|        (9/17/26/33/42/51). Nested: H1 is checked first, then M30,|
-//|        then M15, then M5 — each must be clear (not on a cycle)   |
+//|        (9/17/26/33/42/51). Nested: H4 is checked first, then H1, |
+//|        then M30, then M15 — each must be clear (not on a cycle)  |
 //|        before the next is checked; all clear => trade proceeds   |
-//| VPS: no Alert popups or equity alerts; all logic runs only on    |
-//|        closed M1 bars (once per minute) to cut CPU usage         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -41,9 +39,9 @@ enum ENUM_TRAIL_MODE { TRAIL_OFF = 0, TRAIL_ALWAYS = 1, TRAIL_CHOPPY = 2 };
 
 input group  "Exit Management"
 input ENUM_TRAIL_MODE InpTrailMode        = TRAIL_CHOPPY;  // 0=off, 1=always, 2=choppy-only (ADX)
-input double          InpTrailATR         = 2.0;   // Trail distance = ATR(M5) * multiplier
-input double          InpTrailActivateATR = 1.0;   // Arm the trail once profit >= ATR(M5) * multiplier
-input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (M5)
+input double          InpTrailATR         = 2.0;   // Trail distance = ATR(M15) * multiplier
+input double          InpTrailActivateATR = 1.0;   // Arm the trail once profit >= ATR(M15) * multiplier
+input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (M15)
 input double          InpChopADXLevel     = 22.0;  // ADX below this = choppy -> trail on in auto mode
 
 input group  "Break-Even (BE30) Management"
@@ -55,30 +53,36 @@ input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers
 input group  "Time Theory (Kihon Suchi)"
 input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
 input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch
-input bool   InpTimeFilterH1   = true;    // Check H1 first (exact match, up to cycle 51)
+input bool   InpTimeFilterH4   = true;    // Check H4 first (exact match, up to cycle 51)
+input bool   InpTimeFilterH1   = true;    // Check H1 next, only if H4 is clear
 input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
-input bool   InpTimeFilterM15  = true;    // Check M15 next, only if M30 is clear
-input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
+input bool   InpTimeFilterM15  = true;    // Check M15 last, only if M30 is clear
+
+input group             "Equity Alert Settings"
+input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
+input double            InpWithdrawProfitPct = 50.0;       // Percentage of the PROFIT to withdraw
+input ENUM_DAY_OF_WEEK  InpCheckDay          = FRIDAY;     // Day of the week to check
+input bool              InpResetBaseline     = false;      // Set to true to reset baseline to current equity
+input bool              InpSendPush          = true;       // Send push notification
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
-#define TF_COUNT  5
-#define IDX_M5    3   // index of M5 in tfs[] — used for exit check
+#define TF_COUNT  6
+#define IDX_M15   3   // index of M15 in tfs[] — used for exit check
 #define KIHON_MAX_CYCLE 51   // cycle cap on every timeframe: older moves are never "mature"
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
-   PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
+   PERIOD_H4, PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
 };
 
 int      ich[MAX_SYMS][TF_COUNT];
 int      atr[MAX_SYMS];
-int      atrExit[MAX_SYMS];   // ATR(M5) handle for the chandelier trail
-int      adx[MAX_SYMS];   // ADX(M5) handle for choppy-market regime detection
+int      adx[MAX_SYMS];   // ADX(M15) handle for choppy-market regime detection
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime noReentryUntil[MAX_SYMS];
-int      lastMinuteKey = -1;
+datetime lastH4bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
 double   entryPrice[MAX_SYMS];  // reference entry price per symbol (trail arming)
@@ -91,7 +95,10 @@ bool     beMoved[MAX_SYMS];     // BE30 stop already moved to break even (one-sh
 int  g_cycles[];        // parsed kihon suchi cycle list (9,17,26,...,676 by default)
 int  g_cycleCount = 0;  // number of parsed cycles
 
-int MAGIC = 20260814;   // distinct from the other H1-M1 builds so both can run on one account
+int MAGIC = 20260811;   // distinct from the other H4-M1 builds so both can run on one account
+
+#define GV_BASE_EQUITY    "EA_EquityAlert_Base_"    + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+#define GV_LAST_ALERT_DAY "EA_EquityAlert_Day_"     + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
 
 CTrade trade;
 
@@ -142,25 +149,60 @@ int OnInit()
          if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
-      atrExit[s] = INVALID_HANDLE;
-      if(InpTrailMode != TRAIL_OFF)
-      {
-         atrExit[s] = iATR(syms[s], PERIOD_M5, InpATRPeriod);
-         if(atrExit[s] == INVALID_HANDLE) return(INIT_FAILED);
-      }
-
       adx[s] = INVALID_HANDLE;
       if(InpTrailMode == TRAIL_CHOPPY)
       {
-         adx[s] = iADX(syms[s], PERIOD_M5, InpADXPeriod);
+         adx[s] = iADX(syms[s], PERIOD_M15, InpADXPeriod);
          if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
    trade.SetDeviationInPoints(Slippage);
-   trade.SetExpertMagicNumber(MAGIC);
    SyncStateFromPositions();
+   InitEquityAlert();
    return(INIT_SUCCEEDED);
+}
+
+//==============================================================
+// Equity Alert: weekly profit-withdrawal reminder
+//==============================================================
+
+void InitEquityAlert()
+{
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!GlobalVariableCheck(GV_BASE_EQUITY) || InpResetBaseline)
+   {
+      GlobalVariableSet(GV_BASE_EQUITY, currentEquity);
+   }
+   if(!GlobalVariableCheck(GV_LAST_ALERT_DAY))
+   {
+      GlobalVariableSet(GV_LAST_ALERT_DAY, 0);
+   }
+}
+
+void CheckEquityAlert()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+
+   if(dt.day_of_week != InpCheckDay) return;
+   if((int)GlobalVariableGet(GV_LAST_ALERT_DAY) == dt.day) return;
+
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double baseEquity    = GlobalVariableGet(GV_BASE_EQUITY);
+   double profit        = currentEquity - baseEquity;
+
+   if(profit >= InpMinProfitTrigger)
+   {
+      double withdrawAmount = profit * (InpWithdrawProfitPct / 100.0);
+      string msg = StringFormat("Profit: %.2f. Suggest withdrawing: %.2f", profit, withdrawAmount);
+
+      Alert(msg);
+      if(InpSendPush) SendNotification(msg);
+
+      GlobalVariableSet(GV_LAST_ALERT_DAY, (double)dt.day);
+      GlobalVariablesFlush();
+   }
 }
 
 void OnDeinit(const int reason)
@@ -168,9 +210,8 @@ void OnDeinit(const int reason)
    for(int s = 0; s < symsCount; s++)
    {
       for(int t = 0; t < TF_COUNT; t++)
-         if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
+         IndicatorRelease(ich[s][t]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
-      if(atrExit[s] != INVALID_HANDLE) IndicatorRelease(atrExit[s]);
       if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
    }
 }
@@ -309,7 +350,7 @@ int CheckAlign(int s, int tfIdx)
 }
 
 //==============================================================
-// Entry Check: all timeframes (H1→M1) aligned same direction
+// Entry Check: all timeframes (H4→M1) aligned same direction
 //==============================================================
 
 int CheckAllAlign(int s)
@@ -338,7 +379,7 @@ int CheckAllAlign(int s)
 // suchi number up to 51 the move is mature and the breakout is low
 // probability; between cycles there is room for the move to continue
 // to the next number — the continuation case. The cascade below
-// checks H1 first, then M30, then M15, then M5 — each must be clear
+// checks H4 first, then H1, then M30, then M15 — each must be clear
 // before the next is consulted.
 
 // Parse the kihon suchi cycle list into g_cycles[].
@@ -408,7 +449,7 @@ int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
    return count;
 }
 
-// Nested kihon suchi cascade: H1 -> M30 -> M15 -> M5. Each timeframe
+// Nested kihon suchi cascade: H4 -> H1 -> M30 -> M15. Each timeframe
 // must be clear (count not exactly on a cycle) before the next is
 // checked; a mature count anywhere in the chain blocks the breakout.
 // Returns true when the entry was skipped.
@@ -416,36 +457,36 @@ bool TimeFilterBlocks(int s, int st)
 {
    if(!InpUseTimeFilter) return false;
 
-   if(InpTimeFilterH1)
+   if(InpTimeFilterH4)
    {
-      int c1 = CountNoTouchTF(s, 0, st, KIHON_MAX_CYCLE);
-      if(InTimeWindow(c1, KIHON_MAX_CYCLE))
+      int c4 = CountNoTouchTF(s, 0, st, KIHON_MAX_CYCLE);
+      if(InTimeWindow(c4, KIHON_MAX_CYCLE))
       {
-         Print(PCTime() + " | " + syms[s] + " skip entry: H1 time cycle mature (count " + IntegerToString(c1) + ")");
+         Print(PCTime() + " | " + syms[s] + " skip entry: H4 time cycle mature (count " + IntegerToString(c4) + ")");
          return true;
       }
-      if(InpTimeFilterM30)
+      if(InpTimeFilterH1)
       {
-         int c30 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
-         if(InTimeWindow(c30, KIHON_MAX_CYCLE))
+         int c1 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
+         if(InTimeWindow(c1, KIHON_MAX_CYCLE))
          {
-            Print(PCTime() + " | " + syms[s] + " skip entry: M30 time cycle mature (count " + IntegerToString(c30) + ")");
+            Print(PCTime() + " | " + syms[s] + " skip entry: H1 time cycle mature (count " + IntegerToString(c1) + ")");
             return true;
          }
-         if(InpTimeFilterM15)
+         if(InpTimeFilterM30)
          {
-            int c15 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
-            if(InTimeWindow(c15, KIHON_MAX_CYCLE))
+            int c30 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
+            if(InTimeWindow(c30, KIHON_MAX_CYCLE))
             {
-               Print(PCTime() + " | " + syms[s] + " skip entry: M15 time cycle mature (count " + IntegerToString(c15) + ")");
+               Print(PCTime() + " | " + syms[s] + " skip entry: M30 time cycle mature (count " + IntegerToString(c30) + ")");
                return true;
             }
-            if(InpTimeFilterM5)
+            if(InpTimeFilterM15)
             {
-               int c5 = CountNoTouchTF(s, IDX_M5, st, KIHON_MAX_CYCLE);
-               if(InTimeWindow(c5, KIHON_MAX_CYCLE))
+               int c15 = CountNoTouchTF(s, IDX_M15, st, KIHON_MAX_CYCLE);
+               if(InTimeWindow(c15, KIHON_MAX_CYCLE))
                {
-                  Print(PCTime() + " | " + syms[s] + " skip entry: M5 time cycle mature (count " + IntegerToString(c5) + ")");
+                  Print(PCTime() + " | " + syms[s] + " skip entry: M15 time cycle mature (count " + IntegerToString(c15) + ")");
                   return true;
                }
             }
@@ -456,16 +497,16 @@ bool TimeFilterBlocks(int s, int st)
 }
 
 //==============================================================
-// Exit Check: M5 price closed on wrong side of M5 kijun
+// Exit Check: M15 price closed on wrong side of M15 kijun
 //==============================================================
 
-bool CheckM5Exit(int s, int dir)
+bool CheckM15Exit(int s, int dir)
 {
    double kij[1];
-   if(CopyBuffer(ich[s][IDX_M5], 1, 1, 1, kij) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_M15], 1, 1, 1, kij) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M5, 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], PERIOD_M15, 1, 1, rt) <= 0) return false;
    double closeP = rt[0].close;
 
    if(dir ==  1 && closeP < kij[0]) return true;
@@ -474,7 +515,7 @@ bool CheckM5Exit(int s, int dir)
 }
 
 //==============================================================
-// Choppy-market detection: ADX(M5) below InpChopADXLevel means no
+// Choppy-market detection: ADX(M15) below InpChopADXLevel means no
 // trend, so the trail is allowed. An unready/unknown ADX value is
 // treated as choppy (trail on) to match the always-on default.
 //==============================================================
@@ -488,7 +529,7 @@ bool IsChoppy(int s)
 
 //==============================================================
 // Exit Trail: ATR chandelier stop once the trade is in profit.
-// The reference point is the extreme (high/low) of the M5 bar
+// The reference point is the extreme (high/low) of the M15 bar
 // that is still forming, so a peak is locked in before it
 // retraces. Re-evaluated on every new M1 bar; only ever
 // tightens and never sits inside the broker minimum stop.
@@ -500,23 +541,22 @@ void ManageTrail(int s)
    if(InpTrailMode == TRAIL_CHOPPY && !IsChoppy(s)) return;
 
    double atrVal;
-   if(atrExit[s] == INVALID_HANDLE) return;
    double a[1];
-   if(CopyBuffer(atrExit[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
+   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
    atrVal = a[0];
 
-   MqlRates m5[];
-   if(CopyRates(syms[s], PERIOD_M5, 0, 1, m5) <= 0) return;
-   ArraySetAsSeries(m5, true);
+   MqlRates m15[];
+   if(CopyRates(syms[s], PERIOD_M15, 0, 1, m15) <= 0) return;
+   ArraySetAsSeries(m15, true);
 
    bool isLong = (state[s] == 1);
    if(isLong)
    {
-      if(m5[0].high > trailHigh[s]) trailHigh[s] = m5[0].high;
+      if(m15[0].high > trailHigh[s]) trailHigh[s] = m15[0].high;
    }
    else
    {
-      if(m5[0].low < trailLow[s]) trailLow[s] = m5[0].low;
+      if(m15[0].low < trailLow[s]) trailLow[s] = m15[0].low;
    }
 
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
@@ -680,23 +720,23 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count)
 void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq <= 30)        { count = 2;  lots = 0.10; }
-   else if(eq <= 50)   { count = 2;  lots = 0.10; }
-   else if(eq <= 70)   { count = 4;  lots = 0.10; }
-   else if(eq <= 100)  { count = 4;  lots = 0.10; }
-   else if(eq <= 130)  { count = 6;  lots = 0.10; }
-   else if(eq <= 150)  { count = 8;  lots = 0.10; }
-   else if(eq <= 170)  { count = 10; lots = 0.10; }
-   else if(eq <= 200)  { count = 6;  lots = 0.20; }
-   else if(eq <= 300)  { count = 4;  lots = 0.30; }
-   else if(eq <= 400)  { count = 6;  lots = 0.30; }
-   else if(eq <= 500)  { count = 6;  lots = 0.30; }
-   else if(eq <= 600)  { count = 8;  lots = 0.30; }
-   else if(eq <= 1000) { count = 4;  lots = 0.50; }
-   else if(eq <= 3000) { count = 4;  lots = 0.30; }
-   else if(eq <= 5000) { count = 4;  lots = 0.20; }
-   else if(eq <= 8000) { count = 4;  lots = 0.10; }
-   else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count); }
+   if(eq <= 30)        { count = 4;  lots = 0.10; }
+   else if(eq <= 50)   { count = 4;  lots = 0.10; }
+   else if(eq <= 70)   { count = 8;  lots = 0.10; }
+   else if(eq <= 100)  { count = 8;  lots = 0.10; }
+   else if(eq <= 130)  { count = 12;  lots = 0.10; }
+   else if(eq <= 150)  { count = 16;  lots = 0.10; }
+   else if(eq <= 170)  { count = 20; lots = 0.10; }
+   else if(eq <= 200)  { count = 12;  lots = 0.20; }
+   else if(eq <= 300)  { count = 8;  lots = 0.30; }
+   else if(eq <= 400)  { count = 12;  lots = 0.30; }
+   else if(eq <= 500)  { count = 12;  lots = 0.30; }
+   else if(eq <= 600)  { count = 16;  lots = 0.30; }
+   else if(eq <= 1000) { count = 8;  lots = 0.50; }
+   else if(eq <= 3000) { count = 8;  lots = 0.30; }
+   else if(eq <= 5000) { count = 8;  lots = 0.20; }
+   else if(eq <= 8000) { count = 8;  lots = 0.10; }
+   else                { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count); }
 }
 
 //==============================================================
@@ -735,6 +775,8 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double
 {
    string sym = syms[s];
 
+   trade.SetExpertMagicNumber(MAGIC);
+
    int filled = 0;
    firstFill = 0.0;
    for(int i = 0; i < count; i++)
@@ -743,8 +785,8 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double
                            : SymbolInfoDouble(sym, SYMBOL_BID);
       double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
 
-      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy H1-M1")
-                      : trade.Sell(lots, sym, price, sl, 0, "Sell H1-M1");
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy H4-M1")
+                      : trade.Sell(lots, sym, price, sl, 0, "Sell H4-M1");
       if(!ok) break;   // out of margin or rejected — don't hammer the server
       if(firstFill == 0.0) firstFill = price;
       filled++;
@@ -773,11 +815,13 @@ void ClosePositions(string sym)
 
 void OnTick()
 {
-   // VPS perf: all logic runs only on closed M1 bars, which change at most
-   // once per minute. Skip every intermediate tick entirely.
-   int nowKey = (int)(TimeCurrent() / 60);
-   if(nowKey == lastMinuteKey) return;
-   lastMinuteKey = nowKey;
+   // Equity alert: fire only on a new H4 bar (CheckEquityAlert self-guards on day-of-week)
+   MqlRates h4[];
+   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H4, 0, 1, h4) > 0 && h4[0].time != lastH4bar)
+   {
+      lastH4bar = h4[0].time;
+      CheckEquityAlert();
+   }
 
    bool synced = false;
    for(int s = 0; s < symsCount; s++)
@@ -793,12 +837,12 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: close all when M5 closes against direction across M5 kijun
-      if(state[s] != 0 && CheckM5Exit(s, state[s]))
+      // Exit check: close all when M15 closes against direction across M15 kijun
+      if(state[s] != 0 && CheckM15Exit(s, state[s]))
       {
          string side = (state[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M5 kijun crossed)";
-         Print(msg); SendNotification(msg);
+         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
+         Print(msg); Alert(msg); SendNotification(msg);
 
          ClosePositions(syms[s]);
          state[s] = 0;
@@ -811,15 +855,15 @@ void OnTick()
       // BE30: move the stop to break even + cover if profitable in time
       if(state[s] != 0) ManageBE(s);
 
-      // Entry check: all timeframes H1→M1 must align, spread must be sane
+      // Entry check: all timeframes H4→M1 must align, spread must be sane
       if(state[s] == 0 && TimeCurrent() >= noReentryUntil[s] && SpreadOK(syms[s]))
       {
          int st = CheckAllAlign(s);
          if(st != 0)
          {
-            // Time theory: nested kihon suchi cascade — H1 must be
-            // clear (count not exactly on a cycle) before M30 is
-            // checked, then M15, then M5. A mature count anywhere in
+            // Time theory: nested kihon suchi cascade — H4 must be
+            // clear (count not exactly on a cycle) before H1 is
+            // checked, then M30, then M15. A mature count anywhere in
             // the chain blocks the entry.
             if(TimeFilterBlocks(s, st)) continue;
 
@@ -846,8 +890,8 @@ void OnTick()
                string action = isBuy ? "Buy" : "Sell";
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +
-                            " @ " + DoubleToString(lots, 2) + " (H1-M1)";
-               Print(msg); SendNotification(msg);
+                            " @ " + DoubleToString(lots, 2) + " (H4-M1)";
+               Print(msg); Alert(msg); SendNotification(msg);
             }
             else
                Print(PCTime() + " | " + syms[s] + " entry signal but no order filled");

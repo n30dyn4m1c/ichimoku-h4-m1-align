@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Ichimoku H1-M1 Alignment EA (BE30) — VPS build                   |
+//| Ichimoku H1-M1 Alignment EA (BE30)                               |
 //| Entry: H1→M1 price+chikou all above/below tenkan,kijun,cloud    |
 //| Exit:  ATR chandelier trailing stop once profitable (locks in    |
 //|        the peak), M5 close crosses M5 kijun as final fallback,   |
@@ -13,8 +13,6 @@
 //|        (9/17/26/33/42/51). Nested: H1 is checked first, then M30,|
 //|        then M15, then M5 — each must be clear (not on a cycle)   |
 //|        before the next is checked; all clear => trade proceeds   |
-//| VPS: no Alert popups or equity alerts; all logic runs only on    |
-//|        closed M1 bars (once per minute) to cut CPU usage         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -60,6 +58,13 @@ input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
 input bool   InpTimeFilterM15  = true;    // Check M15 next, only if M30 is clear
 input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
 
+input group             "Equity Alert Settings"
+input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
+input double            InpWithdrawProfitPct = 50.0;       // Percentage of the PROFIT to withdraw
+input ENUM_DAY_OF_WEEK  InpCheckDay          = FRIDAY;     // Day of the week to check
+input bool              InpResetBaseline     = false;      // Set to true to reset baseline to current equity
+input bool              InpSendPush          = true;       // Send push notification
+
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
 #define TF_COUNT  5
@@ -78,7 +83,7 @@ string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime noReentryUntil[MAX_SYMS];
-int      lastMinuteKey = -1;
+datetime lastH1bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
 double   entryPrice[MAX_SYMS];  // reference entry price per symbol (trail arming)
@@ -91,7 +96,10 @@ bool     beMoved[MAX_SYMS];     // BE30 stop already moved to break even (one-sh
 int  g_cycles[];        // parsed kihon suchi cycle list (9,17,26,...,676 by default)
 int  g_cycleCount = 0;  // number of parsed cycles
 
-int MAGIC = 20260814;   // distinct from the other H1-M1 builds so both can run on one account
+int MAGIC = 20260813;   // distinct from the other builds so both can run on one account
+
+#define GV_BASE_EQUITY    "EA_EquityAlert_Base_"    + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+#define GV_LAST_ALERT_DAY "EA_EquityAlert_Day_"     + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
 
 CTrade trade;
 
@@ -158,9 +166,51 @@ int OnInit()
    }
 
    trade.SetDeviationInPoints(Slippage);
-   trade.SetExpertMagicNumber(MAGIC);
    SyncStateFromPositions();
+   InitEquityAlert();
    return(INIT_SUCCEEDED);
+}
+
+//==============================================================
+// Equity Alert: weekly profit-withdrawal reminder
+//==============================================================
+
+void InitEquityAlert()
+{
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!GlobalVariableCheck(GV_BASE_EQUITY) || InpResetBaseline)
+   {
+      GlobalVariableSet(GV_BASE_EQUITY, currentEquity);
+   }
+   if(!GlobalVariableCheck(GV_LAST_ALERT_DAY))
+   {
+      GlobalVariableSet(GV_LAST_ALERT_DAY, 0);
+   }
+}
+
+void CheckEquityAlert()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+
+   if(dt.day_of_week != InpCheckDay) return;
+   if((int)GlobalVariableGet(GV_LAST_ALERT_DAY) == dt.day) return;
+
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double baseEquity    = GlobalVariableGet(GV_BASE_EQUITY);
+   double profit        = currentEquity - baseEquity;
+
+   if(profit >= InpMinProfitTrigger)
+   {
+      double withdrawAmount = profit * (InpWithdrawProfitPct / 100.0);
+      string msg = StringFormat("Profit: %.2f. Suggest withdrawing: %.2f", profit, withdrawAmount);
+
+      Alert(msg);
+      if(InpSendPush) SendNotification(msg);
+
+      GlobalVariableSet(GV_LAST_ALERT_DAY, (double)dt.day);
+      GlobalVariablesFlush();
+   }
 }
 
 void OnDeinit(const int reason)
@@ -168,7 +218,7 @@ void OnDeinit(const int reason)
    for(int s = 0; s < symsCount; s++)
    {
       for(int t = 0; t < TF_COUNT; t++)
-         if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
+         IndicatorRelease(ich[s][t]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
       if(atrExit[s] != INVALID_HANDLE) IndicatorRelease(atrExit[s]);
       if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
@@ -735,6 +785,8 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double
 {
    string sym = syms[s];
 
+   trade.SetExpertMagicNumber(MAGIC);
+
    int filled = 0;
    firstFill = 0.0;
    for(int i = 0; i < count; i++)
@@ -773,11 +825,13 @@ void ClosePositions(string sym)
 
 void OnTick()
 {
-   // VPS perf: all logic runs only on closed M1 bars, which change at most
-   // once per minute. Skip every intermediate tick entirely.
-   int nowKey = (int)(TimeCurrent() / 60);
-   if(nowKey == lastMinuteKey) return;
-   lastMinuteKey = nowKey;
+   // Equity alert: fire only on a new H1 bar (CheckEquityAlert self-guards on day-of-week)
+   MqlRates h1[];
+   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H1, 0, 1, h1) > 0 && h1[0].time != lastH1bar)
+   {
+      lastH1bar = h1[0].time;
+      CheckEquityAlert();
+   }
 
    bool synced = false;
    for(int s = 0; s < symsCount; s++)
@@ -798,7 +852,7 @@ void OnTick()
       {
          string side = (state[s] == 1) ? "Long" : "Short";
          string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M5 kijun crossed)";
-         Print(msg); SendNotification(msg);
+         Print(msg); Alert(msg); SendNotification(msg);
 
          ClosePositions(syms[s]);
          state[s] = 0;
@@ -847,7 +901,7 @@ void OnTick()
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +
                             " @ " + DoubleToString(lots, 2) + " (H1-M1)";
-               Print(msg); SendNotification(msg);
+               Print(msg); Alert(msg); SendNotification(msg);
             }
             else
                Print(PCTime() + " | " + syms[s] + " entry signal but no order filled");
