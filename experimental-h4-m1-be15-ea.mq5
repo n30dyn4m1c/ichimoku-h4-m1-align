@@ -8,10 +8,11 @@
 //|        InpBE15Minutes, the stop loss moves up to break even +    |
 //|        a few points to cover the spread (BE15)                   |
 //| Time theory: optional kihon suchi filter — a breakout is skipped |
-//|        when the H4 move count (bars since the last Kijun touch)   |
-//|        equals a kihon suchi number up to 51 exactly              |
-//|        (9/17/26/33/42/51) — the move has matured and a           |
-//|        direction change is due                                    |
+//|        when the H4/H1/M30/M15 move count (bars since the last    |
+//|        Kijun touch) equals a kihon suchi number up to 51 exactly |
+//|        (9/17/26/33/42/51). Nested: H4 is checked first, then H1, |
+//|        then M30, then M15 — each must be clear (not on a cycle)  |
+//|        before the next is checked; all clear => trade proceeds   |
 //|        change is due                                              |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -51,9 +52,12 @@ input double InpBE15ActivateATR    = 0.5;    // Min profit to count as "in profi
 input int    InpBE15CoverPoints    = 15;     // Points beyond break even (covers spread)
 
 input group  "Time Theory (Kihon Suchi)"
-input bool   InpUseTimeFilter  = true;    // Skip entry when the H4 move count equals a kihon suchi number
+input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
 input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch
-input bool   InpTimeFilterH4   = true;    // Apply the cycle filter on H4 (exact match, up to cycle 51)
+input bool   InpTimeFilterH4   = true;    // Check H4 first (exact match, up to cycle 51)
+input bool   InpTimeFilterH1   = true;    // Check H1 next, only if H4 is clear
+input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
+input bool   InpTimeFilterM15  = true;    // Check M15 last, only if M30 is clear
 
 input group             "Equity Alert Settings"
 input double            InpMinProfitTrigger  = 5.0;        // Min Profit over Baseline to trigger alert
@@ -66,7 +70,7 @@ input bool              InpSendPush          = true;       // Send push notifica
 #define MAX_SYMS  60
 #define TF_COUNT  6
 #define IDX_M15   3   // index of M15 in tfs[] — used for exit check
-#define H4_MAX_CYCLE 51   // H4 cycles cap: moves older than this are never "mature"
+#define KIHON_MAX_CYCLE 51   // cycle cap on every timeframe: older moves are never "mature"
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
    PERIOD_H4, PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
@@ -367,12 +371,14 @@ int CheckAllAlign(int s)
 // counts at which a move tends
 // to mature and change direction. The count used
 // here is "bars since the last Kijun touch" (the breakaway), the same
-// convention as the H1-M1 reversion EA. At an aligned H4 breakout the
-// count measures how many H4 candles the current move has already
-// printed. If the count EXACTLY equals a kihon suchi number up to 51
-// the move is mature and the breakout is low probability; between
-// cycles there is room for the move to continue to the next number —
-// the continuation case.
+// convention as the H1-M1 reversion EA. At an aligned breakout the
+// count measures how many candles the current move has already
+// printed on that timeframe. If the count EXACTLY equals a kihon
+// suchi number up to 51 the move is mature and the breakout is low
+// probability; between cycles there is room for the move to continue
+// to the next number — the continuation case. The cascade below
+// checks H4 first, then H1, then M30, then M15 — each must be clear
+// before the next is consulted.
 
 // Parse the kihon suchi cycle list into g_cycles[].
 void ParseCycles(string list)
@@ -396,7 +402,8 @@ void ParseCycles(string list)
 }
 
 // True when the count exactly equals a cycle <= maxCycle (mature move).
-// Cycles beyond maxCycle are ignored — H4 caps at H4_MAX_CYCLE (51).
+// Cycles beyond maxCycle are ignored — all timeframes cap at
+// KIHON_MAX_CYCLE (51).
 bool InTimeWindow(int count, int maxCycle)
 {
    for(int i = 0; i < g_cycleCount; i++)
@@ -411,7 +418,7 @@ bool InTimeWindow(int count, int maxCycle)
 // the move's side of the Kijun (above it for a long, below for a short).
 // Stops at the first touch or side violation — the count is the age of
 // the current move in bars on that timeframe. Lookback is bounded by
-// maxCycle so shallow history suffices (51 H4 bars).
+// maxCycle so shallow history suffices (51 bars on any timeframe).
 int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
 {
    int want = maxCycle + 10;
@@ -438,6 +445,53 @@ int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
       count++;
    }
    return count;
+}
+
+// Nested kihon suchi cascade: H4 -> H1 -> M30 -> M15. Each timeframe
+// must be clear (count not exactly on a cycle) before the next is
+// checked; a mature count anywhere in the chain blocks the breakout.
+// Returns true when the entry was skipped.
+bool TimeFilterBlocks(int s, int st)
+{
+   if(!InpUseTimeFilter) return false;
+
+   if(InpTimeFilterH4)
+   {
+      int c4 = CountNoTouchTF(s, 0, st, KIHON_MAX_CYCLE);
+      if(InTimeWindow(c4, KIHON_MAX_CYCLE))
+      {
+         Print(PCTime() + " | " + syms[s] + " skip entry: H4 time cycle mature (count " + IntegerToString(c4) + ")");
+         return true;
+      }
+      if(InpTimeFilterH1)
+      {
+         int c1 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
+         if(InTimeWindow(c1, KIHON_MAX_CYCLE))
+         {
+            Print(PCTime() + " | " + syms[s] + " skip entry: H1 time cycle mature (count " + IntegerToString(c1) + ")");
+            return true;
+         }
+         if(InpTimeFilterM30)
+         {
+            int c30 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
+            if(InTimeWindow(c30, KIHON_MAX_CYCLE))
+            {
+               Print(PCTime() + " | " + syms[s] + " skip entry: M30 time cycle mature (count " + IntegerToString(c30) + ")");
+               return true;
+            }
+            if(InpTimeFilterM15)
+            {
+               int c15 = CountNoTouchTF(s, IDX_M15, st, KIHON_MAX_CYCLE);
+               if(InTimeWindow(c15, KIHON_MAX_CYCLE))
+               {
+                  Print(PCTime() + " | " + syms[s] + " skip entry: M15 time cycle mature (count " + IntegerToString(c15) + ")");
+                  return true;
+               }
+            }
+         }
+      }
+   }
+   return false;
 }
 
 //==============================================================
@@ -817,20 +871,11 @@ void OnTick()
          int st = CheckAllAlign(s);
          if(st != 0)
          {
-            // Time theory: if the H4 move count (bars since the last
-            // Kijun touch) exactly equals a kihon suchi number up to
-            // 51 the move is mature (a direction change is due) — skip
-            // the breakout. Between cycles there is room to the next
-            // number, i.e. the breakout is a continuation.
-            if(InpUseTimeFilter && InpTimeFilterH4)
-            {
-               int c4 = CountNoTouchTF(s, 0, st, H4_MAX_CYCLE);
-               if(InTimeWindow(c4, H4_MAX_CYCLE))
-               {
-                  Print(PCTime() + " | " + syms[s] + " skip entry: H4 time cycle mature (count " + IntegerToString(c4) + ")");
-                  continue;
-               }
-            }
+            // Time theory: nested kihon suchi cascade — H4 must be
+            // clear (count not exactly on a cycle) before H1 is
+            // checked, then M30, then M15. A mature count anywhere in
+            // the chain blocks the entry.
+            if(TimeFilterBlocks(s, st)) continue;
 
             bool   isBuy = (st == 1);
             double dist  = 0.0;

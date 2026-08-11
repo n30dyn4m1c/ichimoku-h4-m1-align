@@ -775,30 +775,36 @@ below.
 
 ### Time theory (kihon suchi) filter
 
-At the breakout moment the EA counts the consecutive H4 closed bars since
-the last **Kijun touch** (a candle whose high–low straddles the Kijun, or
-slips to the wrong side of it, ends the streak) — the same count
-convention as the H1-M1 reversion EA (section 2). The count is the age of
-the move on H4.
+At the breakout moment the EA counts, per timeframe, the consecutive
+closed bars since the last **Kijun touch** (a candle whose high–low
+straddles the Kijun, or slips to the wrong side of it, ends the streak) —
+the same count convention as the H1-M1 reversion EA (section 2). The count
+is the age of the move on that timeframe.
 
-- **On a cycle** — the H4 count **exactly equals** a kihon suchi number up
-  to 51 (`9,17,26,33,42,51`, no tolerance): the
-  move has **matured**
-  and a direction change is due ⇒ the breakout is **skipped** (logged as
-  `skip entry: H4 time cycle mature`, with the offending count).
-- **Between cycles** — the count is not on a cycle: the move has room to
-  run until the next number ⇒ the breakout qualifies as a **continuation**
-  and the entry proceeds.
+The check runs as a **nested cascade** — each timeframe must be clear
+(count not **exactly** on a kihon suchi number up to 51 —
+`9,17,26,33,42,51`, no tolerance) before the next is consulted:
 
-Counts past the largest checked cycle (51 H4 bars ≈ 8.5 days) are always
-allowed (long trends don't get starved). This is a filter only — entries
-are gated, nothing else changes.
+1. **H4** — if the count equals a cycle, the breakout is **skipped**
+   (`skip entry: H4 time cycle mature`).
+2. **H1** — only checked if H4 is clear; same exact-match rule.
+3. **M30** — only checked if H1 is clear.
+4. **M15** — only checked if M30 is clear.
+
+All four clear ⇒ the move has room to run to the next cycle number
+(**continuation**) and the entry proceeds. A mature count anywhere in the
+chain blocks the entry. Counts past cycle 51 are always allowed (long
+trends don't get starved). This is a filter only — entries are gated,
+nothing else changes.
 
 | Parameter | Default | Description |
 |-----------|---------|--------------|
 | `InpUseTimeFilter` | `true` | Master switch for the time-theory filter |
 | `InpTimeCycles` | `9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676` | Kihon suchi cycle list (comma-separated; only cycles ≤ 51 apply) |
-| `InpTimeFilterH4` | `true` | Apply the cycle filter on H4 (exact match) |
+| `InpTimeFilterH4` | `true` | Check H4 first (exact match) |
+| `InpTimeFilterH1` | `true` | Check H1 next, only if H4 is clear |
+| `InpTimeFilterM30` | `true` | Check M30 next, only if H1 is clear |
+| `InpTimeFilterM15` | `true` | Check M15 last, only if M30 is clear |
 
 ### Break-even (BE15) logic
 
