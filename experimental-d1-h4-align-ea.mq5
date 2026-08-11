@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Ichimoku D1-H4-H1 Alignment EA — swing build (experimental)      |
+//| Ichimoku D1-H4 Alignment EA — swing build (experimental)         |
 //| Entry: D1+H4 price+chikou all above/below tenkan,kijun,cloud;   |
 //|        entry fires once per closed H1 bar (H1 is only a timing    |
 //|        input — not an entry requirement)                         |
@@ -79,7 +79,7 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 int      ich[MAX_SYMS][TF_COUNT];
 int      atr[MAX_SYMS];      // ATR(H1) for entry SL distance
 int      atrExit[MAX_SYMS];  // ATR(H4) for chandelier trail distance
-int      adx[MAX_SYMS];      // ADX(H1) handle for choppy-market regime detection
+int      adx[MAX_SYMS];      // ADX(H1) handle for choppy-market regime detection (trail)
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastH1bar[MAX_SYMS];
