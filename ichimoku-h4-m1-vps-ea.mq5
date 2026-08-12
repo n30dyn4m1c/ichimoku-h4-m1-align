@@ -58,7 +58,7 @@ input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers
 input group  "Time Theory (Kihon Suchi)"
 input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
 input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch (touch candle = bar 1, present candle included)
-input bool   InpTimeFilterH4   = true;    // Check H4 first (exact match, up to cycle 51)
+input bool   InpTimeFilterH4   = true;    // Check H4 first (exact match, up to cycle 100)
 input bool   InpTimeFilterH1   = true;    // Check H1 next, only if H4 is clear
 input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
 input bool   InpTimeFilterM15  = true;    // Check M15 last, only if M30 is clear
