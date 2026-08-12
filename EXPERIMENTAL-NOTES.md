@@ -782,8 +782,8 @@ the same count convention as the H1-M1 reversion EA (section 2). The count
 is the age of the move on that timeframe.
 
 The check runs as a **nested cascade** — each timeframe must be clear
-(count not **exactly** on a kihon suchi number up to 51 —
-`9,17,26,33,42,51`, no tolerance) before the next is consulted:
+(count not **exactly** on a kihon suchi number up to 100 —
+`9,17,26,33,42,51,65,76,83,97`, no tolerance) before the next is consulted:
 
 1. **H4** — if the count equals a cycle, the breakout is **skipped**
    (`skip entry: H4 time cycle mature`).
@@ -793,14 +793,17 @@ The check runs as a **nested cascade** — each timeframe must be clear
 
 All four clear ⇒ the move has room to run to the next cycle number
 (**continuation**) and the entry proceeds. A mature count anywhere in the
-chain blocks the entry. Counts past cycle 51 are always allowed (long
+chain blocks the entry. Counts past cycle 100 are always allowed (long
 trends don't get starved). This is a filter only — entries are gated,
 nothing else changes.
 
+> **Status: experimental — off by default.** `InpUseTimeFilter` ships as
+> `false` (no performance edge was seen in A/B runs); flip it on to test.
+
 | Parameter | Default | Description |
 |-----------|---------|--------------|
-| `InpUseTimeFilter` | `true` | Master switch for the time-theory filter |
-| `InpTimeCycles` | `9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676` | Kihon suchi cycle list (comma-separated; only cycles ≤ 51 apply) |
+| `InpUseTimeFilter` | `false` | Master switch for the time-theory filter (off by default) |
+| `InpTimeCycles` | `9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676` | Kihon suchi cycle list (comma-separated; only cycles ≤ 100 apply) |
 | `InpTimeFilterH4` | `true` | Check H4 first (exact match) |
 | `InpTimeFilterH1` | `true` | Check H1 next, only if H4 is clear |
 | `InpTimeFilterM30` | `true` | Check M30 next, only if H1 is clear |

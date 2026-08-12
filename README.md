@@ -225,8 +225,14 @@ chikou-side cloud at row `n-1-2×Kijun`.
 
 ### Time Theory Filter (Kihon Suchi)
 
+> **Status: experimental — off by default.** The filter showed no performance
+> edge in live/backtest A/B runs (entries were blocked without improving win
+> quality), so all builds ship with `InpUseTimeFilter = false`. It remains
+> available for testing: flip the input on to re-enable it and A/B it against
+> the off setting on the same symbol/period before trusting it.
+
 Both H4/H1 builds include an optional Ichimoku time-theory filter
-(`InpUseTimeFilter`, default on): before entering on an aligned breakout,
+(`InpUseTimeFilter`, default off): before entering on an aligned breakout,
 the EA counts how many candles the current move has already printed on each
 timeframe since the last touch of the Kijun-sen. If that count **exactly
 equals** one of the kihon suchi cycle numbers — the classic
@@ -243,9 +249,12 @@ there is room for the move to continue to the next number.
   chain blocks the entry. Each timeframe's check is gated by its own input
   flag (`InpTimeFilterH4` / `InpTimeFilterH1` / `InpTimeFilterM30` /
   `InpTimeFilterM15` / `InpTimeFilterM5`).
-- **Cycle cap:** cycle numbers above 51 (`KIHON_MAX_CYCLE`) are ignored on
-  every build — the classic 65 / 76 / 83 / 97 / 101 / … numbers in the
-  default `InpTimeCycles` list are simply inert.
+- **Cycle cap:** cycle numbers above 100 (`KIHON_MAX_CYCLE`) are ignored on
+  every build — the classic 101 / 129 / 172 / 200 / 226 / 257 / 676 numbers in
+  the default `InpTimeCycles` list are simply inert.
+- **Testing note:** exact-match, no tolerance; consider adding ±1–2 bar
+  tolerance and/or anchor-timeframe-only checks as test variants (the H1-M1
+  reversion EA uses ±2).
 
 ### Exit Logic
 
@@ -377,8 +386,8 @@ The standard builds share the same input set:
 | `InpTrailActivateATR` | 1.0 | Arm the trail once profit ≥ trail-timeframe ATR × multiplier |
 | `InpADXPeriod` | 14 | ADX period for choppy-market detection (exit timeframe) |
 | `InpChopADXLevel` | 22.0 | ADX below this = choppy → trail on in auto mode |
-| `InpUseTimeFilter` | `true` | Skip entries when a TF move count exactly equals a kihon suchi cycle (see [Time Theory Filter](#time-theory-filter-kihon-suchi)) |
-| `InpTimeCycles` | 9,17,…,676 | Kihon suchi cycle numbers; counts above 51 are ignored |
+| `InpUseTimeFilter` | `false` | Skip entries when a TF move count exactly equals a kihon suchi cycle (see [Time Theory Filter](#time-theory-filter-kihon-suchi)) |
+| `InpTimeCycles` | 9,17,…,676 | Kihon suchi cycle numbers; counts above 100 are ignored |
 | `InpTimeFilterH4` / `InpTimeFilterH1` | `true` | Enable the anchor-timeframe cycle check (H4 build / H1 build) |
 | `InpTimeFilterM30` / `InpTimeFilterM15` / `InpTimeFilterM5` | `true` | Enable the next cycle checks down the cascade |
 

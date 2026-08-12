@@ -60,7 +60,7 @@ input double InpBE30ActivateATR    = 0.5;    // Min profit to arm BE (x ATR H4)
 input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers spread)
 
 input group  "Time Theory (Kihon Suchi)"
-input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
+input bool   InpUseTimeFilter  = false;   // Skip entry when a TF move count equals a kihon suchi number (off by default)
 input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch (touch candle = bar 1, present candle included)
 input bool   InpTimeFilterD1   = true;    // Check D1 first (exact match, up to cycle 51)
 input bool   InpTimeFilterH4   = true;    // Check H4 next, only if D1 is clear
