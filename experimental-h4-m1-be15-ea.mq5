@@ -77,6 +77,7 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 };
 
 int      ich[MAX_SYMS][TF_COUNT];
+int      frac[MAX_SYMS][TF_COUNT];   // Fractals handle per (symbol, tf) for the fractal move-length count
 int      atr[MAX_SYMS];
 int      adx[MAX_SYMS];   // ADX(M15) handle for choppy-market regime detection
 string   syms[MAX_SYMS];
@@ -141,6 +142,8 @@ int OnInit()
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+         frac[s][t] = iFractals(syms[s], tfs[t]);
+         if(frac[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
       atr[s] = INVALID_HANDLE;
@@ -212,6 +215,8 @@ void OnDeinit(const int reason)
    {
       for(int t = 0; t < TF_COUNT; t++)
          IndicatorRelease(ich[s][t]);
+      for(int t = 0; t < TF_COUNT; t++)
+         if(frac[s][t] != INVALID_HANDLE) IndicatorRelease(frac[s][t]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
       if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
    }
@@ -448,6 +453,71 @@ int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
    // candle that starts the move.
    return count + 1;
 }
+// Fractal move-length count: walking back from the most recent break
+// across the Kijun, count from the first fractal swing low, then continue
+// only while each next low is an immediate lower low — the descending
+// chain into the swing the leg began from (a pullback that tests the
+// Kijun and is rejected only forms a higher low near the line). A higher
+// low is not counted and ends the walk; mirrored for shorts with higher
+// fractal highs. Each count includes the fractal candle as candle 1 and
+// the current candle as the last. Returns the first count that lands
+// exactly on a kihon suchi cycle (the skip signal), or the deepest count
+// when none matches, or maxCycle + 1 when no qualifying fractal exists in
+// the window.
+int CountSinceFractal(int s, int tfIdx, int dir, int maxCycle)
+{
+   int want = maxCycle + 10;
+   double kij[], upF[], dnF[];
+   MqlRates rt[];
+   if(CopyBuffer(ich[s][tfIdx], 1, 0, want, kij) <= 0) return maxCycle + 1;
+   if(CopyBuffer(frac[s][tfIdx], 0, 0, want, upF) <= 0) return maxCycle + 1;
+   if(CopyBuffer(frac[s][tfIdx], 1, 0, want, dnF) <= 0) return maxCycle + 1;
+   if(CopyRates(syms[s], tfs[tfIdx], 0, want, rt) <= 0) return maxCycle + 1;
+   ArraySetAsSeries(kij, true);
+   ArraySetAsSeries(upF, true);
+   ArraySetAsSeries(dnF, true);
+   ArraySetAsSeries(rt, true);
+
+   int n = MathMin(ArraySize(kij), MathMin(ArraySize(upF), MathMin(ArraySize(dnF), ArraySize(rt))));
+
+   // Most recent break across the Kijun (same walk as CountNoTouchTF).
+   int breakIdx = -1;
+   for(int i = 0; i < n; i++)
+   {
+      double k = kij[i];
+      if(dir == 1) { if(rt[i].low  <= k) { breakIdx = i; break; } }
+      else         { if(rt[i].high >= k) { breakIdx = i; break; } }
+   }
+   if(breakIdx < 0) return maxCycle + 1;   // no break in the window: the leg is older than every cycle
+
+   // Count from the first fractal swing low, then continue only while each
+   // next low is an immediate lower low — the descending chain into the
+   // swing the leg began from. A higher low is not counted and ends the
+   // walk. Each count includes the fractal candle as candle 1 and the
+   // current candle as the last; the first count that lands exactly on a
+   // kihon suchi cycle is the skip signal.
+   int last = 0;
+   double refV = 0;
+   for(int i = breakIdx + 1; i < n; i++)
+   {
+      double v = (dir == 1) ? dnF[i] : upF[i];
+      if(v <= 0 || v == EMPTY_VALUE) continue;
+      double k = kij[i];
+      if(dir == 1 && v >= k) continue;    // low not below the Kijun
+      if(dir == -1 && v <= k) continue;   // high not above the Kijun
+      if(refV > 0)
+      {
+         bool lower = (dir == 1) ? (v < refV) : (v > refV);   // immediate lower low / higher high
+         if(!lower) break;   // higher low (or lower high): not counted, walk ends
+      }
+      refV = v;
+      int count = i + 1;                  // fractal bar = candle 1, current candle included
+      last = count;
+      if(InTimeWindow(count, maxCycle)) return count;   // a fractal count is mature
+   }
+   if(last > 0) return last;   // no match: the deepest fractal count (never matches)
+   return maxCycle + 1;
+}
 
 // Nested kihon suchi cascade: H4 -> H1 -> M30 -> M15. Each timeframe
 // must be clear (count not exactly on a cycle) before the next is
@@ -460,33 +530,37 @@ bool TimeFilterBlocks(int s, int st)
    if(InpTimeFilterH4)
    {
       int c4 = CountNoTouchTF(s, 0, st, KIHON_MAX_CYCLE);
-      if(InTimeWindow(c4, KIHON_MAX_CYCLE))
+      int cF4 = CountSinceFractal(s, 0, st, KIHON_MAX_CYCLE);
+      if(InTimeWindow(c4, KIHON_MAX_CYCLE) || InTimeWindow(cF4, KIHON_MAX_CYCLE))
       {
-         Print(PCTime() + " | " + syms[s] + " skip entry: H4 time cycle mature (count " + IntegerToString(c4) + ")");
+         Print(PCTime() + " | " + syms[s] + " skip entry: H4 time cycle mature (kijun count " + IntegerToString(c4) + ", fractal count " + IntegerToString(cF4) + ")");
          return true;
       }
       if(InpTimeFilterH1)
       {
          int c1 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
-         if(InTimeWindow(c1, KIHON_MAX_CYCLE))
+         int cF1 = CountSinceFractal(s, 1, st, KIHON_MAX_CYCLE);
+         if(InTimeWindow(c1, KIHON_MAX_CYCLE) || InTimeWindow(cF1, KIHON_MAX_CYCLE))
          {
-            Print(PCTime() + " | " + syms[s] + " skip entry: H1 time cycle mature (count " + IntegerToString(c1) + ")");
+            Print(PCTime() + " | " + syms[s] + " skip entry: H1 time cycle mature (kijun count " + IntegerToString(c1) + ", fractal count " + IntegerToString(cF1) + ")");
             return true;
          }
          if(InpTimeFilterM30)
          {
             int c30 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
-            if(InTimeWindow(c30, KIHON_MAX_CYCLE))
+            int cF30 = CountSinceFractal(s, 2, st, KIHON_MAX_CYCLE);
+            if(InTimeWindow(c30, KIHON_MAX_CYCLE) || InTimeWindow(cF30, KIHON_MAX_CYCLE))
             {
-               Print(PCTime() + " | " + syms[s] + " skip entry: M30 time cycle mature (count " + IntegerToString(c30) + ")");
+               Print(PCTime() + " | " + syms[s] + " skip entry: M30 time cycle mature (kijun count " + IntegerToString(c30) + ", fractal count " + IntegerToString(cF30) + ")");
                return true;
             }
             if(InpTimeFilterM15)
             {
                int c15 = CountNoTouchTF(s, IDX_M15, st, KIHON_MAX_CYCLE);
-               if(InTimeWindow(c15, KIHON_MAX_CYCLE))
+               int cF15 = CountSinceFractal(s, IDX_M15, st, KIHON_MAX_CYCLE);
+               if(InTimeWindow(c15, KIHON_MAX_CYCLE) || InTimeWindow(cF15, KIHON_MAX_CYCLE))
                {
-                  Print(PCTime() + " | " + syms[s] + " skip entry: M15 time cycle mature (count " + IntegerToString(c15) + ")");
+                  Print(PCTime() + " | " + syms[s] + " skip entry: M15 time cycle mature (kijun count " + IntegerToString(c15) + ", fractal count " + IntegerToString(cF15) + ")");
                   return true;
                }
             }

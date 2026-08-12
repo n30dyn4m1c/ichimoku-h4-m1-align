@@ -23,7 +23,7 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 input group  "Reversion Setup"
-input string InpTimeCycles    = "9,17,26,33"; // Ichimoku time cycles: bars since last H1 Kijun touch
+input string InpTimeCycles    = "9,17,26,33"; // Ichimoku time cycles: bars since last H1 Kijun touch (touching candle = bar 1), or since the swing low/high that started the leg
 input int    InpTimeTol       = 2;     // +/- tolerance applied to each time cycle
 input double InpFarATRMult    = 2.0;   // Price must be >= this * ATR(H1) from the Kijun
 input int    InpFlatBars      = 5;     // Bars over which the Kijun slope is measured
@@ -62,6 +62,7 @@ input bool              InpSendPush          = true;       // Send push notifica
 #define MAX_SYMS  60
 
 int      ichH1[MAX_SYMS];   // H1 Ichimoku (Kijun, cloud) handle per symbol
+int      fracH1[MAX_SYMS];  // H1 Fractals handle per symbol (fractal move-length count)
 int      ichM15[MAX_SYMS];  // M15 Ichimoku (Kijun) handle per symbol — trail confirmation
 int      ichM5[MAX_SYMS];   // M5 Ichimoku (Kijun) handle per symbol
 int      atrH1[MAX_SYMS];   // ATR(H1) handle per symbol
@@ -151,11 +152,12 @@ int OnInit()
       ichH1[s]  = iIchimoku(syms[s], PERIOD_H1,  Tenkan, Kijun, SenkouB);
       ichM15[s] = iIchimoku(syms[s], PERIOD_M15, Tenkan, Kijun, SenkouB);
       ichM5[s]  = iIchimoku(syms[s], PERIOD_M5,  Tenkan, Kijun, SenkouB);
+      fracH1[s] = iFractals(syms[s], PERIOD_H1);
       atrH1[s]  = iATR(syms[s], PERIOD_H1,  InpATRPeriod);
       atrM15[s] = iATR(syms[s], PERIOD_M15, InpATRPeriod);
       if(ichH1[s]  == INVALID_HANDLE || ichM15[s] == INVALID_HANDLE ||
          ichM5[s]  == INVALID_HANDLE || atrH1[s]  == INVALID_HANDLE ||
-         atrM15[s] == INVALID_HANDLE)
+         atrM15[s] == INVALID_HANDLE || fracH1[s] == INVALID_HANDLE)
          return(INIT_FAILED);
    }
 
@@ -214,6 +216,7 @@ void OnDeinit(const int reason)
       if(ichH1[s]  != INVALID_HANDLE) IndicatorRelease(ichH1[s]);
       if(ichM15[s] != INVALID_HANDLE) IndicatorRelease(ichM15[s]);
       if(ichM5[s]  != INVALID_HANDLE) IndicatorRelease(ichM5[s]);
+      if(fracH1[s] != INVALID_HANDLE) IndicatorRelease(fracH1[s]);
       if(atrH1[s]  != INVALID_HANDLE) IndicatorRelease(atrH1[s]);
       if(atrM15[s] != INVALID_HANDLE) IndicatorRelease(atrM15[s]);
    }
@@ -292,6 +295,71 @@ int CountNoTouch(int s)
    // +1: include the last touching candle as candle 1 — the breakaway
    // candle that starts the move.
    return count + 1;
+}
+
+// Fractal move-length count for the leg being faded: walking back from the
+// most recent break across the H1 Kijun, count from the first fractal
+// swing low, then continue only while each next low is an immediate lower
+// low — the descending chain into the swing the leg began from. A higher
+// low is not counted and ends the walk; a buy reversion mirrors this with
+// higher fractal highs. Each count includes the fractal candle as candle 1
+// and the current candle as the last. Returns the first count that lands
+// on a kihon suchi cycle (the fade signal), or the deepest count when none
+// matches, or a value that never matches a cycle when no qualifying
+// fractal exists.
+int CountSinceFractalH1(int s, int dir)
+{
+   int want = g_maxCycle + InpTimeTol + 10;
+   double kij[], upF[], dnF[];
+   MqlRates rt[];
+   if(CopyBuffer(ichH1[s], 1, 0, want, kij) <= 0) return g_maxCycle + InpTimeTol + 1;
+   if(CopyBuffer(fracH1[s], 0, 0, want, upF) <= 0) return g_maxCycle + InpTimeTol + 1;
+   if(CopyBuffer(fracH1[s], 1, 0, want, dnF) <= 0) return g_maxCycle + InpTimeTol + 1;
+   if(CopyRates(syms[s], PERIOD_H1, 0, want, rt) <= 0) return g_maxCycle + InpTimeTol + 1;
+   ArraySetAsSeries(kij, true);
+   ArraySetAsSeries(upF, true);
+   ArraySetAsSeries(dnF, true);
+   ArraySetAsSeries(rt, true);
+
+   int n = MathMin(ArraySize(kij), MathMin(ArraySize(upF), MathMin(ArraySize(dnF), ArraySize(rt))));
+
+   // Most recent break across the Kijun in the direction of the faded leg.
+   int breakIdx = -1;
+   for(int i = 0; i < n; i++)
+   {
+      double k = kij[i];
+      if(dir == -1) { if(rt[i].low  <= k) { breakIdx = i; break; } }   // up leg: break above
+      else          { if(rt[i].high >= k) { breakIdx = i; break; } }   // down leg: break below
+   }
+   if(breakIdx < 0) return g_maxCycle + InpTimeTol + 1;
+
+   // Count from the first fractal swing low, then continue only while each
+   // next low is an immediate lower low — the descending chain into the
+   // swing the leg began from. A higher low is not counted and ends the
+   // walk. Each count includes the fractal candle as candle 1 and the
+   // current candle as the last; the first count that lands on a kihon
+   // suchi cycle is the fade signal.
+   int last = 0;
+   double refV = 0;
+   for(int i = breakIdx + 1; i < n; i++)
+   {
+      double v = (dir == -1) ? dnF[i] : upF[i];
+      if(v <= 0 || v == EMPTY_VALUE) continue;
+      double k = kij[i];
+      if(dir == -1 && v >= k) continue;   // low not below the Kijun
+      if(dir == 1 && v <= k) continue;    // high not above the Kijun
+      if(refV > 0)
+      {
+         bool lower = (dir == -1) ? (v < refV) : (v > refV);   // immediate lower low / higher high
+         if(!lower) break;   // higher low (or lower high): not counted, walk ends
+      }
+      refV = v;
+      int count = i + 1;                  // fractal bar = candle 1, current candle included
+      last = count;
+      if(InTimeWindow(count)) return count;   // a fractal count is on a cycle
+   }
+   if(last > 0) return last;   // no match: the deepest fractal count (never matches)
+   return g_maxCycle + InpTimeTol + 1;
 }
 
 // The Kijun is flat when its move over InpFlatBars H1 bars is small vs ATR.
@@ -475,9 +543,9 @@ bool RejectionTrigger(int s, int dir)
 // candle's extreme), tp (H1 Kijun), stopDist (|entry - sl|) and a trigger label.
 //==============================================================
 
-int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig, int &barsSince)
+int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig, int &barsSince, int &barsSinceF)
 {
-   sl = 0.0; tp = 0.0; stopDist = 0.0; trig = ""; barsSince = 0;
+   sl = 0.0; tp = 0.0; stopDist = 0.0; trig = ""; barsSince = 0; barsSinceF = 0;
 
    double atr = ATRval(s);
    if(atr <= 0) return 0;
@@ -502,8 +570,9 @@ int CheckReversion(int s, double &sl, double &tp, double &stopDist, string &trig
 
    // Time theory: bars since the last Kijun touch (H1 break away from the Kijun)
    // must land on an Ichimoku cycle (9 / 17 / 26 / 33 by default) +/- InpTimeTol.
-   barsSince = CountNoTouch(s);
-   if(!InTimeWindow(barsSince)) return 0;
+   barsSince  = CountNoTouch(s);
+   barsSinceF = CountSinceFractalH1(s, dir);
+   if(!InTimeWindow(barsSince) && !InTimeWindow(barsSinceF)) return 0;
 
    // The Kijun must be flat so it acts as a magnet, not a trending line.
    if(!KijunFlat(s, atr)) return 0;
@@ -742,8 +811,8 @@ void OnTick()
       if(state[s] != 0) continue;
       if(!SpreadOK(syms[s])) continue;
 
-      double sl, tp, stopDist; string trig; int barsSince;
-      int dir = CheckReversion(s, sl, tp, stopDist, trig, barsSince);
+      double sl, tp, stopDist; string trig; int barsSince, barsSinceF;
+      int dir = CheckReversion(s, sl, tp, stopDist, trig, barsSince, barsSinceF);
       if(dir == 0) continue;
 
       bool isBuy = (dir == 1);
@@ -762,7 +831,7 @@ void OnTick()
          string msg = PCTime() + " | " + action + " " + syms[s] +
                       " x" + IntegerToString(filled) +
                       " @ " + DoubleToString(lots, 2) +
-                      " (H1 Reversion: " + trig + " @" + IntegerToString(barsSince) + "c) SL " +
+                      " (H1 Reversion: " + trig + " @" + IntegerToString(barsSince) + "/" + IntegerToString(barsSinceF) + "c) SL " +
                       DoubleToString(sl, dg) + " TP " + DoubleToString(tp, dg);
          Print(msg); Alert(msg); SendNotification(msg);
       }
