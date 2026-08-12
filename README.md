@@ -110,6 +110,34 @@ each other on the same account. The [kihon suchi time-theory filter](#time-theor
 code has been removed from the VPS builds entirely (no edge in A/B runs);
 it lives only in the standard/experimental builds for testing.
 
+### Deploying the VPS builds (`deploy.sh`)
+
+`deploy.sh` downloads the two VPS EAs straight into the local MT5
+`MQL5/Experts` folder — no copy-paste or clipboard needed (handy over VNC
+where clipboard sync is flaky). Run it on the machine that runs MT5 (the
+VPS):
+
+```bash
+# install once
+curl -fsSL -o deploy.sh \
+  https://raw.githubusercontent.com/n30dyn4m1c/ichimoku-h4-m1-align/master/deploy.sh
+chmod +x deploy.sh
+
+# every update — one command
+./deploy.sh
+```
+
+- It auto-detects the MT5 Experts folder (searches under `$HOME` for
+  `MQL5/Experts`, e.g. the Wine path `/home/neo/.wine/drive_c/Program
+  Files/XM Global MT5/MQL5/Experts`). If detection fails or you have
+  several terminals, point it at the right one:
+  `MT5_DATA=/path/to/MQL5/Experts ./deploy.sh`.
+- Optional branch argument: `./deploy.sh <branch>` downloads from that
+  branch instead of `master`.
+- After it finishes: in MetaEditor refresh the Navigator, press **F7** to
+  compile both files, then remove and re-attach (or restart MT5) so the
+  running EAs pick up the new `.ex5` builds.
+
 ---
 
 ## MS-W1-D1 Alignment Build
