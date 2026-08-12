@@ -1080,6 +1080,11 @@ its tenkan or the ATR stop.
   timeframe's tenkan (conversion line) closes everything — a long exits on
   a close below tenkan, a short on a close above it. The ATR-based
   protective stop loss is the only other way out.
+- **Choppy filter:** entries are skipped when ADX of that timeframe
+  (`InpChopADXPeriod`, read on H4 for H4 trades and H1 for H1 trades) is
+  below `InpChopADXLevel` (default 22) — the breakout won't follow through
+  without a trend. Unready ADX is treated as choppy, so no trade is ever
+  taken on a signal that can't be verified.
 - **ATR for the stop is read on the traded timeframe** so the protective
   distance matches the holding scale of the trade.
 

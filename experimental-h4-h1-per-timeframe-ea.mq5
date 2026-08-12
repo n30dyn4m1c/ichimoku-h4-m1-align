@@ -9,6 +9,8 @@
 //| Aggressive profit locking: SL moves to break even once           |
 //|        profitable, then an ATR chandelier trail tightens         |
 //|        behind the peak (locks in the spike)                      |
+//| Choppy filter: entries skipped when ADX of that timeframe is     |
+//|        below InpChopADXLevel (no trend -> breakout won't follow) |
 //| Options: InpUseH4 / InpUseH1 enable each timeframe; when both    |
 //|        are on, each monitors itself and can fire its own trades  |
 //|        on the same symbol at the same time                       |
@@ -36,6 +38,11 @@ input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
 
+input group  "Choppy Filter"
+input bool   InpChopFilterEnabled = true;   // Skip entries when the market is choppy
+input int    InpChopADXPeriod     = 14;     // ADX period (same on both timeframes)
+input double InpChopADXLevel      = 22.0;   // ADX below this = choppy -> no entry
+
 input group  "Aggressive Profit Locking"
 input bool   InpTrailEnabled     = true;   // Chandelier trail behind the peak
 input double InpTrailATR         = 1.0;    // Trail distance = ATR * multiplier (1.0 = tight)
@@ -61,6 +68,7 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 
 int      ich[MAX_SYMS][TF_COUNT];
 int      atr[MAX_SYMS][TF_COUNT];
+int      adx[MAX_SYMS][TF_COUNT];   // ADX per TF for choppy-market entry gating
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 bool     useTF[TF_COUNT];               // enabled per InpUseH4 / InpUseH1
@@ -128,6 +136,13 @@ int OnInit()
             atr[s][t] = iATR(syms[s], tfs[t], InpATRPeriod);
             if(atr[s][t] == INVALID_HANDLE) return(INIT_FAILED);
          }
+
+         adx[s][t] = INVALID_HANDLE;
+         if(InpChopFilterEnabled)
+         {
+            adx[s][t] = iADX(syms[s], tfs[t], InpChopADXPeriod);
+            if(adx[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+         }
       }
    }
 
@@ -145,6 +160,7 @@ void OnDeinit(const int reason)
       {
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
          if(atr[s][t] != INVALID_HANDLE) IndicatorRelease(atr[s][t]);
+         if(adx[s][t] != INVALID_HANDLE) IndicatorRelease(adx[s][t]);
       }
    }
 }
@@ -577,6 +593,16 @@ bool SpreadOK(string sym)
    return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
 }
 
+// Choppy-market detection: ADX of this timeframe below InpChopADXLevel
+// means no trend, so entries are skipped (breakouts don't follow through).
+// An unready/unknown ADX value is treated as choppy to stay conservative.
+bool IsChoppy(int s, int tfIdx)
+{
+   double d[1];
+   if(CopyBuffer(adx[s][tfIdx], 0, 1, 1, d) <= 0 || d[0] <= 0) return true;
+   return d[0] < InpChopADXLevel;
+}
+
 // ATR(tf) * multiplier, widened to the broker's minimum stop distance if
 // needed. Returns false when the ATR value is unavailable so the caller
 // skips the entry instead of trading unprotected.
@@ -697,8 +723,11 @@ void OnTick()
             ManageTrail(s, t);
          }
 
-         // Entry check: this timeframe's price+chikou breakout, spread must be sane
-         if(state[s][t] == 0 && SpreadOK(syms[s]))
+         // Entry check: this timeframe's price+chikou breakout, trending
+         // market, spread must be sane
+         if(state[s][t] == 0 &&
+            (!InpChopFilterEnabled || !IsChoppy(s, t)) &&
+            SpreadOK(syms[s]))
          {
             int st = CheckAllAlign(s, t);
             if(st != 0)
