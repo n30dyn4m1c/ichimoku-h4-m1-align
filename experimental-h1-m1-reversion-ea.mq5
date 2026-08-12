@@ -73,7 +73,7 @@ datetime lastM15bar[MAX_SYMS];
 datetime lastH1bar = 0;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
-int      g_cycles[];        // parsed Ichimoku time cycles (bars since last Kijun touch)
+int      g_cycles[];        // parsed Ichimoku time cycles (bars since last Kijun touch (touching candle = bar 1))
 int      g_cycleCount = 0;
 int      g_maxCycle   = 0;
 
@@ -289,7 +289,9 @@ int CountNoTouch(int s)
       if(rt[i].low <= k && rt[i].high >= k) break;   // candle straddles the Kijun -> touched
       count++;
    }
-   return count;
+   // +1: include the last touching candle as candle 1 — the breakaway
+   // candle that starts the move.
+   return count + 1;
 }
 
 // The Kijun is flat when its move over InpFlatBars H1 bars is small vs ATR.

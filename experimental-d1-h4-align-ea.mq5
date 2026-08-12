@@ -61,7 +61,7 @@ input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers
 
 input group  "Time Theory (Kihon Suchi)"
 input bool   InpUseTimeFilter  = true;    // Skip entry when a TF move count equals a kihon suchi number
-input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch
+input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch (touching candle = bar 1)
 input bool   InpTimeFilterD1   = true;    // Check D1 first (exact match, up to cycle 51)
 input bool   InpTimeFilterH4   = true;    // Check H4 next, only if D1 is clear
 input bool   InpTimeFilterH1   = false;   // Check H1 last, only if H4 is clear (off: H1 not an entry TF)
@@ -411,7 +411,9 @@ int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
       }
       count++;
    }
-   return count;
+   // +1: include the last touching candle as candle 1 — the breakaway
+   // candle that starts the move.
+   return count + 1;
 }
 
 // One skip line per (timeframe, count) episode instead of one per bar.
