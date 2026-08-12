@@ -893,42 +893,74 @@ each TF). Each timeframe has one role and is deliberately asymmetric:
 
 | TF | Role | Check |
 |----|------|-------|
-| H4 | Trend bias (sticky filter) | Close vs H4 Kijun + cloud side only — **no chikou** |
-| H1 | Pullback zone + freshness | Close above H1 Kijun but retraced into/near the H1 cloud top (± `InpZoneToleranceATR` × ATR(H1)); price far above the cloud = extended = rejected |
-| M15 | Ignition timing | Micro-breakout: close through M15 tenkan **and** M15 cloud with momentum (close above prior closed bar); optional chikou confirm — the **only** chikou in the engine |
+| H4 | Trend gate — a REAL breakout | **Full H4 price+chikou breakout** (`InpRequireH4Breakout`, default on): price above/below tenkan, kijun and cloud AND chikou clear above/below price and levels at its plotted position 26 bars back. Disable it (`false`) to fall back to the sticky `InpBiasMode` (0 = kijun+cloud, 1 = kijun+tenkan structure, 2 = kijun only) |
+| H1 | Pullback zone + freshness | Price on the trend side of the H1 Kijun and within `InpZoneToleranceATR` × ATR(H1) of the cloud **or** (mode 1, default) the tenkan — catches the shallow pullbacks that never reach the cloud; price far from both = extended = rejected |
+| M15 | Ignition timing | Micro-breakout: close through M15 tenkan **and** M15 cloud with momentum (close above prior closed bar); optional M15 chikou confirm (`InpRequireChikou`, default off) |
 
 Plus two cross-TF gates:
 
-- **Compression** (`InpRequireCompression`, default on): the sister-level
-  coincidence `|H4 Kijun − H1 Span B| < InpCompressionATR × ATR(H1)` — all
-  midpoints converge, i.e. pre-breakout energy. (The observed "H4 Kijun = H1
-  cloud" chart sightings are this coincidence, not an identity.)
-- **Freshness** (`InpFreshnessBars`, default 9): bars since the last H1
-  Kijun touch must be ≤ 9 — the move must be young. This is the direct
+- **Compression** (`InpRequireCompression`, default off; threshold 0.35): the
+  sister-level coincidence `|H4 Kijun − H1 Span B| < InpCompressionATR ×
+  ATR(H1)` — all midpoints converge, i.e. pre-breakout energy. (The observed
+  "H4 Kijun = H1 cloud" chart sightings are this coincidence, not an
+  identity.) Off by default because it rarely coexists with a fresh H4
+  chikou breakout — turn it on to require the rarest, highest-energy setups.
+- **Freshness** (`InpFreshnessBars`, default 17): bars since the last H1
+  Kijun touch must be ≤ 17 — the move must be young. This is the direct
   answer to "M1 is fully developed and too late": maturity is measured by
   move age, not by line alignment.
 
-### Exit & risk (verbatim from the H4-M1 VPS build)
+### Exit & risk (swing-scale machinery, H4-H1 experimental risk)
 
-- ATR(M15) × 3 protective stop on every position; equity-tiered ladder
-  (`GetEquityRisk`), `InpMaxRiskPct` cap and free-margin cap.
-- M15 chandelier trail once profitable (choppy-only via ADX(M15) by default).
-- BE30 break-even move (30-min profit window from entry).
-- M15 close crossing the M15 Kijun against the trade as the final fallback.
-- No Alert popups; runs only on closed M15 bars (once per 15 min) to cut CPU.
+- ATR(H1) × 3 protective stop on every position.
+- **Risk sizing identical to the H4-M1 VPS build** — the equity-tiered
+  ladder (`GetEquityRisk`) with fixed lots up to $8k and
+  `RiskBasedLots` at `InpHighEquityRiskPct` (1.0%) of equity above;
+  `CapToRisk` by `InpMaxRiskPct`, `CapToMargin` by free margin.
+- **ATR(H1) chandelier trail** once profitable (3.0 × ATR(H1) distance,
+  armed at 2.0 × ATR(H1) profit; choppy-only via ADX(H1) by default). The
+  peak reference is the forming M15 bar.
+- **Spike profit lock** (default on): when an M15 bar (forming or last
+  closed) moves ≥ 3.0 × ATR(M15) in the trade direction while the trade is
+  already locked in ≥ 1.0 × ATR(H1) of profit, the stop slams to just
+  0.5 × ATR(H1) behind the spike extreme — sudden peaks are banked before
+  the typical post-spike reversal.
+- **Cadence:** exit management (trail + spike lock + BE) re-evaluates on
+  every new **M1** bar so a spike's peak is locked within a minute;
+  entries and the H1-kijun fallback exit run on new **M15** bars.
+- **H1 close crossing the H1 Kijun** as the final fallback exit (the M15
+  kijun exit of the M1 scalper builds stops out normal swing pullbacks —
+  that was the "stopped out too early" cause).
+- **BE30 off by default** — its 30-minute profit window was tuned for
+  M1-cadence entries; on M15 swings it arms on the first noise tick and
+  hands the trade back at breakeven. Flip on only for A/B.
+- No Alert popups.
 
 ### Ignition inputs
 
 | Parameter | Default | Description |
 |-----------|---------|--------------|
-| `InpFreshnessBars` | 9 | Max bars since last H1 Kijun touch for entry (young-move gate) |
-| `InpZoneToleranceATR` | 0.5 | H1 pullback zone tolerance (× ATR H1) |
-| `InpRequireCompression` | `true` | Require \|H4 Kijun − H1 Span B\| < threshold (compression) |
-| `InpCompressionATR` | 0.15 | Compression threshold (× ATR H1) |
-| `InpRequireChikou` | `true` | Require M15 chikou confirmation on the ignition bar |
+| `InpFreshnessBars` | 17 | Max bars since last H1 Kijun touch for entry (young-move gate) |
+| `InpZoneToleranceATR` | 1.0 | H1 pullback zone tolerance (× ATR H1) |
+| `InpBiasMode` | 1 | H4 bias when `InpRequireH4Breakout=false`: 0 = kijun+cloud, 1 = kijun+tenkan structure, 2 = kijun only |
+| `InpRequireH4Breakout` | `true` | Require the full H4 price+chikou breakout (classic alignment condition on the trend TF) |
+| `InpZoneMode` | 1 | H1 zone: 0 = cloud pullback only, 1 = cloud OR tenkan pullback |
+| `InpRequireCompression` | `false` | Require \|H4 Kijun − H1 Span B\| < threshold (compression) |
+| `InpCompressionATR` | 0.35 | Compression threshold (× ATR H1) |
+| `InpRequireChikou` | `false` | Require M15 chikou confirmation on the ignition bar |
+
+### Spike profit protection inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpSpikeLockEnabled` | `true` | Slam SL to just behind sudden spike moves (checked every M1 bar) |
+| `InpSpikeATR` | 3.0 | Spike = an M15 bar moved ≥ this × ATR(M15) in the trade direction |
+| `InpSpikeProfitATR` | 1.0 | Min locked profit before the spike lock arms (× ATR H1) |
+| `InpSpikeBufferATR` | 0.5 | Spike-lock distance behind the spike extreme (× ATR H1) |
 
 All other inputs (Ichimoku periods, risk protection, equity sizing, trail,
-BE30) are identical to the H4-M1 VPS build.
+BE30) are identical to the H4-M1 VPS build, except ATR is computed on **H1**
+(swing scale) and BE30 ships **off**.
 
 ### Status & caveats
 
@@ -938,13 +970,21 @@ BE30) are identical to the H4-M1 VPS build.
 - **Not yet backtested.** Suggested first pass: same symbol/period vs the
   `experimental-h4-h1-align-ea.mq5` baseline — the difference isolates the
   ignition/compression/freshness gate from the full-alignment gate.
-- BE30 (30-minute window, M15 ATR) is tuned for M1-cadence scalping and will
-  rarely arm on M15 swings; if backtests show it never fires, set
-  `InpBE30Enabled = false` and let the chandelier trail carry exits.
-- Compression default `0.15 × ATR(H1)` is a tight band — if entries are
-  rare, loosen it before touching `InpFreshnessBars` (the freshness gate is
-  the anti-lateness mechanism; compression is the selectivity knob).
-- With `InpRequireChikou = false` the M15 ignition is a pure tenkan+cloud+
-  momentum breakout — earlier signals, more noise. Compare both before
-  choosing.
+- **H4 chikou blocks the first ~26 H4 bars (4.3 days) of a fresh move** — the
+  chikou span only confirms after it clears the candle 26 bars back. If that
+  starves fresh-breakout entries, A/B with `InpRequireH4Breakout = false` +
+  `InpBiasMode = 2` (kijun-only) — the freshness gate still filters lateness.
+- Compression (`false` by default) rarely coexists with a fresh H4 chikou
+  breakout — it's the "rarest setups only" knob; loosen `InpCompressionATR`
+  before switching it on.
+- The exit stack is swing-scaled: ATR(H1) stop/trail, H1 kijun fallback,
+  BE30 off. If a backtest shows trends being given back, the first knobs are
+  `InpTrailATR` (raise to ride) and `InpTrailActivateATR` (raise to hold);
+  if small accounts feel the fixed-lot ladder, adjust `InpATRMultiplier`.
+- The spike lock banks peaks fast but can also sell the top of a legit
+  impulse that keeps running — `InpSpikeBufferATR` and `InpSpikeATR` trade
+  give-back vs. early bank. A/B with `InpSpikeLockEnabled = false` to see
+  its contribution in isolation.
+- Exit management runs every M1 bar, so CPU use is higher than the pure
+  M15-cadence build — still trivial for a handful of symbols.
 

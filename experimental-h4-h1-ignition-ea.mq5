@@ -1,30 +1,35 @@
 //+------------------------------------------------------------------+
 //| Ichimoku H4-H1 Ignition EA (experimental)                        |
 //| Concept: equivalence-aware multi-timeframe breakout alignment.   |
-//|   H4  = trend bias filter (price vs Kijun + cloud side only —    |
-//|         no chikou, deliberately sticky)                          |
-//|   H1  = pullback zone (price retraced into/near the H1 cloud;    |
-//|         H1 Kijun = M30 cloud by the 26/52 bar law, so M30 is     |
-//|         redundant and omitted)                                   |
-//|   M15 = ignition timing (micro-breakout above M15 tenkan/cloud   |
-//|         with optional chikou confirm — the only chikou in the    |
-//|         engine, so it is cheap and rarely late)                  |
-//| Entry fires once per closed M15 bar when ALL of:                 |
-//|   1. H4 bias agrees with the trade direction                     |
-//|   2. H1 price is pulled back to the cloud zone (not extended)    |
-//|   3. optional compression: |H4 Kijun - H1 Span B| < threshold    |
-//|      (the sister-level coincidence = pre-breakout energy)        |
-//|   4. M15 ignition breakout (tenkan + cloud + momentum)           |
-//|   5. freshness: bars since last H1 Kijun touch <= InpFreshness   |
-//|      (the move must be young — the anti-"too late" gate)         |
-//| Exit:  M15 chandelier trail (locks in the peak) once profitable, |
-//|        M15 close crossing M15 kijun as final fallback, or ATR-   |
-//|        based protective stop loss (all verbatim from the H4-M1   |
-//|        VPS build)                                                |
-//| Risk:  identical ladder/caps/margin logic as the H4-M1 VPS build |
-//|        (equity tiers + InpMaxRiskPct cap + free-margin cap)      |
-//| VPS: no Alert popups or equity alerts; all logic runs only on    |
-//|        closed M15 bars (once per 15 min) to cut CPU usage        |
+//|   H4  = trend gate: the full price+chikou breakout (classic       |
+//|         alignment condition on the trend TF); optional looser     |
+//|         bias modes via InpRequireH4Breakout/InpBiasMode           |
+//|   H1  = pullback zone (price pulled back to the H1 cloud and/or   |
+//|         tenkan; H1 Kijun = M30 cloud by the 26/52 bar law, so     |
+//|         M30 is redundant and omitted)                             |
+//|   M15 = ignition timing (micro-breakout above M15 tenkan/cloud    |
+//|         with optional chikou confirm)                             |
+//| Entry fires once per closed M15 bar when ALL of:                  |
+//|   1. H4 breakout/bias agrees with the trade direction             |
+//|   2. H1 price is pulled back to the zone (not extended)           |
+//|   3. optional compression: |H4 Kijun - H1 Span B| < threshold     |
+//|      (sister-level coincidence = pre-breakout energy)             |
+//|   4. M15 ignition breakout (tenkan + cloud + momentum)            |
+//|   5. freshness: bars since last H1 Kijun touch <= InpFreshness    |
+//|      (the move must be young — the anti-"too late" gate)          |
+//| Exit:  swing-scale machinery — ATR(H1) chandelier trail once      |
+//|        profitable, spike profit lock (SL slams behind sudden      |
+//|        impulse moves within a minute), H1 close crossing H1 kijun |
+//|        as final fallback, or ATR(H1)-based protective stop loss.  |
+//|        Exit management runs on every closed M1 bar; entries on    |
+//|        closed M15 bars. BE30 off by default (its 30-min M1-scalper |
+//|        window traps swing trades).                                |
+//| Risk:  identical to the H4-M1 VPS build — equity-tiered ladder     |
+//|        (GetEquityRisk) with fixed lots up to $8k and               |
+//|        RiskBasedLots at InpHighEquityRiskPct above; caps by        |
+//|        InpMaxRiskPct and free margin                               |
+//| VPS: no Alert popups or equity alerts; exit management once per   |
+//|        closed M1 bar, swing checks once per closed M15 bar         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -40,7 +45,7 @@ input int    Slippage = 30;
 
 input group  "Risk Protection"
 input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
-input int    InpATRPeriod         = 14;     // ATR period (M15)
+input int    InpATRPeriod         = 14;     // ATR period (H1)
 input double InpATRMultiplier     = 3.0;    // SL distance = ATR * multiplier
 input int    InpMaxSpreadPoints   = 60;     // Max spread in points to allow entry (0 = no limit)
 input double InpHighEquityRiskPct = 1.0;    // % of equity risked per trade once equity > $8000
@@ -52,23 +57,32 @@ enum ENUM_TRAIL_MODE { TRAIL_OFF = 0, TRAIL_ALWAYS = 1, TRAIL_CHOPPY = 2 };
 
 input group  "Exit Management"
 input ENUM_TRAIL_MODE InpTrailMode        = TRAIL_CHOPPY;  // 0=off, 1=always, 2=choppy-only (ADX)
-input double          InpTrailATR         = 2.0;   // Trail distance = ATR(M15) * multiplier
-input double          InpTrailActivateATR = 1.0;   // Arm the trail once profit >= ATR(M15) * multiplier
-input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (M15)
+input double          InpTrailATR         = 3.0;   // Trail distance = ATR(H1) * multiplier
+input double          InpTrailActivateATR = 2.0;   // Arm the trail once profit >= ATR(H1) * multiplier
+input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (H1)
 input double          InpChopADXLevel     = 22.0;  // ADX below this = choppy -> trail on in auto mode
 
 input group  "Break-Even (BE30) Management"
-input bool   InpBE30Enabled        = true;   // Move SL to break even when profitable in time
+input bool   InpBE30Enabled        = false;  // Move SL to break even when profitable in time (off by default: M1-tuned window traps swing trades)
 input int    InpBE30Minutes        = 30;     // Profit window after entry (minutes)
-input double InpBE30ActivateATR    = 0.5;    // Min profit to arm BE (x ATR M15)
+input double InpBE30ActivateATR    = 0.5;    // Min profit to arm BE (x ATR H1)
 input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers spread)
 
+input group  "Spike Profit Protection"
+input bool   InpSpikeLockEnabled    = true;   // Slam SL to just behind sudden spike moves (checked every M1 bar)
+input double InpSpikeATR            = 3.0;    // Spike = an M15 bar moved >= this x ATR(M15) in the trade direction
+input double InpSpikeProfitATR      = 1.0;    // Min locked profit before the spike lock arms (x ATR H1)
+input double InpSpikeBufferATR      = 0.5;    // Spike-lock distance behind the spike extreme (x ATR H1)
+
 input group  "Ignition Entry"
-input int    InpFreshnessBars      = 9;      // Max bars since last H1 Kijun touch for entry (young-move gate)
-input double InpZoneToleranceATR   = 0.5;    // H1 pullback zone tolerance (x ATR H1)
-input bool   InpRequireCompression = true;   // Require |H4 Kijun - H1 Span B| < threshold (compression)
-input double InpCompressionATR     = 0.15;   // Compression threshold (x ATR H1)
-input bool   InpRequireChikou      = true;   // Require M15 chikou confirmation on the ignition bar
+input int    InpFreshnessBars      = 17;     // Max bars since last H1 Kijun touch for entry (young-move gate)
+input double InpZoneToleranceATR   = 1.0;    // H1 pullback zone tolerance (x ATR H1)
+input int    InpBiasMode           = 1;      // H4 bias (used when InpRequireH4Breakout=false): 0=price vs kijun+cloud, 1=kijun+tenkan structure, 2=kijun only
+input bool   InpRequireH4Breakout  = true;   // Require the full H4 price+chikou breakout (classic alignment condition on the trend TF)
+input int    InpZoneMode           = 1;      // H1 zone: 0=cloud pullback only, 1=cloud OR tenkan pullback
+input bool   InpRequireCompression = false;  // Require |H4 Kijun - H1 Span B| < threshold (compression)
+input double InpCompressionATR     = 0.35;   // Compression threshold (x ATR H1)
+input bool   InpRequireChikou      = false;  // Require M15 chikou confirmation on the ignition bar
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
@@ -82,12 +96,13 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 };
 
 int      ich[MAX_SYMS][TF_COUNT];
-int      atr[MAX_SYMS];     // ATR(M15) — VPS risk, trail and BE distances
-int      atrH1[MAX_SYMS];   // ATR(H1) — entry zone tolerance + compression threshold
-int      adx[MAX_SYMS];     // ADX(M15) handle for choppy-market regime detection
+int      atr[MAX_SYMS];     // ATR(H1) — SL distance, trail, BE, zone tolerance + compression (swing scale)
+int      atrM15[MAX_SYMS];  // ATR(M15) — spike detection unit (single M15 bar ranges)
+int      adx[MAX_SYMS];     // ADX(H1) handle for choppy-market regime detection
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM15bar[MAX_SYMS];
+datetime lastM1bar[MAX_SYMS];   // exit-management cadence (spike peak lock-in)
 datetime noReentryUntil[MAX_SYMS];
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
@@ -135,6 +150,7 @@ int OnInit()
    {
       state[s] = 0;
       lastM15bar[s] = 0;
+      lastM1bar[s] = 0;
       noReentryUntil[s] = 0;
       entryTime[s] = 0;
       beMoved[s] = false;
@@ -144,24 +160,20 @@ int OnInit()
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
-      atr[s] = INVALID_HANDLE;
-      if(InpUseStopLoss)
-      {
-         atr[s] = iATR(syms[s], PERIOD_M15, InpATRPeriod);
-         if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
-      }
+      atr[s] = iATR(syms[s], PERIOD_H1, InpATRPeriod);
+      if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
 
-      atrH1[s] = INVALID_HANDLE;
-      if(InpRequireCompression || InpZoneToleranceATR > 0)
+      atrM15[s] = INVALID_HANDLE;
+      if(InpSpikeLockEnabled)
       {
-         atrH1[s] = iATR(syms[s], PERIOD_H1, InpATRPeriod);
-         if(atrH1[s] == INVALID_HANDLE) return(INIT_FAILED);
+         atrM15[s] = iATR(syms[s], PERIOD_M15, InpATRPeriod);
+         if(atrM15[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
       adx[s] = INVALID_HANDLE;
       if(InpTrailMode == TRAIL_CHOPPY)
       {
-         adx[s] = iADX(syms[s], PERIOD_M15, InpADXPeriod);
+         adx[s] = iADX(syms[s], PERIOD_H1, InpADXPeriod);
          if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
@@ -179,7 +191,7 @@ void OnDeinit(const int reason)
       for(int t = 0; t < TF_COUNT; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
-      if(atrH1[s] != INVALID_HANDLE) IndicatorRelease(atrH1[s]);
+      if(atrM15[s] != INVALID_HANDLE) IndicatorRelease(atrM15[s]);
       if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
    }
 }
@@ -257,36 +269,87 @@ void SyncStateFromPositions()
 // Entry Engine — equivalence-aware roles per timeframe
 //==============================================================
 
-// H4 trend bias: price vs Kijun and cloud side only (no chikou —
-// deliberately sticky, this is the filter not the trigger).
+// H4 trend gate — the filter not the trigger, but it must be a REAL
+// breakout. InpRequireH4Breakout = true (default): the full H4
+// price+chikou breakout — price above/below tenkan, kijun and cloud
+// AND the chikou span clear above/below price and levels at its
+// plotted position 26 bars back (the classic alignment condition on
+// the trend TF). = false: sticky bias only, per InpBiasMode:
+//   0 = price vs kijun + cloud (strict), 1 = kijun + tenkan structure,
+//   2 = kijun only (loosest — high-frequency variant for A/B tests).
 int CheckH4Bias(int s)
 {
-   double kijun[1], senA[1], senB[1];
-   if(CopyBuffer(ich[s][0], 1, 1, 1, kijun) <= 0) return 0;
-   if(CopyBuffer(ich[s][0], 2, 1, 1, senA)  <= 0) return 0;
-   if(CopyBuffer(ich[s][0], 3, 1, 1, senB)  <= 0) return 0;
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   if(CopyBuffer(ich[s][0], 0, 1, 1, tenkan) <= 0) return 0;
+   if(CopyBuffer(ich[s][0], 1, 1, 1, kijun)  <= 0) return 0;
+   if(CopyBuffer(ich[s][0], 2, 1, 1, senA)   <= 0) return 0;
+   if(CopyBuffer(ich[s][0], 3, 1, 1, senB)   <= 0) return 0;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_H4, 1, 1, rt) <= 0) return 0;
-   double closeP = rt[0].close;
+   if(CopyRates(syms[s], PERIOD_H4, 0, 1 + Kijun + 1, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+   if(ArraySize(rt) <= 1 + Kijun) return 0;
 
+   int sh = 1;   // last closed bar
+   double closeP = rt[sh].close;
    double cHi = MathMax(senA[0], senB[0]);
    double cLo = MathMin(senA[0], senB[0]);
 
-   if(closeP > kijun[0] && closeP > cHi) return  1;
-   if(closeP < kijun[0] && closeP < cLo) return -1;
+   if(InpRequireH4Breakout)
+   {
+      bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
+      bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
+      if(!above && !below) return 0;
+
+      // tenkan, kijun, cloud at chikou's chart position
+      int chShift = sh + Kijun;
+      double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
+      if(CopyBuffer(ich[s][0], 0, chShift, 1, tenkan_ch) <= 0) return 0;
+      if(CopyBuffer(ich[s][0], 1, chShift, 1, kijun_ch)  <= 0) return 0;
+      if(CopyBuffer(ich[s][0], 2, chShift, 1, senA_ch)   <= 0) return 0;
+      if(CopyBuffer(ich[s][0], 3, chShift, 1, senB_ch)   <= 0) return 0;
+
+      double cHiC = MathMax(senA_ch[0], senB_ch[0]);
+      double cLoC = MathMin(senA_ch[0], senB_ch[0]);
+
+      if(above && closeP > rt[chShift].high &&
+         closeP > tenkan_ch[0] && closeP > kijun_ch[0] && closeP > cHiC) return  1;
+      if(below && closeP < rt[chShift].low &&
+         closeP < tenkan_ch[0] && closeP < kijun_ch[0] && closeP < cLoC) return -1;
+      return 0;
+   }
+
+   if(InpBiasMode == 0)
+   {
+      if(closeP > kijun[0] && closeP > cHi) return  1;
+      if(closeP < kijun[0] && closeP < cLo) return -1;
+      return 0;
+   }
+   if(InpBiasMode == 1)
+   {
+      if(closeP > kijun[0] && tenkan[0] > kijun[0]) return  1;
+      if(closeP < kijun[0] && tenkan[0] < kijun[0]) return -1;
+      return 0;
+   }
+   if(closeP > kijun[0]) return  1;
+   if(closeP < kijun[0]) return -1;
    return 0;
 }
 
-// H1 pullback zone: H1 trend intact (price above H1 Kijun) while price
-// has retraced into or near the H1 cloud top (within tolerance). A price
-// far above the cloud is an extended move — the "too late" case.
+// H1 pullback zone: H1 trend intact (price on the right side of the H1
+// Kijun) while price is close to a pullback target. InpZoneMode:
+//   0 = cloud pullback only (price retraced into/near the H1 cloud)
+//   1 = cloud OR tenkan pullback (default — also catches the shallow
+//       pullbacks strong trends make to the H1 tenkan, which never
+//       reach the cloud)
+// A price far from both levels is an extended move — the "too late" case.
 bool CheckH1Zone(int s, int dir)
 {
-   double kijun[1], senA[1], senB[1];
-   if(CopyBuffer(ich[s][IDX_H1], 1, 1, 1, kijun) <= 0) return false;
-   if(CopyBuffer(ich[s][IDX_H1], 2, 1, 1, senA)  <= 0) return false;
-   if(CopyBuffer(ich[s][IDX_H1], 3, 1, 1, senB)  <= 0) return false;
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   if(CopyBuffer(ich[s][IDX_H1], 0, 1, 1, tenkan) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_H1], 1, 1, 1, kijun)  <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_H1], 2, 1, 1, senA)   <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_H1], 3, 1, 1, senB)   <= 0) return false;
 
    MqlRates rt[];
    if(CopyRates(syms[s], PERIOD_H1, 1, 1, rt) <= 0) return false;
@@ -296,15 +359,27 @@ bool CheckH1Zone(int s, int dir)
    double cLo = MathMin(senA[0], senB[0]);
 
    double tol = 0.0;
-   if(atrH1[s] != INVALID_HANDLE)
+   if(atr[s] != INVALID_HANDLE)
    {
       double a[1];
-      if(CopyBuffer(atrH1[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+      if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
       tol = InpZoneToleranceATR * a[0];
    }
 
-   if(dir ==  1) return (closeP > kijun[0] && closeP <= cHi + tol);
-   if(dir == -1) return (closeP < kijun[0] && closeP >= cLo - tol);
+   if(dir == 1)
+   {
+      if(closeP <= kijun[0]) return false;
+      if(closeP <= cHi + tol) return true;
+      if(InpZoneMode >= 1 && closeP <= tenkan[0] + tol) return true;
+      return false;
+   }
+   if(dir == -1)
+   {
+      if(closeP >= kijun[0]) return false;
+      if(closeP >= cLo - tol) return true;
+      if(InpZoneMode >= 1 && closeP >= tenkan[0] - tol) return true;
+      return false;
+   }
    return false;
 }
 
@@ -317,9 +392,9 @@ bool IsCompressed(int s)
    if(CopyBuffer(ich[s][0],       1, 1, 1, k4)  <= 0) return false;
    if(CopyBuffer(ich[s][IDX_H1],  3, 1, 1, sb1) <= 0) return false;
 
-   if(atrH1[s] == INVALID_HANDLE) return false;
+   if(atr[s] == INVALID_HANDLE) return false;
    double a[1];
-   if(CopyBuffer(atrH1[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
 
    return MathAbs(k4[0] - sb1[0]) < InpCompressionATR * a[0];
 }
@@ -416,16 +491,18 @@ int CheckIgnitionEntry(int s)
 }
 
 //==============================================================
-// Exit Check: M15 price closed on wrong side of M15 kijun
+// Exit Check: H1 price closed on wrong side of H1 kijun
+// (swing-scale fallback — the M15 kijun exit of the M1 scalper
+// builds stops out normal swing pullbacks)
 //==============================================================
 
-bool CheckM15Exit(int s, int dir)
+bool CheckH1Exit(int s, int dir)
 {
    double kij[1];
-   if(CopyBuffer(ich[s][IDX_M15], 1, 1, 1, kij) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_H1], 1, 1, 1, kij) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_M15, 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], PERIOD_H1, 1, 1, rt) <= 0) return false;
    double closeP = rt[0].close;
 
    if(dir ==  1 && closeP < kij[0]) return true;
@@ -434,7 +511,7 @@ bool CheckM15Exit(int s, int dir)
 }
 
 //==============================================================
-// Choppy-market detection: ADX(M15) below InpChopADXLevel means no
+// Choppy-market detection: ADX(H1) below InpChopADXLevel means no
 // trend, so the trail is allowed. An unready/unknown ADX value is
 // treated as choppy (trail on) to match the always-on default.
 //==============================================================
@@ -450,7 +527,8 @@ bool IsChoppy(int s)
 // Exit Trail: ATR chandelier stop once the trade is in profit.
 // The reference point is the extreme (high/low) of the M15 bar
 // that is still forming, so a peak is locked in before it
-// retraces. Re-evaluated on every new M15 bar; only ever
+// retraces; the distance and arm threshold use ATR(H1) (swing
+// scale). Re-evaluated on every new M15 bar; only ever
 // tightens and never sits inside the broker minimum stop.
 //==============================================================
 
@@ -520,11 +598,89 @@ void ManageTrail(int s)
 }
 
 //==============================================================
-// Break-Even Management (BE30): if the trade reaches a profitable
-// position within InpBE30Minutes of entry, the stop loss moves up
-// to break even plus a few points to cover the spread. One-shot
-// per trade (beMoved); the chandelier trail may tighten further
-// afterwards but never lowers the stop back down.
+// Spike Profit Protection: checked on every new M1 bar. When an M15
+// bar (forming or last closed) has moved InpSpikeATR x ATR(M15) in
+// the trade direction while the trade is already locked in
+// InpSpikeProfitATR x ATR(H1) of profit, the stop is slammed up to
+// just behind the spike extreme (InpSpikeBufferATR x ATR(H1)) — the
+// sudden peak is banked before the reversal that typically follows a
+// spike. Tighten-only, respects the broker minimum stop, and never
+// lowers an existing stop.
+//==============================================================
+
+void ManageSpikeLock(int s)
+{
+   if(state[s] == 0 || !InpSpikeLockEnabled || !InpUseStopLoss) return;
+   if(atr[s] == INVALID_HANDLE || atrM15[s] == INVALID_HANDLE) return;
+
+   double a1[1], a15[1];
+   if(CopyBuffer(atr[s], 0, 1, 1, a1) <= 0 || a1[0] <= 0) return;
+   if(CopyBuffer(atrM15[s], 0, 1, 1, a15) <= 0 || a15[0] <= 0) return;
+   double atrH1v = a1[0];
+
+   bool isLong = (state[s] == 1);
+   double bid  = SymbolInfoDouble(syms[s], SYMBOL_BID);
+   double ask  = SymbolInfoDouble(syms[s], SYMBOL_ASK);
+
+   // Must already be locked in real profit before the spike lock arms
+   if(isLong && bid < entryPrice[s] + InpSpikeProfitATR * atrH1v) return;
+   if(!isLong && ask > entryPrice[s] - InpSpikeProfitATR * atrH1v) return;
+
+   MqlRates m15[];
+   if(CopyRates(syms[s], PERIOD_M15, 0, 2, m15) <= 0) return;
+   ArraySetAsSeries(m15, true);
+
+   double spikeExtreme = isLong ? 0.0 : DBL_MAX;
+   bool spiked = false;
+   for(int i = 0; i < 2; i++)   // forming bar + last closed bar
+   {
+      double range = m15[i].high - m15[i].low;
+      if(range < InpSpikeATR * a15[0]) continue;
+      if(isLong  && m15[i].high > spikeExtreme) spikeExtreme = m15[i].high;
+      if(!isLong && m15[i].low  < spikeExtreme) spikeExtreme = m15[i].low;
+      spiked = true;
+   }
+   if(!spiked) return;
+
+   double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
+   int    digits  = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+
+   double price = isLong ? bid : ask;
+   double slNew = isLong ? spikeExtreme - InpSpikeBufferATR * atrH1v
+                         : spikeExtreme + InpSpikeBufferATR * atrH1v;
+   slNew = NormalizeDouble(slNew, digits);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != syms[s]) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
+
+      double slCur = PositionGetDouble(POSITION_SL);
+
+      if(isLong && slNew > slCur + point && slNew < price - minDist)
+      {
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " spike-lock SL modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+      }
+      if(!isLong && slNew < slCur - point && slNew > price + minDist)
+      {
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " spike-lock SL modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+      }
+   }
+}
+
+//==============================================================
+// Break-Even Management (BE30): off by default — its 30-minute
+// window was tuned for M1-cadence scalping and traps swing
+// trades on noise. If enabled: when the trade reaches a
+// profitable position within InpBE30Minutes of entry, the stop
+// loss moves up to break even plus a few points to cover the
+// spread. One-shot per trade (beMoved); the chandelier trail may
+// tighten further afterwards but never lowers the stop back down.
 //==============================================================
 
 double AvgOpenPrice(int s)
@@ -717,7 +873,7 @@ bool SpreadOK(string sym)
    return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
 }
 
-// ATR(M15) * multiplier, widened to the broker's minimum stop distance if
+// ATR(H1) * multiplier, widened to the broker's minimum stop distance if
 // needed. Returns false when the ATR value is unavailable so the caller
 // skips the entry instead of trading unprotected.
 bool GetStopDistance(int s, double &dist)
@@ -796,22 +952,35 @@ void OnTick()
 {
    for(int s = 0; s < symsCount; s++)
    {
-      // Cadence: all logic runs only on closed M15 bars, which change at
-      // most once per 15 minutes. Skip every intermediate tick entirely.
+      // Fast cadence: exit management (trail, spike lock, BE) runs on every
+      // new closed M1 bar so a sudden spike's peak is banked within a
+      // minute instead of up to 15.
+      MqlRates m1[];
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) continue;
+      ArraySetAsSeries(m1, true);
+      if(m1[1].time == lastM1bar[s]) continue;
+      lastM1bar[s] = m1[1].time;
+
+      // Sync position state once per new M1 bar
+      SyncStateFromPositions();
+
+      // Exit management: chandelier trail + spike lock + BE on each new M1 bar
+      if(state[s] != 0) ManageTrail(s);
+      if(state[s] != 0) ManageSpikeLock(s);
+      if(state[s] != 0) ManageBE(s);
+
+      // Swing checks: entry and the H1 kijun fallback exit only on new M15 bars
       MqlRates m15[];
       if(CopyRates(syms[s], PERIOD_M15, 0, 2, m15) < 2) continue;
       ArraySetAsSeries(m15, true);
       if(m15[1].time == lastM15bar[s]) continue;
       lastM15bar[s] = m15[1].time;
 
-      // Sync position state once per new M15 bar
-      SyncStateFromPositions();
-
-      // Exit check: close all when M15 closes against direction across M15 kijun
-      if(state[s] != 0 && CheckM15Exit(s, state[s]))
+      // Exit check: close all when H1 closes against direction across H1 kijun
+      if(state[s] != 0 && CheckH1Exit(s, state[s]))
       {
          string side = (state[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
+         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (H1 kijun crossed)";
          Print(msg); SendNotification(msg);
 
          if(ClosePositions(syms[s]))
@@ -822,12 +991,6 @@ void OnTick()
          else
             Print(PCTime() + " | " + syms[s] + " exit signal but positions still open — will retry");
       }
-
-      // Chandelier trail: tighten stops behind the peak on each new M15 bar
-      if(state[s] != 0) ManageTrail(s);
-
-      // BE30: move the stop to break even + cover if profitable in time
-      if(state[s] != 0) ManageBE(s);
 
       // Entry check: H4 bias + H1 zone + compression + M15 ignition +
       // freshness must all agree, spread must be sane
