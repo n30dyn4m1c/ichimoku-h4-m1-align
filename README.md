@@ -138,6 +138,29 @@ chmod +x deploy.sh
   compile both files, then remove and re-attach (or restart MT5) so the
   running EAs pick up the new `.ex5` builds.
 
+#### Auto-deploy on push (`auto-deploy.sh`)
+
+`deploy.sh` itself is manual — the VPS only knows about a push when you
+run it. `auto-deploy.sh` turns that into a cron poll: it asks the GitHub
+API for the latest commit SHA of the branch and runs `deploy.sh` only
+when the SHA changes, so unchanged polls do nothing (no re-downloads).
+It needs `deploy.sh` next to it.
+
+```bash
+# cron: poll every 5 minutes, deploy only when the repo changed
+crontab -e
+*/5 * * * * /home/neo/auto-deploy.sh >> /home/neo/auto-deploy.log 2>&1
+```
+
+Cron runs with a minimal environment — `curl`, `grep`, and `cut` are all
+you need, and the scripts use absolute paths internally. Poll a specific
+branch with `/home/neo/auto-deploy.sh <branch>`. The last-deployed SHA
+is stored in `/tmp/last_deploy_sha` (override with `STATE_FILE=`).
+
+> The compiled `.ex5` still needs the manual F7 + re-attach/restart step
+> in MetaEditor — auto-deploy only drops the updated source into
+> `MQL5/Experts/`; it cannot reload a running EA.
+
 ---
 
 ## MS-W1-D1 Alignment Build
