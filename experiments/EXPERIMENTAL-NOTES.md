@@ -1143,4 +1143,11 @@ lower-TF confirmation.
   H1 trade simultaneously, in either direction — the laddered lot counts
   from each can stack on one symbol.
 
+> **Removed:** the per-symbol US30, Silver, and BTCUSD variants of the
+> H4-H1 swing EA (`experimental-h4-h1-align-us30-ea.mq5`,
+> `experimental-h4-h1-align-silver-ea.mq5`,
+> `experimental-h4-h1-align-btc-ea.mq5`) were deleted from the repo.
+> The symbol-agnostic H4-H1 builds cover those markets through the
+> `Symbols` input.
+
 

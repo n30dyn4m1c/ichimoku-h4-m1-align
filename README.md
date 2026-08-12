@@ -542,6 +542,14 @@ main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
 for the full catalog.
 
+> The per-symbol US30, Silver, and BTCUSD variants of the H4-H1 swing EA
+> (`experimental-h4-h1-align-us30-ea.mq5`,
+> `experimental-h4-h1-align-silver-ea.mq5`,
+> `experimental-h4-h1-align-btc-ea.mq5`) were removed from the repo —
+> their per-symbol tuning is superseded by the symbol-agnostic H4-H1
+> builds (`experimental-h4-h1-align-ea.mq5`, the ignition EA, and the
+> per-timeframe EA), which accept any symbol through the `Symbols` input.
+
 The **MS-W1-D1 build** and its **Python + GitHub Actions monitor** — both new
 and unbacktested — are also documented in
 **experiments/EXPERIMENTAL-NOTES.md** (section 6) until they've
