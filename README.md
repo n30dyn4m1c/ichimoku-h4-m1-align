@@ -9,25 +9,32 @@
 
 Free MetaTrader 5 Expert Advisors that trade multi-timeframe Ichimoku Kinko
 Hyo alignment, with built-in ATR-based risk protection and equity-scaled
-position sizing. Five non-experimental builds are included — two standard
-alignment builds, two VPS deployment variants, and the slow MS-W1-D1 build:
+position sizing. Four main builds are included at the repo root — two VPS
+deployment variants and their MT5 desktop counterparts (identical logic with
+terminal alerts restored):
 
 | EA | File | Timeframes | Exit signal | Magic |
 |----|------|------------|-------------|-------|
-| **H4-M1 Alignment** | `ichimoku-h4-m1-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260501` |
-| **H1-M1 Alignment** | `ichimoku-h1-m1-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260502` |
 | **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260815` |
 | **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260814` |
-| **MS-W1-D1 Alignment** | `ichimoku-ms-w1-d1-ea.mq5` | MS → W1 → D1 (3 TFs) | D1 or W1 Kijun cross | `20260806` |
+| **H4-M1 MT5 Desktop** | `ichimoku-h4-m1-mt5pc-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260830` |
+| **H1-M1 MT5 Desktop** | `ichimoku-h1-m1-mt5pc-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260831` |
 
 All builds share the same entry rules, risk protection, and equity-sizing
 logic — they differ only in which timeframes must agree, which lower
 timeframe's Kijun triggers the exit, and whether they're tuned for unattended
-VPS use. Every build carries its own magic number, so the standard and VPS
-variants — and the two VPS builds together — can run on the same account,
-even on the same symbol, without interfering with each other. See
-[VPS Deployment Builds](#vps-deployment-builds) for what the VPS variants
+VPS use. Every build carries its own magic number, so all four can run on the
+same account, even on the same symbol, without interfering with each other.
+See [VPS Deployment Builds](#vps-deployment-builds) for what the VPS variants
 add on top.
+
+**Repository layout:**
+
+- `ichimoku-h4-m1-vps-ea.mq5`, `ichimoku-h1-m1-vps-ea.mq5` — the live VPS builds (do not modify; see AGENTS.md)
+- `ichimoku-h4-m1-mt5pc-ea.mq5`, `ichimoku-h1-m1-mt5pc-ea.mq5` — MT5 desktop copies with alerts
+- `archives/` — older standard builds and archived versions
+- `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
+- `utilities/` — deployment scripts and the Python monitor
 
 > **Free to use.** Download it, run it on a demo account, break it, improve it. Feedback and pull requests are welcome — see [Feedback & Contributing](#feedback--contributing) below.
 
@@ -61,7 +68,7 @@ scale automatically with account equity.
 - ✅ Multi-symbol support (comma-separated watch list, up to 60 symbols)
 - ✅ Crash/restart-safe — rebuilds internal state from open positions on every tick
 - ✅ Push notifications, terminal alerts, and log messages on every entry/exit
-- ✅ Weekly equity-growth alert with a suggested profit-withdrawal amount (standard builds only)
+- ✅ Weekly equity-growth alert with a suggested profit-withdrawal amount (MT5 desktop builds only)
 - ✅ VPS deployment builds — once-per-minute gating, push alerts, risk/margin-capped sizing, and a re-entry cooldown (see below)
 
 ---
@@ -69,21 +76,23 @@ scale automatically with account equity.
 ## VPS Deployment Builds
 
 The `ichimoku-h4-m1-vps-ea.mq5` and `ichimoku-h1-m1-vps-ea.mq5` files are
-deployment-oriented variants of the two standard builds, tuned for running
-unattended on a cheap VPS. Their trading logic is identical — same entry/exit
+deployment-oriented variants tuned for running unattended on a cheap VPS.
+Their trading logic is identical to the desktop builds — same entry/exit
 rules and risk protection — but they add several layers of hardening and
-differ from the standard builds in a few practical ways:
+differ from the desktop builds in a few practical ways:
 
 - **Once-per-minute gating.** `OnTick()` returns immediately unless a new
   closed M1 bar has appeared (`lastMinuteKey = TimeCurrent() / 60`), so the
   EA does almost no work between bars and burns negligible CPU/network on a
-  24/7 VPS. The standard builds evaluate on every tick.
+  24/7 VPS. The desktop MT5PC copies keep the same gating, so behavior is
+  identical — only the alerts differ.
 - **No equity alert, push-only notifications.** The weekly equity-growth /
   profit-withdrawal reminder (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
   `InpCheckDay`, `InpResetBaseline`) and the `InpSendPush` toggle are removed
   entirely. Every entry/exit sends a `SendNotification` push and a journal
   `Print`; the terminal `Alert()` popups are dropped to keep the VPS session
-  quiet.
+  quiet. The `*-mt5pc-ea.mq5` desktop copies restore both the `Alert()`
+  popups and the weekly equity alert.
 - **Re-entry cooldown.** `InpReentryCooldownSec` (default `0`) adds a minimum
   wait in seconds after an exit before the same symbol can be re-entered —
   handy for stopping the EA from instantly flip-flopping right after a
@@ -105,14 +114,24 @@ differ from the standard builds in a few practical ways:
   broker request volume.
 
 The VPS builds carry their own magic numbers (`20260815` for H4-M1,
-`20260814` for H1-M1), so they can run alongside the standard builds and
+`20260814` for H1-M1), so they can run alongside the desktop builds and
 each other on the same account. The [kihon suchi time-theory filter](#time-theory-filter-kihon-suchi)
 code has been removed from the VPS builds entirely (no edge in A/B runs);
 it lives only in the standard/experimental builds for testing.
 
-### Deploying the VPS builds (`deploy.sh`)
+### MT5 desktop builds (`*-mt5pc-ea.mq5`)
 
-`deploy.sh` downloads the two VPS EAs straight into the local MT5
+`ichimoku-h4-m1-mt5pc-ea.mq5` and `ichimoku-h1-m1-mt5pc-ea.mq5` are
+byte-for-byte copies of the VPS builds' logic (same gating, exits, trail,
+BE30, risk caps) with the desktop conveniences restored: `Alert()` popups on
+every entry/exit and the weekly equity-withdrawal alert with its
+`InpMinProfitTrigger` / `InpWithdrawProfitPct` / `InpCheckDay` /
+`InpResetBaseline` / `InpSendPush` inputs. Use these on a normal
+always-on desktop or laptop; use the VPS builds on the VPS.
+
+### Deploying the VPS builds (`utilities/deploy.sh`)
+
+`utilities/deploy.sh` downloads the two VPS EAs straight into the local MT5
 `MQL5/Experts` folder — no copy-paste or clipboard needed (handy over VNC
 where clipboard sync is flaky). Run it on the machine that runs MT5 (the
 VPS):
@@ -120,7 +139,7 @@ VPS):
 ```bash
 # install once
 curl -fsSL -o deploy.sh \
-  https://raw.githubusercontent.com/n30dyn4m1c/ichimoku-h4-m1-align/master/deploy.sh
+  https://raw.githubusercontent.com/n30dyn4m1c/ichimoku-h4-m1-align/master/utilities/deploy.sh
 chmod +x deploy.sh
 
 # every update — one command
@@ -138,24 +157,24 @@ chmod +x deploy.sh
   compile both files, then remove and re-attach (or restart MT5) so the
   running EAs pick up the new `.ex5` builds.
 
-#### Auto-deploy on push (`auto-deploy.sh`)
+#### Auto-deploy on push (`utilities/auto-deploy.sh`)
 
 `deploy.sh` itself is manual — the VPS only knows about a push when you
-run it. `auto-deploy.sh` turns that into a cron poll: it asks the GitHub
-API for the latest commit SHA of the branch and runs `deploy.sh` only
+run it. `utilities/auto-deploy.sh` turns that into a cron poll: it asks the
+GitHub API for the latest commit SHA of the branch and runs `deploy.sh` only
 when the SHA changes, so unchanged polls do nothing (no re-downloads).
 It needs `deploy.sh` next to it.
 
 ```bash
 # cron: poll every 5 minutes, deploy only when the repo changed
 crontab -e
-*/5 * * * * /home/neo/auto-deploy.sh >> /home/neo/auto-deploy.log 2>&1
+*/5 * * * * /home/neo/utilities/auto-deploy.sh >> /home/neo/auto-deploy.log 2>&1
 ```
 
 Cron runs with a minimal environment — `curl`, `grep`, and `cut` are all
 you need, and the scripts use absolute paths internally. Poll a specific
-branch with `/home/neo/auto-deploy.sh <branch>`. The last-deployed SHA
-is stored in `/tmp/last_deploy_sha` (override with `STATE_FILE=`).
+branch with `/home/neo/utilities/auto-deploy.sh <branch>`. The last-deployed
+SHA is stored in `/tmp/last_deploy_sha` (override with `STATE_FILE=`).
 
 > The compiled `.ex5` still needs the manual F7 + re-attach/restart step
 > in MetaEditor — auto-deploy only drops the updated source into
@@ -165,8 +184,8 @@ is stored in `/tmp/last_deploy_sha` (override with `STATE_FILE=`).
 
 ## MS-W1-D1 Alignment Build
 
-`ichimoku-ms-w1-d1-ea.mq5` is a much slower, rarer variant aimed at
-multi-week/month trend trades. Its alignment stack is only **MS → W1 → D1**
+`experiments/ichimoku-ms-w1-d1-ea.mq5` is a much slower, rarer variant aimed
+at multi-week/month trend trades. Its alignment stack is only **MS → W1 → D1**
 (monthly → weekly → daily, 3 timeframes from highest to lowest) — the full M1
 stack is dropped because lower timeframes would veto almost every valid
 signal. Key differences from the H4/H1 builds:
@@ -191,15 +210,16 @@ instead of running the EA on a VPS; use the EA itself for backtesting
 
 A daily, free monitor that computes the *exact same* MS→W1→D1 alignment from
 independent daily OHLC data and pushes a Telegram message when it fires — no
-VPS, no chart, no EA needed. Located in [`monitor/`](monitor/).
+VPS, no chart, no EA needed. Located in [`utilities/monitor/`](utilities/monitor/).
 
 - **Symbols:** BTC/USD, ETH/USD, XAUUSD, XAGUSD, US100, US30, EURUSD,
   GBPUSD, USDJPY, AUDUSD, USDCAD — the FX list is limited to common trending
   majors (high-volatility crosses like GBPJPY are excluded; edit
-  `monitor/config.py`).
+  `utilities/monitor/config.py`).
 - **Data:** Yahoo Finance daily bars via `yfinance`. Metals use the COMEX
   futures (`GC=F`, `SI=F`) as proxies for the XM spot symbols.
-- **Logic:** `monitor/ichimoku.py` is a faithful port of `CheckAlign()` in
+- **Logic:** `utilities/monitor/ichimoku.py` is a faithful port of
+  `CheckAlign()` in
   the EA, including the chikou-offset handling — so the monitor and EA
   should agree on the signal. The Senkou (cloud) values are read at the same
   offsets the EA uses: the price-side cloud is the Senkou value computed
@@ -207,7 +227,8 @@ VPS, no chart, no EA needed. Located in [`monitor/`](monitor/).
   plotted position sits another Kijun rows further back (see the offset
   table below). Because of that chikou-side cloud read, a timeframe needs
   at least `SENKOU_B + 2 × KIJUN + 1` bars (105 for the default periods)
-  before it can be evaluated — `HISTORY = "max"` in `monitor/config.py`
+  before it can be evaluated — `HISTORY = "max"` in
+  `utilities/monitor/config.py`
   covers that for every symbol on Yahoo.
 - **Dedupe:** `state/state.json` remembers the last notified direction per
   symbol, so a signal that persists for weeks won't spam you daily. It only
@@ -216,10 +237,10 @@ VPS, no chart, no EA needed. Located in [`monitor/`](monitor/).
 ### Run it
 
 ```bash
-pip install -r monitor/requirements.txt
+pip install -r utilities/monitor/requirements.txt
 export TELEGRAM_BOT_TOKEN=...   # from @BotFather
 export TELEGRAM_CHAT_ID=...     # your chat id
-python monitor/monitor.py
+python utilities/monitor/monitor.py
 ```
 
 ### Or schedule it free on GitHub Actions
@@ -392,7 +413,7 @@ withdraw funds automatically.
 
 ### Installation
 
-1. Download the build you want from this repository. For hands-on trading use `ichimoku-h4-m1-ea.mq5` and/or `ichimoku-h1-m1-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead or alongside them — all five builds can share one account — see [VPS Deployment Builds](#vps-deployment-builds).
+1. Download the build you want from this repository. For hands-on desktop trading use `ichimoku-h4-m1-mt5pc-ea.mq5` and/or `ichimoku-h1-m1-mt5pc-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead or alongside them — all four builds can share one account — see [VPS Deployment Builds](#vps-deployment-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
@@ -411,7 +432,7 @@ withdraw funds automatically.
 
 ## Configuration (Inputs)
 
-The standard builds share the same input set:
+The main builds share the same input set:
 
 | Parameter | Default | Description |
 |-----------|---------|--------------|
@@ -425,10 +446,10 @@ The standard builds share the same input set:
 | `InpATRMultiplier` | 3.0 | Stop distance = ATR × multiplier |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
 | `InpHighEquityRiskPct` | 1.0 | % of equity risked per trade once equity exceeds $8000 (see [Equity-Based Position Sizing](#equity-based-position-sizing)) |
-| `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert (standard builds) |
-| `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline (standard builds) |
-| `InpCheckDay` | Friday | Day of week the equity alert is evaluated (standard builds) |
-| `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (standard builds) |
+| `InpMinProfitTrigger` | 5.0 | Minimum profit above baseline equity to trigger the weekly alert (MT5 desktop builds) |
+| `InpWithdrawProfitPct` | 50.0 | Suggested withdrawal as a percentage of profit above baseline (MT5 desktop builds) |
+| `InpCheckDay` | Friday | Day of week the equity alert is evaluated (MT5 desktop builds) |
+| `InpResetBaseline` | `false` | Set to `true` once to reset the equity baseline to current equity (MT5 desktop builds) |
 | `InpSendPush` | `true` | Send push notifications for alerts (entries, exits, equity alert) |
 | `InpReentryCooldownSec` | 0 | Cooldown (seconds) after an exit before re-entering the same symbol — `0` disables (VPS builds) |
 | `InpMaxRiskPct` | 0.0 | Cap the worst-case ladder loss (initial ATR stop hit on every order) as % of equity — `0` disables (VPS builds) |
@@ -445,7 +466,6 @@ The standard builds share the same input set:
 > The VPS deployment builds replace the four equity-alert inputs and
 > `InpSendPush` with `InpReentryCooldownSec` and `InpMaxRiskPct` instead —
 > see [VPS Deployment Builds](#vps-deployment-builds).
-
 ## Timeframe Alignment Order
 
 Timeframes are checked highest to lowest — all must agree before entry.
@@ -486,11 +506,11 @@ standard counterparts.
 
 ## Technical Notes
 
-- **Magic numbers:** `20260501` (H4-M1 build), `20260502` (H1-M1 build),
-  `20260806` (MS-W1-D1 build), `20260815` (H4-M1 VPS), `20260814` (H1-M1 VPS)
-  — each EA only identifies and manages its own positions by its magic
+- **Magic numbers:** `20260815` (H4-M1 VPS), `20260814` (H1-M1 VPS),
+  `20260830` (H4-M1 MT5 desktop), `20260831` (H1-M1 MT5 desktop) — each EA
+  only identifies and manages its own positions by its magic
   number, so they won't interfere with other EAs, each other, or manual
-  trades on the same account. All five builds can run together.
+  trades on the same account. All four main builds can run together.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.
@@ -499,7 +519,9 @@ standard counterparts.
 
 ## Experimental EAs
 
-This repository also includes eight experimental strategies — a PO3-enhanced
+All experimental strategies live in [`experiments/`](experiments/), each
+prefixed `experimental-` to keep them clearly separate from the four main
+builds at the repo root. The set includes a PO3-enhanced
 variant of the H4-M1 alignment EA (`experimental-h4-m1-po3-ea.mq5`), an
 Ichimoku time-theory mean-reversion EA (`experimental-h1-m1-reversion-ea.mq5`),
 a fast M1-M5 breakout alignment EA (`experimental-m1-m5-breakout-ea.mq5`), a
@@ -508,18 +530,21 @@ shorter-anchor M30-M1 breakout alignment clone
 trims the stack down to M15 (`experimental-h4-m15-align-ea.mq5`), a
 Kijun-pullback variant of the H4-M1 build
 (`experimental-h4-m1-pullback-ea.mq5`) that re-enters the trend when price
-bounces off the H4 Kijun after a full-alignment breakout, and two break-even
+bounces off the H4 Kijun after a full-alignment breakout, two break-even
 experiments — `experimental-h4-m1-be30-ea.mq5`, which moves the stop to
 break even + a few points (spread cover) when a trade turns profitable
 within 30 minutes of entry, and `experimental-h4-m1-be15-ea.mq5`, which
 moves the stop to break even after the trade has been in profit
-continuously for 15 minutes. They're newer and less battle-tested than the
-main builds above; each file is prefixed `experimental-` to keep it clearly
-separate.
+continuously for 15 minutes — plus alignment-filter pruning forks of both
+VPS builds, breakout/hold experiments, and the older standard builds moved
+to [`archives/`](archives/). They're newer and less battle-tested than the
+main builds; see
+**[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
+for the full catalog.
 
 The **MS-W1-D1 build** and its **Python + GitHub Actions monitor** — both new
 and unbacktested — are also documented in
-**[EXPERIMENTAL-NOTES.md](EXPERIMENTAL-NOTES.md)** (section 6) until they've
+**experiments/EXPERIMENTAL-NOTES.md** (section 6) until they've
 earned main-build status.
 
 ---

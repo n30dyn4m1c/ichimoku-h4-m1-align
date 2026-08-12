@@ -3,7 +3,7 @@
 Strategies here are **experimental** — newer, less battle-tested than the two
 main alignment EAs, and shipped for research and demo testing. Backtest and
 forward-test on a demo account before risking capital. See the top-level
-[Disclaimer](README.md#️-disclaimer).
+[Disclaimer](../README.md#️-disclaimer).
 
 All experimental EA files are prefixed `experimental-` so they're easy to
 tell apart from the two main builds at a glance. The MS-W1-D1 build (section
@@ -19,7 +19,7 @@ experimental builds until it has earned main-build status.
 **Magic number:** `20260502`
 
 The same 6-timeframe (H4→M1) Ichimoku alignment entry as the main
-[H4-M1 EA](README.md#entry-logic), extended with **PO3
+[H4-M1 EA](../README.md#entry-logic), extended with **PO3
 dealing-range** location filters (the power-of-three price-level concept by
 Hopiplaka) for entry gating and tiered take-profits. Ichimoku decides *when*
 to trade; PO3 decides *whether the location is worth it* and *how far to
@@ -82,7 +82,7 @@ InpATRMultiplier` stop loss.
 | `InpPO3BiasTolFrac` | 0.4 | Rejection tag tolerance, as a fraction of the base rung |
 
 All other inputs (Ichimoku periods, risk protection, equity sizing, equity
-alert) are identical to the [main H4-M1 EA](README.md#configuration-inputs).
+alert) are identical to the [main H4-M1 EA](../README.md#configuration-inputs).
 
 ### Status & caveats
 
@@ -211,7 +211,7 @@ M5 cross up, M15 closes above the M15 Kijun).
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
-EAs — see the [README](README.md#configuration-inputs).
+EAs — see the [README](../README.md#configuration-inputs).
 
 ---
 
@@ -240,7 +240,7 @@ a much shorter-term (and noisier) trend anchor.
 
 Runs on every new M1 bar close, per symbol. `CheckAlign()` on each of M5 and
 M1 requires price *and* Chikou above/below Tenkan, Kijun, and the cloud —
-same rule table as the main EAs (see [README](README.md#entry-logic)) — plus
+same rule table as the main EAs (see [README](../README.md#entry-logic)) — plus
 a breakout-strength buffer: the close must clear the cloud by at least
 `InpMinBreakoutATR × ATR(tf)` on that timeframe (each of M5 and M1 uses its
 own ATR), not merely sit on the other side of it. Set `InpMinBreakoutATR = 0`
@@ -270,7 +270,7 @@ final fallback exit for trades that never arm the trail.
 
 Identical `InpUseStopLoss` / `InpMaxSpreadPoints` / `InpHighEquityRiskPct`
 risk protection and the same `GetEquityRisk()` equity-tiered position sizing
-as the main EAs — see [README](README.md#equity-based-position-sizing).
+as the main EAs — see [README](../README.md#equity-based-position-sizing).
 
 ### Inputs
 
@@ -293,7 +293,7 @@ as the main EAs — see [README](README.md#equity-based-position-sizing).
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
-EAs — see the [README](README.md#configuration-inputs).
+EAs — see the [README](../README.md#configuration-inputs).
 
 ### Technical notes
 
@@ -316,7 +316,7 @@ EAs — see the [README](README.md#configuration-inputs).
 **File:** `experimental-m30-m1-breakout-ea.mq5`
 **Magic number:** `20260723`
 
-A shorter-anchor clone of the main [H1-M1 alignment EA](README.md#entry-logic).
+A shorter-anchor clone of the main [H1-M1 alignment EA](../README.md#entry-logic).
 It runs the **exact same** 4-of-4 Ichimoku alignment entry and M5 Kijun exit,
 but drops the top timeframe: instead of aligning **H1→M1** it aligns
 **M30→M1**. This is a **trend/breakout alignment** build (all timeframes must
@@ -327,7 +327,7 @@ agree in one direction) — *not* a reversion EA.
 Runs on every new M1 bar close, per symbol. `CheckAlign()` on each of **M30,
 M15, M5, M1** requires price *and* Chikou above/below Tenkan, Kijun, and the
 cloud — the same rule table as the main EAs (see
-[README](README.md#entry-logic)). A trade opens only when **all four
+[README](../README.md#entry-logic)). A trade opens only when **all four
 timeframes** agree on direction and no position is already open on that symbol.
 Because the highest anchor is M30 rather than H1, setups form and clear faster
 than the main H1-M1 build.
@@ -352,7 +352,7 @@ final fallback exit for trades that never arm the trail.
 
 Identical `InpUseStopLoss` / `InpMaxSpreadPoints` / `InpHighEquityRiskPct`
 risk protection and the same `GetEquityRisk()` equity-tiered position sizing
-as the main EAs — see [README](README.md#equity-based-position-sizing). ATR is
+as the main EAs — see [README](../README.md#equity-based-position-sizing). ATR is
 computed on **M15** (as in the H1-M1 EA), not M1.
 
 ### Inputs
@@ -375,7 +375,7 @@ computed on **M15** (as in the H1-M1 EA), not M1.
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
-EAs — see the [README](README.md#configuration-inputs).
+EAs — see the [README](../README.md#configuration-inputs).
 
 ### Technical notes
 
@@ -398,7 +398,7 @@ EAs — see the [README](README.md#configuration-inputs).
 **File:** `experimental-h4-m15-align-ea.mq5`
 **Magic number:** `20260724`
 
-A trimmed clone of the main [H4-M1 EA](README.md#entry-logic) that keeps the
+A trimmed clone of the main [H4-M1 EA](../README.md#entry-logic) that keeps the
 same H4 top anchor but stops the alignment at **M15** — it aligns **H4, H1,
 M30, M15** and **disregards M5 and M1**. The idea is to keep the multi-hour
 trend context of the H4-M1 build while cutting out the two lowest, noisiest
@@ -410,7 +410,7 @@ waiting for a full 6-timeframe stack down to M1.
 Runs on every new **M15** bar close, per symbol. `CheckAlign()` on each of
 **H4, H1, M30, M15** requires price *and* Chikou above/below Tenkan, Kijun,
 and the cloud — the same rule table as the main EAs (see
-[README](README.md#entry-logic)). A trade opens only when **all four
+[README](../README.md#entry-logic)). A trade opens only when **all four
 timeframes** agree on direction and no position is already open on that
 symbol. Because M5 and M1 no longer have to line up, setups clear the entry
 filter sooner than the full H4-M1 stack.
@@ -428,7 +428,7 @@ H4-M1 build.
 **Same risk as the H4-M1 EA** — identical `InpUseStopLoss` /
 `InpMaxSpreadPoints` / `InpHighEquityRiskPct` risk protection and the same
 `GetEquityRisk()` equity-tiered position sizing (see
-[README](README.md#equity-based-position-sizing)). ATR is computed on **M15**,
+[README](../README.md#equity-based-position-sizing)). ATR is computed on **M15**,
 exactly as in the H4-M1 EA.
 
 ### Inputs
@@ -446,7 +446,7 @@ exactly as in the H4-M1 EA.
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
-EAs — see the [README](README.md#configuration-inputs).
+EAs — see the [README](../README.md#configuration-inputs).
 
 ### Technical notes
 
@@ -484,7 +484,7 @@ you trust the signal.
 
 `CheckAlign()` on each of MS, W1, and D1 requires price *and* Chikou above/
 below Tenkan, Kijun, and the cloud — the same rule table as the main EAs (see
-[README](README.md#entry-logic)). A trade opens only when **all three
+[README](../README.md#entry-logic)). A trade opens only when **all three
 timeframes** agree on direction, no position is open on the symbol, and the
 live spread passes `InpMaxSpreadPoints`. The stack and gating:
 
@@ -520,7 +520,7 @@ room). Independently, every position carries an
 
 The equity/alert inputs (`InpMinProfitTrigger`, `InpWithdrawProfitPct`,
 `InpCheckDay`, `InpResetBaseline`, `InpSendPush`) are the same as the main
-EAs — see the [README](README.md#configuration-inputs).
+EAs — see the [README](../README.md#configuration-inputs).
 
 ### Technical notes
 
@@ -550,17 +550,17 @@ EAs — see the [README](README.md#configuration-inputs).
 
 A daily, free monitor that computes the *exact same* MS→W1→D1 alignment from
 independent daily OHLC data and pushes a **Telegram** message when it fires —
-no VPS, no chart, no EA needed. Located in `monitor/`, documented in the
-[README](README.md#ms-w1-d1-signal-monitor-python--github-actions).
+no VPS, no chart, no EA needed. Located in `utilities/monitor/`, documented in the
+[README](../README.md#ms-w1-d1-signal-monitor-python--github-actions).
 
 - **Symbols:** BTC/USD, ETH/USD, XAUUSD, XAGUSD, US100, US30, EURUSD,
-  GBPUSD, USDJPY, AUDUSD, USDCAD (edit `monitor/config.py`). The FX list is
+  GBPUSD, USDJPY, AUDUSD, USDCAD (edit `utilities/monitor/config.py`). The FX list is
   limited to common trending majors — high-volatility crosses like GBPJPY are
   deliberately excluded.
 - **Data:** Yahoo Finance daily bars via `yfinance`; metals use the COMEX
   futures (`GC=F`, `SI=F`) as proxies for the XM spot symbols because Yahoo's
   spot symbols are delisted.
-- **Logic:** `monitor/ichimoku.py` is a faithful port of `CheckAlign()` in
+- **Logic:** `utilities/monitor/ichimoku.py` is a faithful port of `CheckAlign()` in
   the EA, including the chikou-offset handling — so the monitor and EA should
   agree on the signal.
 - **Dedupe:** `state/state.json` remembers the last notified direction per
@@ -673,7 +673,7 @@ the ATR(M15) × `InpATRMultiplier` protective stop on every position.
 | `InpMinADX` | 30.0 | Min ADX(H4) for a pullback entry (0 = off) |
 
 All other inputs are identical to the main H4-M1 EA (see
-[README](README.md#configuration-inputs)).
+[README](../README.md#configuration-inputs)).
 
 ### Status & caveats
 
@@ -739,7 +739,7 @@ EA restart mid-trade, the window is rebuilt from the position's open time.
 | `InpBE30CoverPoints` | 15 | Points beyond break even (covers spread) |
 
 All other inputs are identical to the main H4-M1 EA (see
-[README](README.md#configuration-inputs)).
+[README](../README.md#configuration-inputs)).
 
 ### Status & caveats
 
@@ -841,7 +841,7 @@ profit cannot be recovered.
 | `InpBE15CoverPoints` | 15 | Points beyond break even (covers spread) |
 
 All other inputs are identical to the main H4-M1 EA (see
-[README](README.md#configuration-inputs)).
+[README](../README.md#configuration-inputs)).
 
 ### Status & caveats
 

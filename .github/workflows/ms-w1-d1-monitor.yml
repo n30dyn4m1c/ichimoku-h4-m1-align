@@ -32,10 +32,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r monitor/requirements.txt
+        run: pip install -r utilities/monitor/requirements.txt
 
       - name: Run MS-W1-D1 alignment monitor
-        run: python monitor/monitor.py --state-dir state
+        run: python utilities/monitor/monitor.py --state-dir state
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
