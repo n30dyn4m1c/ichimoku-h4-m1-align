@@ -994,12 +994,13 @@ BE30) are identical to the H4-M1 VPS build, except ATR is computed on **H1**
 - `experimental-h4-m1-no-m30-ea.mq5` — alignment filter: H4/H1/M15/M5/M1 (Magic `20260822`)
 - `experimental-h4-m1-no-m30-m1-ea.mq5` — alignment filter: H4/H1/M15/M5 (Magic `20260823`)
 - `experimental-h4-m1-no-m30-m5-m1-ea.mq5` — alignment filter: H4/H1/M15 (Magic `20260824`)
+- `experimental-h4-m15-vps-ea.mq5` — alignment filter: H4/M15 ONLY (Magic `20260825`)
 
-Three forks of the H4-M1 VPS build testing how much of the multi-timeframe
+Four forks of the H4-M1 VPS build testing how much of the multi-timeframe
 alignment gate can be pruned before trade quality changes. Everything else
 (entries, M15 kijun exit, chandelier trail, BE30, risk sizing) is identical
-to the VPS build; only `tfs[]`, `TF_COUNT`, `IDX_M15` (now 2 in all three)
-and the magic number differ.
+to the VPS build; only `tfs[]`, `TF_COUNT`, `IDX_M15` (2 in the first three,
+1 in the H4/M15-only build) and the magic number differ.
 
 ### Rationale (Ichimoku timeframe equivalence)
 
@@ -1030,6 +1031,13 @@ timeframe.
 3. **no-M30 + no-M5 + no-M1** — the "validation-only" stack: H4 trend gate,
    H1 day-level confirmation, M15 swing confirmation. Expected: fewest but
    strongest entries — the moments where even the 6.5h envelope is broken.
+4. **H4/M15 only** (`experimental-h4-m15-vps-ea.mq5`) — the pure two-TF
+   envelope: H4 trend gate + M15 swing/exit TF, with the H1 day-level
+   confirmation dropped too. Per the equivalence table, H1 Kijun ≈ M30 Span
+   B ≈ 26h — the removed day-scale memory that used to keep entries out of
+   H1-level congestion. Expected: the fewest entries of the series and the
+   simplest "breakout across two scales" test; worth comparing directly
+   against build 3 to isolate what the H1 gate adds on gold.
 
 ### Status & caveats
 
@@ -1037,7 +1045,7 @@ timeframe.
   symbol/period vs the VPS build (or `experimental-h4-m1-no-m30-ea.mq5` as
   the intermediate baseline) — the delta isolates what each removed TF
   contributed to frequency and win rate.
-- The M1 bar gating in `OnTick` is untouched in all three builds — the
+- The M1 bar gating in `OnTick` is untouched in all four builds — the
   once-per-minute cadence is the timing mechanism, not the filter.
 - Total alignment is a multi-scale envelope breakout: the condition exists
   only during momentum bursts and can decay quickly on the lower TFs; trade
@@ -1045,5 +1053,79 @@ timeframe.
   not by alignment. If entries look too late even at H4/H1/M15, that is the
   H4 chikou 26-bar lag, not the filter pruning — see the ignition EA
   (section 10) for the early-entry redesign.
+
+---
+
+## 12. Per-Timeframe Breakout EA (tenkan-close exit)
+
+**File:** `experimental-h4-h1-per-timeframe-ea.mq5` (Magic `20260826` H4 / `20260827` H1)
+
+The most stripped-down build in the repo: a **single-timeframe** breakout
+experiment. No cross-TF confirmation, no M15 exits, no chandelier trail, no
+BE30 — each enabled timeframe opens on its own breakout and closes only by
+its tenkan or the ATR stop.
+
+### Rules
+
+- **Entry:** the same price+chikou breakout used as the top gate of the
+  alignment stack — price above/below tenkan, kijun, and cloud on the last
+  closed bar, with the chikou span clear of price and all three levels at
+  its plotted position. No other timeframe is consulted.
+- **Exit (managed):** aggressive profit locking — the SL moves to break
+  even as soon as the trade is profitable by `InpBEActivateATR` x ATR, then
+  a tight chandelier trail (`InpTrailATR` x ATR behind the forming bar's
+  peak, armed once profit >= `InpTrailActivateATR` x ATR) locks in the
+  breakout spike. Both are per-timeframe.
+- **Exit (final):** the next close back on the wrong side of that
+  timeframe's tenkan (conversion line) closes everything — a long exits on
+  a close below tenkan, a short on a close above it. The ATR-based
+  protective stop loss is the only other way out.
+- **ATR for the stop is read on the traded timeframe** so the protective
+  distance matches the holding scale of the trade.
+
+### Timeframe options
+
+`InpUseH4` / `InpUseH1` enable each timeframe independently; at least one
+must be on. Each enabled timeframe monitors itself and fires on its own:
+separate state per timeframe per symbol, separate magic numbers (so an H4
+exit never touches an H1 position on the same symbol), and its own ATR
+stop. H4 trades use the same risk ladder as H1 trades ("same risk" — the
+equity-scaled `GetEquityRisk` sizing is shared).
+
+### Base and changes
+
+Forked from the simple `experimental-h4-m15-align-ea.mq5` base (per-symbol
+bar gating, equity alert, laddered lots — no cooldown/margin caps). The
+exit was swapped from the M15-kijun cross to the tenkan cross, gating moved
+to closed bars of each enabled timeframe, ATR moved to the traded
+timeframe, and state/ATR/magic/gating became per-timeframe arrays.
+
+### Why it exists
+
+The alignment stack can only enter when *every* scale confirms — a rare,
+late condition. This build tests the other extreme: the breakout alone on
+one scale at a time as a pure trend-capture, with the tenkan acting as a
+trailing exit in price space. H4 vs H1 on the same symbol shows how much of
+the edge is the horizon itself (4.3-day memory vs ~26-hour) rather than
+lower-TF confirmation.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.** Suggest comparing against the
+  VPS build and the H4/M15-only build (section 11, build 4) on the same
+  symbol/period.
+- Defaults are deliberately aggressive: BE at 0.3 x ATR profit and a 1.0 x
+  ATR chandelier (the VPS build uses 0.5/BE30 and 2.0 ATR). Expect frequent
+  break-even exits when a breakout stalls — that is the cost of locking
+  profit fast. Widen `InpTrailATR` toward 2.0 to give trades room.
+- Tenkan exits are slow by design: a long only exits after a full close
+  below the conversion line, so givebacks of 1–2 candles' worth of profit
+  are expected; the trail/BE stack usually exits earlier.
+- A deep adverse move to the protective stop is still an ordinary outcome
+  when the trade never reaches the BE/trail arm level — no strategy locks
+  profit on a loser.
+- With both timeframes enabled, the same symbol can hold an H4 trade and an
+  H1 trade simultaneously, in either direction — the laddered lot counts
+  from each can stack on one symbol.
 
 
