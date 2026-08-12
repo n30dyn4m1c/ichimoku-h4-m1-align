@@ -995,12 +995,16 @@ BE30) are identical to the H4-M1 VPS build, except ATR is computed on **H1**
 - `experimental-h4-m1-no-m30-m1-ea.mq5` — alignment filter: H4/H1/M15/M5 (Magic `20260823`)
 - `experimental-h4-m1-no-m30-m5-m1-ea.mq5` — alignment filter: H4/H1/M15 (Magic `20260824`)
 - `experimental-h4-m15-vps-ea.mq5` — alignment filter: H4/M15 ONLY (Magic `20260825`)
+- `experimental-h4-m1-no-m1-ea.mq5` — alignment filter: H4/H1/M30/M15/M5 (Magic `20260828`)
+- `experimental-h1-m1-no-m1-ea.mq5` — H1-VPS fork, filter: H1/M30/M15/M5 (Magic `20260829`)
 
-Four forks of the H4-M1 VPS build testing how much of the multi-timeframe
-alignment gate can be pruned before trade quality changes. Everything else
-(entries, M15 kijun exit, chandelier trail, BE30, risk sizing) is identical
-to the VPS build; only `tfs[]`, `TF_COUNT`, `IDX_M15` (2 in the first three,
-1 in the H4/M15-only build) and the magic number differ.
+Five forks of the H4-M1 VPS build plus one of the H1-M1 VPS build testing
+how much of the multi-timeframe alignment gate can be pruned before trade
+quality changes. Everything else (entries, exit-timeframe kijun cross,
+chandelier trail, BE30, risk sizing) is identical to the respective VPS
+build; only `tfs[]`, `TF_COUNT`, `IDX_M15`/`IDX_M5` (3 in the no-M1 builds,
+2 in the first three, 1 in the H4/M15-only build) and the magic number
+differ.
 
 ### Rationale (Ichimoku timeframe equivalence)
 
@@ -1038,6 +1042,12 @@ timeframe.
    H1-level congestion. Expected: the fewest entries of the series and the
    simplest "breakout across two scales" test; worth comparing directly
    against build 3 to isolate what the H1 gate adds on gold.
+5. **no-M1** (`experimental-h4-m1-no-m1-ea.mq5`) — keeps the full stack
+   minus the innermost 26-minute persistence gate. Expected: earlier
+   entries (timing anchors to M5) and fewer noise-blocked signals, without
+   losing the M30/H1 redundancy removal that build 1 tests. The same cut on
+   the H1-VPS build is `experimental-h1-m1-no-m1-ea.mq5` (filter H1/M30/
+   M15/M5) — a mirror test of the same claim at one scale lower.
 
 ### Status & caveats
 
@@ -1045,7 +1055,7 @@ timeframe.
   symbol/period vs the VPS build (or `experimental-h4-m1-no-m30-ea.mq5` as
   the intermediate baseline) — the delta isolates what each removed TF
   contributed to frequency and win rate.
-- The M1 bar gating in `OnTick` is untouched in all four builds — the
+- The M1 bar gating in `OnTick` is untouched in all six builds — the
   once-per-minute cadence is the timing mechanism, not the filter.
 - Total alignment is a multi-scale envelope breakout: the condition exists
   only during momentum bursts and can decay quickly on the lower TFs; trade
