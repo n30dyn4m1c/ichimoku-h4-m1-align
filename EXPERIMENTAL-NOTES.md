@@ -988,3 +988,62 @@ BE30) are identical to the H4-M1 VPS build, except ATR is computed on **H1**
 - Exit management runs every M1 bar, so CPU use is higher than the pure
   M15-cadence build — still trivial for a handful of symbols.
 
+## 11. H4-M1 alignment-filter experiments (timeframe pruning)
+
+**Files:**
+- `experimental-h4-m1-no-m30-ea.mq5` — alignment filter: H4/H1/M15/M5/M1 (Magic `20260822`)
+- `experimental-h4-m1-no-m30-m1-ea.mq5` — alignment filter: H4/H1/M15/M5 (Magic `20260823`)
+- `experimental-h4-m1-no-m30-m5-m1-ea.mq5` — alignment filter: H4/H1/M15 (Magic `20260824`)
+
+Three forks of the H4-M1 VPS build testing how much of the multi-timeframe
+alignment gate can be pruned before trade quality changes. Everything else
+(entries, M15 kijun exit, chandelier trail, BE30, risk sizing) is identical
+to the VPS build; only `tfs[]`, `TF_COUNT`, `IDX_M15` (now 2 in all three)
+and the magic number differ.
+
+### Rationale (Ichimoku timeframe equivalence)
+
+Every Ichimoku level is the midpoint of the high/low over N bars, so the
+26-bar lookback of a higher TF equals the 52-bar cloud Span B of the
+2x-lower TF:
+
+| Identity | Horizon |
+|----------|---------|
+| H1 Kijun = M30 Span B (exact) | ~26h |
+| M30 Kijun = M15 Span B (exact) | ~13h |
+
+And chikou on any TF proves only *26 bars of persistence at that scale*:
+26 minutes on M1, 2.2h on M5 — it cannot corroborate an H4 breakout whose
+own memory is 4.3 days. So M30 re-measures the same horizon as H1 (pure
+redundancy), while M5/M1 add entry-timing noise rather than trend
+validation. M15 is kept in every build because it is the exit/ATR/ADX
+timeframe.
+
+### What each build isolates
+
+1. **no-M30** — removes the one exactly-redundant check (its cloud = H1
+   kijun). Expected: near-identical trade frequency/quality vs VPS; cheapest
+   way to test the equivalence claim.
+2. **no-M30 + no-M1** — also drops the 26-minute persistence gate. Expected:
+   earlier entries (timing anchors to M5 instead of M1) and fewer
+   noise-blocked signals.
+3. **no-M30 + no-M5 + no-M1** — the "validation-only" stack: H4 trend gate,
+   H1 day-level confirmation, M15 swing confirmation. Expected: fewest but
+   strongest entries — the moments where even the 6.5h envelope is broken.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.** Suggested first pass: same
+  symbol/period vs the VPS build (or `experimental-h4-m1-no-m30-ea.mq5` as
+  the intermediate baseline) — the delta isolates what each removed TF
+  contributed to frequency and win rate.
+- The M1 bar gating in `OnTick` is untouched in all three builds — the
+  once-per-minute cadence is the timing mechanism, not the filter.
+- Total alignment is a multi-scale envelope breakout: the condition exists
+  only during momentum bursts and can decay quickly on the lower TFs; trade
+  duration is therefore decided by the exits (M15 kijun cross, chandelier),
+  not by alignment. If entries look too late even at H4/H1/M15, that is the
+  H4 chikou 26-bar lag, not the filter pruning — see the ignition EA
+  (section 10) for the early-entry redesign.
+
+
