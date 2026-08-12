@@ -859,3 +859,92 @@ All other inputs are identical to the main H4-M1 EA (see
   protects the stretch between entry and trail activation.
 - Like the trail, BE15 needs the ATR(M15) handle, so it is inactive when
   `InpUseStopLoss = false`.
+
+---
+
+## 10. H4-H1 Ignition EA (equivalence-aware compression/breakout)
+
+**File:** `experimental-h4-h1-ignition-ea.mq5`
+**Magic number:** `20260821`
+
+A redesign of the multi-timeframe alignment idea based on the Ichimoku
+timeframe-equivalence math:
+
+| Law | Identity |
+|-----|----------|
+| 26/9 = 2.89 | Tenkan of TF X ≈ Kijun of the 2.9x-lower TF (closest standard pair: H1 Kijun ↔ H4 Tenkan) |
+| 52/26 = 2 | **Kijun of TF X = cloud Span B of the 2x-lower TF exactly** (H1 Kijun IS the M30 cloud → M30 is redundant and omitted) |
+
+Two structural flaws in the old boolean "all TFs must align" gate motivated
+this build: (1) requiring price+chikou alignment on every TF from H4 to M1
+guarantees late entries (chikou at 26 bars back is the laggiest element), and
+(2) redundant TF checks (H1 Kijun = M30 cloud) measure the same horizon twice
+while never measuring the *relationship* between TFs — the compression that
+precedes breakouts.
+
+Instead of one alignment gate, the EA uses a state-machine reading:
+**compression → ignition → trend → mature** — entering on *ignition* (early,
+small stop at the compressed zone), not on full multi-TF confirmation (late).
+
+### Entry engine
+
+Checked once per new closed **M15** bar (all checks on last closed bars of
+each TF). Each timeframe has one role and is deliberately asymmetric:
+
+| TF | Role | Check |
+|----|------|-------|
+| H4 | Trend bias (sticky filter) | Close vs H4 Kijun + cloud side only — **no chikou** |
+| H1 | Pullback zone + freshness | Close above H1 Kijun but retraced into/near the H1 cloud top (± `InpZoneToleranceATR` × ATR(H1)); price far above the cloud = extended = rejected |
+| M15 | Ignition timing | Micro-breakout: close through M15 tenkan **and** M15 cloud with momentum (close above prior closed bar); optional chikou confirm — the **only** chikou in the engine |
+
+Plus two cross-TF gates:
+
+- **Compression** (`InpRequireCompression`, default on): the sister-level
+  coincidence `|H4 Kijun − H1 Span B| < InpCompressionATR × ATR(H1)` — all
+  midpoints converge, i.e. pre-breakout energy. (The observed "H4 Kijun = H1
+  cloud" chart sightings are this coincidence, not an identity.)
+- **Freshness** (`InpFreshnessBars`, default 9): bars since the last H1
+  Kijun touch must be ≤ 9 — the move must be young. This is the direct
+  answer to "M1 is fully developed and too late": maturity is measured by
+  move age, not by line alignment.
+
+### Exit & risk (verbatim from the H4-M1 VPS build)
+
+- ATR(M15) × 3 protective stop on every position; equity-tiered ladder
+  (`GetEquityRisk`), `InpMaxRiskPct` cap and free-margin cap.
+- M15 chandelier trail once profitable (choppy-only via ADX(M15) by default).
+- BE30 break-even move (30-min profit window from entry).
+- M15 close crossing the M15 Kijun against the trade as the final fallback.
+- No Alert popups; runs only on closed M15 bars (once per 15 min) to cut CPU.
+
+### Ignition inputs
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpFreshnessBars` | 9 | Max bars since last H1 Kijun touch for entry (young-move gate) |
+| `InpZoneToleranceATR` | 0.5 | H1 pullback zone tolerance (× ATR H1) |
+| `InpRequireCompression` | `true` | Require \|H4 Kijun − H1 Span B\| < threshold (compression) |
+| `InpCompressionATR` | 0.15 | Compression threshold (× ATR H1) |
+| `InpRequireChikou` | `true` | Require M15 chikou confirmation on the ignition bar |
+
+All other inputs (Ichimoku periods, risk protection, equity sizing, trail,
+BE30) are identical to the H4-M1 VPS build.
+
+### Status & caveats
+
+- **Not yet compiled** (no MetaEditor available during development) — braces/
+  parens checked manually only. F7-compile in MetaEditor and fix any warnings
+  before the first backtest.
+- **Not yet backtested.** Suggested first pass: same symbol/period vs the
+  `experimental-h4-h1-align-ea.mq5` baseline — the difference isolates the
+  ignition/compression/freshness gate from the full-alignment gate.
+- BE30 (30-minute window, M15 ATR) is tuned for M1-cadence scalping and will
+  rarely arm on M15 swings; if backtests show it never fires, set
+  `InpBE30Enabled = false` and let the chandelier trail carry exits.
+- Compression default `0.15 × ATR(H1)` is a tight band — if entries are
+  rare, loosen it before touching `InpFreshnessBars` (the freshness gate is
+  the anti-lateness mechanism; compression is the selectivity knob).
+- With `InpRequireChikou = false` the M15 ignition is a pure tenkan+cloud+
+  momentum breakout — earlier signals, more noise. Compare both before
+  choosing.
+
