@@ -7,12 +7,6 @@
 //| Experiment: if price reaches a profitable position within        |
 //|        InpBE30Minutes of entry, the stop loss moves up to        |
 //|        break even + a few points to cover the spread (BE30)      |
-//| Time theory: optional kihon suchi filter — a breakout is skipped |
-//|        when the H1/M30/M15/M5 move count (bars since the last    |
-//|        Kijun touch) equals a kihon suchi number up to 100 exactly |
-//|        (9/17/26/33/42/51/65/76/83/97). Nested: H1 is checked first, then M30,|
-//|        then M15, then M5 — each must be clear (not on a cycle)   |
-//|        before the next is checked; all clear => trade proceeds   |
 //| VPS: no Alert popups or equity alerts; all logic runs only on    |
 //|        closed M1 bars (once per minute) to cut CPU usage         |
 //| Risk:   ladder optionally capped by InpMaxRiskPct (0 = off) and  |
@@ -55,19 +49,10 @@ input int    InpBE30Minutes        = 30;     // Profit window after entry (minut
 input double InpBE30ActivateATR    = 0.5;    // Min profit to arm BE (x ATR M15)
 input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers spread)
 
-input group  "Time Theory (Kihon Suchi)"
-input bool   InpUseTimeFilter  = false;   // Skip entry when a TF move count equals a kihon suchi number (off by default)
-input string InpTimeCycles     = "9,17,26,33,42,51,65,76,83,97,101,129,172,200,226,257,676"; // Ichimoku kihon suchi cycles: bars since last Kijun touch (touch candle = bar 1, present candle included)
-input bool   InpTimeFilterH1   = true;    // Check H1 first (exact match, up to cycle 100)
-input bool   InpTimeFilterM30  = true;    // Check M30 next, only if H1 is clear
-input bool   InpTimeFilterM15  = true;    // Check M15 next, only if M30 is clear
-input bool   InpTimeFilterM5   = true;    // Check M5 last, only if M15 is clear
-
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
 #define TF_COUNT  5
 #define IDX_M5    3   // index of M5 in tfs[] — used for exit check
-#define KIHON_MAX_CYCLE 100   // cycle cap on every timeframe: older moves are never "mature"
 
 ENUM_TIMEFRAMES tfs[TF_COUNT] = {
    PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
@@ -81,7 +66,6 @@ string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 datetime noReentryUntil[MAX_SYMS];
-int      lastSkipKey[MAX_SYMS];   // dedup time-filter skip logs (tfIdx * 10000 + count)
 int      lastMinuteKey = -1;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
 
@@ -91,9 +75,6 @@ double   trailLow[MAX_SYMS];    // lowest low since entry (short chandelier refe
 
 datetime entryTime[MAX_SYMS];   // entry time per symbol (BE30 profit window)
 bool     beMoved[MAX_SYMS];     // BE30 stop already moved to break even (one-shot)
-
-int  g_cycles[];        // parsed kihon suchi cycle list (9,17,26,...,676 by default)
-int  g_cycleCount = 0;  // number of parsed cycles
 
 int MAGIC = 20260814;   // distinct from the other H1-M1 builds so both can run on one account
 
@@ -128,15 +109,11 @@ int OnInit()
    symsCount = ParseSymbols(Symbols);
    if(symsCount <= 0) return(INIT_FAILED);
 
-   ParseCycles(InpTimeCycles);
-   if(InpUseTimeFilter && g_cycleCount <= 0) return(INIT_FAILED);
-
    for(int s = 0; s < symsCount; s++)
    {
       state[s] = 0;
       lastM1bar[s] = 0;
       noReentryUntil[s] = 0;
-      lastSkipKey[s] = -1;
       entryTime[s] = 0;
       beMoved[s] = false;
       for(int t = 0; t < TF_COUNT; t++)
@@ -332,152 +309,6 @@ int CheckAllAlign(int s)
       if(CheckAlign(s, t) != dir) return 0;
    }
    return dir;
-}
-
-//==============================================================
-// Ichimoku Time Theory (Kihon Suchi)
-//==============================================================
-// The kihon suchi basic numbers (9 / 17 / 26 / 33 / 42 / 51 / 65 /
-// 76 / 83 / 97 / 101 / 129 / 172 / 200 / 226 / 257 / 676) are bar
-// counts at which a move tends
-// to mature and change direction. The count used
-// here is "bars since the last Kijun touch" (the breakaway), the same
-// convention as the H1-M1 reversion EA. At an aligned breakout the
-// count measures how many candles the current move has already
-// printed on that timeframe. If the count EXACTLY equals a kihon
-// suchi number up to 100 the move is mature and the breakout is low
-// probability; between cycles there is room for the move to continue
-// to the next number — the continuation case. The cascade below
-// checks H1 first, then M30, then M15, then M5 — each must be clear
-// before the next is consulted.
-
-// Parse the kihon suchi cycle list into g_cycles[].
-void ParseCycles(string list)
-{
-   string parts[];
-   int n = StringSplit(list, ',', parts);
-   ArrayResize(g_cycles, 0);
-   g_cycleCount = 0;
-   for(int i = 0; i < n; i++)
-   {
-      string p = parts[i];
-      StringTrimLeft(p);
-      StringTrimRight(p);
-      int v = (int)StringToInteger(p);
-      if(v > 0)
-      {
-         ArrayResize(g_cycles, g_cycleCount + 1);
-         g_cycles[g_cycleCount++] = v;
-      }
-   }
-}
-
-// True when the count exactly equals a cycle <= maxCycle (mature move).
-// Cycles beyond maxCycle are ignored — all timeframes cap at
-// KIHON_MAX_CYCLE (100).
-bool InTimeWindow(int count, int maxCycle)
-{
-   for(int i = 0; i < g_cycleCount; i++)
-   {
-      if(g_cycles[i] > maxCycle) continue;
-      if(count == g_cycles[i]) return true;
-   }
-   return false;
-}
-
-// Closed bars on timeframe tfIdx whose whole range stayed on the move's
-// side of the Kijun (above it for a long, below for a short), counted
-// from the first clear candle up to the present candle. Stops at the
-// first touch or side violation — the count is the age of the current
-// move in bars on that timeframe, with the touching candle as candle 1.
-// Lookback is bounded by maxCycle so shallow history suffices (100 bars
-// on any timeframe).
-int CountNoTouchTF(int s, int tfIdx, int dir, int maxCycle)
-{
-   int want = maxCycle + 10;
-   double kij[];
-   MqlRates rt[];
-   if(CopyBuffer(ich[s][tfIdx], 1, 1, want, kij) <= 0) return 0;
-   if(CopyRates(syms[s], tfs[tfIdx], 1, want, rt) <= 0) return 0;
-   ArraySetAsSeries(kij, true);
-   ArraySetAsSeries(rt, true);
-
-   int n = MathMin(ArraySize(kij), ArraySize(rt));
-   int count = 0;
-   for(int i = 0; i < n; i++)
-   {
-      double k = kij[i];
-      if(dir == 1)
-      {
-         if(rt[i].low <= k) break;    // touched the Kijun or slipped under it
-      }
-      else
-      {
-         if(rt[i].high >= k) break;   // touched the Kijun or slipped above it
-      }
-      count++;
-   }
-   // +2: candle 1 is the touching candle (the breakaway candle that
-   // starts the move); the count then runs through the clear candles
-   // up to the present forming candle.
-   return count + 2;
-}
-
-// One skip line per (timeframe, count) episode instead of one per minute.
-void LogTimeSkip(int s, int tfIdx, int count, string tfName)
-{
-   int key = tfIdx * 10000 + count;
-   if(lastSkipKey[s] == key) return;
-   lastSkipKey[s] = key;
-   Print(PCTime() + " | " + syms[s] + " skip entry: " + tfName + " time cycle mature (count " + IntegerToString(count) + ")");
-}
-
-// Nested kihon suchi cascade: H1 -> M30 -> M15 -> M5. Each timeframe
-// must be clear (count not exactly on a cycle) before the next is
-// checked; a mature count anywhere in the chain blocks the breakout.
-// Each timeframe's check is gated by its own input flag.
-// Returns true when the entry was skipped.
-bool TimeFilterBlocks(int s, int st)
-{
-   if(!InpUseTimeFilter) return false;
-
-   if(InpTimeFilterH1)
-   {
-      int c1 = CountNoTouchTF(s, 0, st, KIHON_MAX_CYCLE);
-      if(InTimeWindow(c1, KIHON_MAX_CYCLE))
-      {
-         LogTimeSkip(s, 0, c1, "H1");
-         return true;
-      }
-   }
-   if(InpTimeFilterM30)
-   {
-      int c30 = CountNoTouchTF(s, 1, st, KIHON_MAX_CYCLE);
-      if(InTimeWindow(c30, KIHON_MAX_CYCLE))
-      {
-         LogTimeSkip(s, 1, c30, "M30");
-         return true;
-      }
-   }
-   if(InpTimeFilterM15)
-   {
-      int c15 = CountNoTouchTF(s, 2, st, KIHON_MAX_CYCLE);
-      if(InTimeWindow(c15, KIHON_MAX_CYCLE))
-      {
-         LogTimeSkip(s, 2, c15, "M15");
-         return true;
-      }
-   }
-   if(InpTimeFilterM5)
-   {
-      int c5 = CountNoTouchTF(s, IDX_M5, st, KIHON_MAX_CYCLE);
-      if(InTimeWindow(c5, KIHON_MAX_CYCLE))
-      {
-         LogTimeSkip(s, IDX_M5, c5, "M5");
-         return true;
-      }
-   }
-   return false;
 }
 
 //==============================================================
@@ -907,12 +738,6 @@ void OnTick()
          int st = CheckAllAlign(s);
          if(st != 0)
          {
-            // Time theory: nested kihon suchi cascade — H1 must be
-            // clear (count not exactly on a cycle) before M30 is
-            // checked, then M15, then M5. A mature count anywhere in
-            // the chain blocks the entry.
-            if(TimeFilterBlocks(s, st)) continue;
-
             bool   isBuy = (st == 1);
             double dist  = 0.0;
             if(InpUseStopLoss && !GetStopDistance(s, dist)) continue;   // ATR unavailable — skip entry

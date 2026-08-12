@@ -106,9 +106,9 @@ differ from the standard builds in a few practical ways:
 
 The VPS builds carry their own magic numbers (`20260815` for H4-M1,
 `20260814` for H1-M1), so they can run alongside the standard builds and
-each other on the same account — see
-[Time Theory Filter](#time-theory-filter-kihon-suchi) for the shared
-cycle-filter behavior.
+each other on the same account. The [kihon suchi time-theory filter](#time-theory-filter-kihon-suchi)
+code has been removed from the VPS builds entirely (no edge in A/B runs);
+it lives only in the standard/experimental builds for testing.
 
 ---
 
