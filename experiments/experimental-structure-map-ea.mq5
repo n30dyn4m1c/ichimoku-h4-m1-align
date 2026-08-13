@@ -1045,15 +1045,15 @@ bool EvaluateSetup(int s, int &dir, double &slOut, double &tpOut,
                            : SymbolInfoDouble(syms[s], SYMBOL_BID);
    if(price <= 0.0) return false;
 
-   double anchor = touchExt;
+   double slAnchor = touchExt;
    if(InpSLBeyondSwing && g_map[InpTrigIdx].ok)
    {
-      if(d == 1 && g_map[InpTrigIdx].swLo > 0.0) anchor = MathMin(anchor, g_map[InpTrigIdx].swLo);
-      if(d == -1 && g_map[InpTrigIdx].swHi > 0.0) anchor = MathMax(anchor, g_map[InpTrigIdx].swHi);
+      if(d == 1 && g_map[InpTrigIdx].swLo > 0.0) slAnchor = MathMin(slAnchor, g_map[InpTrigIdx].swLo);
+      if(d == -1 && g_map[InpTrigIdx].swHi > 0.0) slAnchor = MathMax(slAnchor, g_map[InpTrigIdx].swHi);
    }
 
-   double sl = (d == 1) ? anchor - InpSLBufferATR * atrTrig
-                        : anchor + InpSLBufferATR * atrTrig;
+   double sl = (d == 1) ? slAnchor - InpSLBufferATR * atrTrig
+                        : slAnchor + InpSLBufferATR * atrTrig;
 
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
    double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
