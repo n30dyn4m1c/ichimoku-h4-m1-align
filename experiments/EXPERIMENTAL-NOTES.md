@@ -1758,22 +1758,23 @@ tests the concern that breakouts are preceded by flat, choppy areas:
   (short) by more than `InpFlatATRMult` x ATR(M1). A cloud that flattens
   or tilts against the breakout blocks the entry. Unreadable values count
   as not angled (conservative).
+- **ADX(51) filters — key levels 9, 17, 26:** at the breakout, the
+  directional index in the trade direction must sit in the window
+  **(17, 26]** — a buy needs 17 < +DI <= 26, a sell 17 < -DI <= 26.
+  Below 17 the breakout is too weak, above 26 it is overextended —
+  either way, no trade. The +DI/-DI lines must also have crossed at
+  most once over the last **9** periods; more than one crossover in
+  that window means the lines are chopping — consolidation — and the
+  breakout is not traded. Unreadable values block the entry
+  (conservative).
 - **Angled kijun:** the kijun must also be angled *in the breakout
   direction* — rising for a long, falling for a short — so the cross fires
   with the trend, not against it.
-- **Exit:** the ADX tier **at entry** sets the exit — it is locked when
-  the trade opens and never re-evaluated while the trade is open. With
-  the **lowest** ADX (below `InpADXLow`, default 22) the trade closes
-  when price closes across the tenkan against it (long on a close below
-  the tenkan, short on a close above). With **mid** ADX (between
-  `InpADXLow` and `InpADXHigh`) it closes when price closes across the
-  kijun against the trade. With **big** ADX (`InpADXHigh`, default 35,
-  or above) it holds until price closes back inside the cloud (between
-  the two Senkou spans). Every tier opens trades — ADX never blocks
-  entry, it only picks the exit. The tier is baked into the order
-  comment (`Kumo Breakout T0/T1/T2`) so a restart mid-trade keeps it.
-  The ATR(M1) stop loss is the only other way out. An unreadable ADX at
-  entry is treated as mid (kijun exit).
+- **Exit:** hold the trade until the trade-direction DI crosses over the
+  other DI line or the ADX line — whichever comes first. A long exits on
+  the closed bar where +DI crossed below -DI or below ADX; a short is
+  the mirror with -DI. The exit log says which cross fired. The ATR(M1)
+  stop loss is the only other way out.
 - **Risk:** one fixed position of `InpFixedLots` (default 0.10) by
   default — flip `InpUseFixedLots` off to get the H4-M1 VPS equity-tiered
   ladder sizing, `CapToRisk` and `CapToMargin`. Either way: ATR(M1) stop
@@ -1800,16 +1801,35 @@ build answers is whether filtering out flat-kijun breakouts and only
 entering when the kijun is angled in the trade direction raises the win
 rate enough to pay for the later, higher-risk entries it accepts.
 
-The ADX tier adds a second layer to that same concern: trend strength at
-entry decides how long to hold. In a strong trend (big ADX) the cloud
-exit is right — the move is big enough that giving back a close back
-inside the cloud is still a healthy exit. In a weaker trend (mid ADX)
-that same giveback is too much, so the kijun cross takes the trade out
-earlier. And in chop (lowest ADX) the tenkan cross locks the trade up
-almost immediately — the entry filters (flat kijun, thick cloud,
-future-cloud angle) still have to pass, but ADX only decides the exit,
-and only from the value at entry: the trade is managed against the
-regime it was born into, not the one it later drifts into.
+The ADX(51) filters add a second layer to that same concern: the
+directional index must be strong (above 17) and clean (no more than one
++DI/-DI crossover in the last 9 periods) at the breakout — strength
+without chop — and not overextended (26 cap) so the breakout isn't
+chased at its end. The exit then lets the trade run for as long as the
+directional push itself lasts: the position is held until the trade's DI
+crosses over the other DI or the ADX line, whichever arrives first — the
+momentum that opened the trade is the momentum that closes it.
+
+### Crossover possibilities (three ADX lines, six directed events)
+
+With +DI, -DI and ADX, every pairwise crossover exists in both
+directions — six events total:
+
+| Event | Meaning | Used by this EA |
+|---|---|---|
+| +DI crosses **above** -DI | Buy momentum overtakes sell momentum | — (buy entry window; sell exit) |
+| +DI crosses **below** -DI | Buy momentum lost to sell momentum | **Long exit** |
+| +DI crosses **above** ADX | Buy momentum stronger than average | — |
+| +DI crosses **below** ADX | Buy momentum fading below average | **Long exit** |
+| -DI crosses **above** ADX | Sell momentum stronger than average | — |
+| -DI crosses **below** ADX | Sell momentum fading below average | **Short exit** |
+
+The mirror events for a short are -DI crossing **below** +DI (sell exit)
+and -DI crossing **below** ADX (sell exit). The reverse-direction events
+(+DI above -DI, +DI above ADX, -DI above ADX) are not exits — they are
+the surge side, relevant for opposite-direction entries. The exit takes
+whichever of its two fade events arrives first on a closed bar, or the
+ATR stop.
 
 ### Status & caveats
 
@@ -1818,9 +1838,10 @@ regime it was born into, not the one it later drifts into.
 - The flat filter necessarily delays entries — the first bars of a real
   breakout can have a still-flat kijun, and this EA will sit those out. The
   `InpLogSkips` journal shows how often that happens.
-- Strict-inside-cloud exits mean a trade that runs far outside the cloud
-  gives back profit while waiting for a close back inside; there is no
-  trail in this build. Add one later if giveback hurts.
+- Crossover exits react to the DI lines themselves — a trade is held
+  only as long as the directional push holds, so givebacks come from the
+  lag between price and the ADX(51) lines, not from waiting for price to
+  travel back to a level. The ATR stop is the only other way out.
 - Single-timeframe by design — the tradeoff being tested is the flat
   filter itself, not multi-TF agreement. `TF_M1` is a single constant at
   the top of the file if a higher timeframe is ever wanted.

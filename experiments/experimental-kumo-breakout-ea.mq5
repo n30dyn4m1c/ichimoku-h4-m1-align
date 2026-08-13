@@ -13,13 +13,19 @@
 //|        InpMinCloudATR * ATR(M1)), and the future cloud (the       |
 //|        Senkou spans drawn Kijun bars ahead) is angled in the      |
 //|        breakout direction too                                     |
-//| Exit:  the ADX tier at entry sets the exit — with the lowest     |
-//|        ADX (< InpADXLow) the trade closes when price closes       |
-//|        across the tenkan against it, with mid ADX at the kijun    |
-//|        cross, and with big ADX (>= InpADXHigh) only when price    |
-//|        closes back inside the cloud. The tier is locked at entry  |
-//|        and never re-evaluated while the trade is open; it is      |
-//|        baked into the order comment so a restart keeps it.        |
+//| Momentum: ADX(51) with key levels 9, 17 and 26 — at the breakout |
+//|        the DI in the trade direction must sit in the window       |
+//|        (17, 26]: a buy needs 17 < +DI <= 26, a sell 17 < -DI <=   |
+//|        26 (below 17 = too weak, above 26 = overextended, no       |
+//|        trade), and the +DI/-DI lines must have crossed at most    |
+//|        once over the last 9 periods; more than one crossover =    |
+//|        consolidation, no trade                                    |
+//| Exit:  hold the trade until the trade-direction DI crosses over   |
+//|        the other DI line or the ADX line — whichever comes first  |
+//|        (all six pairwise crossover events among +DI, -DI, ADX     |
+//|        exist; a long exits on +DI crossing below -DI or below     |
+//|        ADX, a short on -DI crossing below +DI or below ADX);      |
+//|        ATR(M1) stop loss as the only other way out                |
 //| Risk:  one fixed position (InpFixedLots, default 0.10) instead of |
 //|        the equity-tiered ladder by default — flip InpUseFixedLots |
 //|        for the VPS ladder sizing; ATR(M1) stop loss on every      |
@@ -60,10 +66,11 @@ input group  "Position Sizing"
 input bool   InpUseFixedLots  = true;   // Trade one fixed position instead of the equity-tiered ladder
 input double InpFixedLots     = 0.10;   // Fixed lot size for the single position
 
-input group  "ADX Exit Tiers"
-input int    InpADXPeriod = 14;   // ADX period (M1)
-input double InpADXLow    = 22.0; // ADX below this = lowest tier — exit at price closing across the tenkan
-input double InpADXHigh   = 35.0; // ADX >= this = big tier — exit at price closing inside the cloud; in between = mid tier — exit at price closing across the kijun
+input group  "ADX Filter (key levels 9, 17, 26)"
+input int    InpADXPeriod   = 51;   // ADX period (M1)
+input int    InpADXWindow9  = 9;    // Key level 9: +DI/-DI crossover-count window (periods)
+input double InpADXLevel17  = 17.0; // Key level 17: +DI (buy) / -DI (sell) must exceed this at the breakout
+input int    InpADXLevel26  = 26;   // Key level 26: +DI (buy) / -DI (sell) above this = overextended — no trade
 
 input group  "Logging"
 input bool   InpLogSkips     = true;  // Log skipped entries (flat detected / kijun not angled)
@@ -81,7 +88,6 @@ datetime lastM1bar[MAX_SYMS];
 datetime noReentryUntil[MAX_SYMS];
 int      lastMinuteKey = -1;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
-int      exitTier[MAX_SYMS];   // exit tier locked at entry: 0=tenkan, 1=kijun, 2=cloud
 
 int MAGIC = 20260845;   // fresh — no other EA uses this
 
@@ -121,7 +127,6 @@ int OnInit()
       state[s] = 0;
       lastM1bar[s] = 0;
       noReentryUntil[s] = 0;
-      exitTier[s] = 1;   // mid tier until a real entry sets it
 
       ich[s] = iIchimoku(syms[s], TF_M1, Tenkan, Kijun, SenkouB);
       if(ich[s] == INVALID_HANDLE) return(INIT_FAILED);
@@ -178,13 +183,6 @@ void SyncStateFromPositions()
          {
             state[s] = dir;
             hasPos[s] = true;
-            // The exit tier was baked into the order comment at entry so
-            // a restart mid-trade keeps the tier that was locked in.
-            string cmt = PositionGetString(POSITION_COMMENT);
-            exitTier[s] = 1;
-            if(StringFind(cmt, "T0") >= 0)      exitTier[s] = 0;
-            else if(StringFind(cmt, "T1") >= 0) exitTier[s] = 1;
-            else if(StringFind(cmt, "T2") >= 0) exitTier[s] = 2;
             break;
          }
       }
@@ -310,32 +308,13 @@ bool KijunAngled(int s, int dir, double atrVal)
 }
 
 //==============================================================
-// Exit Check: price closed back inside the cloud (between the
-// two Senkou spans) on the last closed M1 bar
-//==============================================================
-
-bool PriceInsideCloud(int s)
-{
-   double senA[1], senB[1];
-   if(CopyBuffer(ich[s], 2, 1, 1, senA) <= 0) return false;
-   if(CopyBuffer(ich[s], 3, 1, 1, senB) <= 0) return false;
-
-   MqlRates rt[];
-   if(CopyRates(syms[s], TF_M1, 1, 1, rt) <= 0) return false;
-   double closeP = rt[0].close;
-
-   double cHi = MathMax(senA[0], senB[0]);
-   double cLo = MathMin(senA[0], senB[0]);
-   return closeP < cHi && closeP > cLo;
-}
-
-//==============================================================
-// ADX Exit Tiers: the tier is locked at entry and never
-// re-evaluated while the trade is open — lowest ADX
-// (< InpADXLow) exits at the tenkan cross, mid ADX
-// (InpADXLow..InpADXHigh) exits at the kijun cross, big ADX
-// (>= InpADXHigh) holds until a close back inside the cloud. An
-// unreadable ADX at entry is treated as mid (kijun exit).
+// ADX (period 51) filters. Key levels: 9 (crossover-count window),
+// 17 (+DI/-DI strength gate), 26 (reserved). The trade is only
+// opened when, at the breakout, the DI in the trade direction
+// exceeds 17 and the +DI/-DI lines have crossed at most once over
+// the last 9 periods (more than one crossover = consolidation).
+// The exit holds until +DI and -DI cross over, or +DI and ADX
+// cross over, whichever comes first.
 //==============================================================
 
 double GetADX(int s)
@@ -346,53 +325,74 @@ double GetADX(int s)
    return d[0];
 }
 
-// Map the ADX at entry to the locked exit tier
-int ADXExitTier(int s)
+// +DI (buy, buffer 1) or -DI (sell, buffer 2) on the last closed bar
+double GetDIDir(int s, int dir)
 {
-   double v = GetADX(s);
-   if(v <= 0)                    return 1;
-   if(v >= InpADXHigh)           return 2;
-   if(v >= InpADXLow)            return 1;
+   int buffer = (dir == 1) ? 1 : 2;
+   double d[1];
+   if(CopyBuffer(adx[s], buffer, 1, 1, d) <= 0 || d[0] <= 0) return 0.0;
+   return d[0];
+}
+
+// Key level 17: at the breakout the DI in the trade direction must
+// exceed 17 — a buy with +DI <= 17 or a sell with -DI <= 17 is not
+// taken. Unreadable values count as 0 (block the entry).
+bool DIStrong(int s, int dir)
+{
+   return GetDIDir(s, dir) > InpADXLevel17;
+}
+
+// Key level 26: at the breakout the DI in the trade direction must not
+// be overextended — a buy with +DI > 26 or a sell with -DI > 26 is not
+// taken (the move has run too far to chase).
+bool DIOverextended(int s, int dir)
+{
+   return GetDIDir(s, dir) > InpADXLevel26;
+}
+
+// Count +DI/-DI crossovers over the last InpADXWindow9 periods. More
+// than one crossover means the lines are chopping — consolidation —
+// and the breakout is not traded. 0 or 1 crossover is fine.
+// Unreadable values count as consolidated (block the entry).
+bool DIConsolidated(int s)
+{
+   int n = MathMax(InpADXWindow9, 2);
+   double dPlus[], dMinus[];
+   if(CopyBuffer(adx[s], 1, 1, n, dPlus)  <= 0) return true;
+   if(CopyBuffer(adx[s], 2, 1, n, dMinus) <= 0) return true;
+   ArraySetAsSeries(dPlus, true);
+   ArraySetAsSeries(dMinus, true);
+
+   int crosses = 0;
+   for(int i = 0; i < n - 1; i++)
+   {
+      double now  = dPlus[i]   - dMinus[i];
+      double prev = dPlus[i+1] - dMinus[i+1];
+      if((now >= 0 && prev < 0) || (now < 0 && prev >= 0)) crosses++;
+   }
+   return crosses > 1;
+}
+
+// Exit: hold the trade until +DI and -DI cross over, or +DI and ADX
+// cross over, whichever comes first. Returns 1 on a DI/DI cross,
+// 2 on a DI/ADX cross, 0 if neither happened on the last closed bar.
+// A long exits when +DI crossed below the other line; a short is the
+// mirror with -DI.
+int CheckADXCrossoverExit(int s, int dir)
+{
+   double mine[2], other[2], adxL[2];
+   int bufMine = (dir == 1) ? 1 : 2;
+   int bufOther = (dir == 1) ? 2 : 1;
+   if(CopyBuffer(adx[s], bufMine,  1, 2, mine)  <= 0) return 0;
+   if(CopyBuffer(adx[s], bufOther, 1, 2, other) <= 0) return 0;
+   if(CopyBuffer(adx[s], 0,        1, 2, adxL)  <= 0) return 0;
+   // non-series copy: index 0 = previous closed bar, index 1 = last closed bar
+
+   // crossed below the other DI within the last closed bar
+   if(mine[1] < other[1] && mine[0] >= other[0]) return 1;
+   // crossed below the ADX line within the last closed bar
+   if(mine[1] < adxL[1] && mine[0] >= adxL[0])   return 2;
    return 0;
-}
-
-string TierName(int tier)
-{
-   if(tier == 0) return "tenkan";
-   if(tier == 2) return "cloud";
-   return "kijun";
-}
-
-// Lowest-tier exit: price closed across the tenkan against the trade
-// (long exits on a close below the tenkan, short on a close above it)
-bool CheckTenkanExit(int s, int dir)
-{
-   double tenkan[1];
-   if(CopyBuffer(ich[s], 0, 1, 1, tenkan) <= 0) return false;
-
-   MqlRates rt[];
-   if(CopyRates(syms[s], TF_M1, 1, 1, rt) <= 0) return false;
-   double closeP = rt[0].close;
-
-   if(dir ==  1 && closeP < tenkan[0]) return true;
-   if(dir == -1 && closeP > tenkan[0]) return true;
-   return false;
-}
-
-// Mid-tier exit: price closed across the kijun against the trade
-// (long exits on a close below the kijun, short on a close above it)
-bool CheckKijunExit(int s, int dir)
-{
-   double kij[1];
-   if(CopyBuffer(ich[s], 1, 1, 1, kij) <= 0) return false;
-
-   MqlRates rt[];
-   if(CopyRates(syms[s], TF_M1, 1, 1, rt) <= 0) return false;
-   double closeP = rt[0].close;
-
-   if(dir ==  1 && closeP < kij[0]) return true;
-   if(dir == -1 && closeP > kij[0]) return true;
-   return false;
 }
 
 //==============================================================
@@ -540,10 +540,9 @@ double BuildStopLoss(int s, bool isBuy, double price, double dist)
    return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
-int OpenPositions(int s, bool isBuy, double dist, int count, double lots, int tier)
+int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
 {
    string sym = syms[s];
-   string cmt = "Kumo Breakout T" + IntegerToString(tier);
 
    int filled = 0;
    for(int i = 0; i < count; i++)
@@ -552,8 +551,8 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, int ti
                            : SymbolInfoDouble(sym, SYMBOL_BID);
       double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
 
-      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, cmt)
-                      : trade.Sell(lots, sym, price, sl, 0, cmt);
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Kumo Breakout")
+                      : trade.Sell(lots, sym, price, sl, 0, "Kumo Breakout");
       if(!ok) break;   // out of margin or rejected — don't hammer the server
       filled++;
    }
@@ -614,22 +613,18 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: the tier locked at entry decides how far price may
-      // pull back — lowest exits at the tenkan cross, mid at the kijun
-      // cross, big holds until a close back inside the cloud
+      // Exit check: hold until +DI and -DI cross over, or +DI and ADX
+      // cross over — whichever comes first (a long exits when +DI
+      // crossed below the other line; a short is the mirror with -DI)
       if(state[s] != 0)
       {
-         int tier = exitTier[s];
-         bool exitSig = false;
-         string why = "";
-         if(tier == 2)      { exitSig = PriceInsideCloud(s);        why = "price back inside cloud"; }
-         else if(tier == 1) { exitSig = CheckKijunExit(s, state[s]); why = "price closed across kijun"; }
-         else               { exitSig = CheckTenkanExit(s, state[s]); why = "price closed across tenkan"; }
-
-         if(exitSig)
+         int cross = CheckADXCrossoverExit(s, state[s]);
+         if(cross != 0)
          {
             string side = (state[s] == 1) ? "Long" : "Short";
-            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (exit tier " + TierName(tier) + " — " + why + ")";
+            string di   = (state[s] == 1) ? "+DI" : "-DI";
+            string why  = (cross == 1) ? di + "/DI crossover" : di + "/ADX crossover";
+            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (" + why + ")";
             Print(msg); SendNotification(msg);
 
             if(ClosePositions(syms[s]))
@@ -689,6 +684,33 @@ void OnTick()
                continue;
             }
 
+            if(!DIStrong(s, dir))
+            {
+               if(InpLogSkips)
+               {
+                  string di = (dir == 1) ? "+DI" : "-DI";
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but " + di + " at/below " + DoubleToString(InpADXLevel17, 0) + " — no trade");
+               }
+               continue;
+            }
+
+            if(DIConsolidated(s))
+            {
+               if(InpLogSkips)
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but +DI/-DI crossed more than once in last " + IntegerToString(InpADXWindow9) + " periods (consolidation) — no trade");
+               continue;
+            }
+
+            if(DIOverextended(s, dir))
+            {
+               if(InpLogSkips)
+               {
+                  string di = (dir == 1) ? "+DI" : "-DI";
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but " + di + " above " + DoubleToString(InpADXLevel26, 0) + " (overextended) — no trade");
+               }
+               continue;
+            }
+
             if(!SpreadOK(syms[s]))
             {
                if(InpLogSkips) Print(PCTime() + " | " + syms[s] + " spread too wide — entry skipped");
@@ -717,23 +739,17 @@ void OnTick()
                CapToMargin(syms[s], isBuy, count, lots);
             }
 
-            // Lock the exit tier from the ADX at entry — it never changes
-            // for the life of this trade (restored from the order comment).
-            int tier = ADXExitTier(s);
-
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
             // Alert reports the actual fill count, not the requested count.
-            int filled = OpenPositions(s, isBuy, dist, count, lots, tier);
+            int filled = OpenPositions(s, isBuy, dist, count, lots);
             if(filled > 0)
             {
                state[s] = dir;
-               exitTier[s] = tier;
                string action = isBuy ? "Buy" : "Sell";
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +
-                            " @ " + DoubleToString(lots, 2) +
-                            " (kumo breakout, exit tier " + TierName(tier) + ")";
+                            " @ " + DoubleToString(lots, 2) + " (kumo breakout)";
                Print(msg); SendNotification(msg);
             }
             else
