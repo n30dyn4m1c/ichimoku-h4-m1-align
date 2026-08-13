@@ -540,8 +540,20 @@ continuously for 15 minutes — a news-filter fork of the H4-M1 desktop build
 MQL5 Economic Calendar and closes positions an hour before every high-impact
 ("red folder") release, staying flat until five minutes after it — plus
 alignment-filter pruning forks of both VPS builds, breakout/hold experiments,
-and the older standard builds moved to [`archives/`](archives/). They're newer and less battle-tested than the
-main builds; see
+and the older standard builds moved to [`archives/`](archives/). The newest
+addition is the **Structure-Map EA**
+(`experimental-structure-map-ea.mq5`), which drops the alignment gate
+entirely: it records where price sits relative to every Ichimoku structure
+across up to six timeframe slots — anchored anywhere from H4 to MN1 — maps
+the swing legs and the candle structure at the level price is reacting to,
+scores that read into a conviction number, and takes the continuation
+bounce — off the cloud, off the kijun — only when the stop, the room to the
+next obstacle, and the reward:risk all work out. It ships in two flavours:
+the H4-anchored build above and a **D1-anchored fork**
+(`experimental-structure-map-d1-ea.mq5`) that bounces off daily structures
+while still timing entries on M15 — same engine, different scale, its own
+magic number so both can run at once. They're newer and less battle-tested
+than the main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
 for the full catalog.
 

@@ -1151,7 +1151,6 @@ lower-TF confirmation.
 > `Symbols` input.
 
 
-
 ---
 
 ## 13. H4-M1 News-Filter EA (high-impact event blackout)
@@ -1238,3 +1237,385 @@ equity alert. The only addition is the news blackout.
   build over the same period.
 - The filter never *blocks* an exit: stops, trail, BE and the M15-kijun
   exit all keep working normally outside the window.
+
+---
+
+## 14. Structure-Map EA (price-action bounce reader)
+
+**File:** `experimental-structure-map-ea.mq5`
+**Magic number:** `20260834`
+
+Every other build in this repo asks one boolean question — *are the
+timeframes aligned?* — and trades the answer. This one asks a different
+question: **where is price, relative to everything, and what is the obvious
+next move?** It reads the chart instead of gating on it. There is no
+breakout-alignment requirement anywhere in the entry path.
+
+The trade it looks for is the continuation bounce: price is in an
+established structure, pulls back into an Ichimoku level (kijun, tenkan, or
+a cloud edge), rejects it, and resumes. Bouncing off the cloud to resume the
+trend, bouncing off the kijun to resume the trend — that is the whole thesis.
+
+### The three readings
+
+**1. The structure map (where price is).** On each of up to **six**
+timeframe slots, running highest to lowest (H4 / H1 / M15 / M5 by default,
+with two spare slots off), the EA records, on the last closed bar:
+
+| Recorded | Meaning |
+|---|---|
+| Cloud side | above / inside / below the kumo |
+| Cloud thickness | in ATR — a thin cloud is a weak floor |
+| Future twist | span A vs span B projected 26 bars ahead, computed from the tenkan/kijun midpoint and the 52-bar midpoint rather than read off a plotted buffer |
+| Tenkan/kijun state | which is on top |
+| Distance to kijun / tenkan / cloud edge | signed, in ATR — the "how extended is it" measure |
+| Kijun slope + flat flag | slope over `InpSlopeBars` in ATR; flat = balance, and a flat kijun is graded as a stronger level |
+| Chikou free space | the close plotted 26 bars back, clear above / clear below / tangled in the candle there |
+| Swing structure | higher highs + higher lows, lower highs + lower lows, or mixed |
+| Legs | the last completed impulse in ATR, the leg in progress, and the retracement fraction between them |
+
+Each timeframe's reading is scored into a single number in −1…+1 from eight
+signed components (cloud side ±2, structure ±2, chikou ±1.5, price vs kijun
+±1.5, tenkan/kijun ±1, twist ±1, price vs tenkan ±0.5, kijun slope ±0.5 —
+raw sum ÷ 10). The weighted sum across timeframes (`InpW1`…`InpW6`,
+default 3 / 2 / 1.5 / 0.5 / 0 / 0) is the **context score**, −100…+100. Its
+sign is the direction the EA thinks price is headed; `InpMinContext`
+(default 25) is how convinced it has to be before it will look for a trade
+at all.
+
+Any slot can hold any timeframe, so the stack can be anchored as high as
+**MN1** — see [Anchoring the stack](#anchoring-the-stack)
+below. A slot set to `PERIOD_CURRENT` is switched off entirely: never
+mapped, never scored, supplies no levels, allocates no indicator handles.
+
+With `InpLogMap` on (the default) the whole map is printed on every closed
+trigger bar whether or not a trade follows, so the reasoning is on the
+record:
+
+```
+MAP GOLDm# ctx=48.3 | H4[aboveKumo thick1.8 kj0.62 tn0.31 tk+ ch+ tw+ HH/HL leg+2.1 retr0.44 s0.65]
+ | H1[aboveKumo thick1.2 kj0.08flat tn-0.12 tk+ ch0 tw+ HH/HL leg-1.3 retr0.51 s0.45] | ...
+```
+
+**2. The reaction (what price is doing right now).** Levels are collected
+from the top `InpLevelTFs` timeframes (default 2 → H4 and H1): kumo top,
+kumo base, kijun, tenkan. Only levels on the correct side qualify — support
+below price for a long, resistance above for a short. Within the last
+`InpReactionBars` closed trigger-TF bars, a level counts as **reacted off**
+when a bar reached into it (within `InpTouchATR × ATR`) **and closed back
+out of it** on the trade side. Price must still be on that side and within
+`InpMaxEntryDistATR × ATR` of the level, so stale re-touches from hours ago
+don't qualify. The strongest level touched wins, graded by type and
+timeframe (kumo edge > flat kijun > kijun > tenkan; H4 > H1).
+
+**3. The candle structure (is the bounce real).** At the reaction bar and
+the last closed bar: rejection wick (`InpPinWickFrac` / `InpPinBodyFrac`
+with the close in the right half), engulfing in the trade direction, a
+momentum close beyond the reaction bar's extreme (+1.5 — the strongest
+single reading), and a plain directional close (+0.5). The total must reach
+`InpMinCandleScore` (default 1.0), so a bare close in the right direction is
+never enough on its own.
+
+### Conviction, and what it buys
+
+```
+conviction = 0.7 × |context score|
+           + level grade bonus      (0…10)
+           + candle score bonus     (0…10)
+           + retracement bonus      (+10 sane pullback, −10 too deep)
+           − lateness penalty       (15 when the move is already extended)
+```
+
+Clamped to 0…100. Below `InpMinScore` (55) nothing happens. Between
+`InpMinScore` and `InpStrongScore` (75) the equity ladder is halved. At or
+above `InpStrongScore` the full ladder goes on.
+
+The retracement term is where the leg map earns its keep: for a long, the
+leg in progress on the leg timeframe (`InpLegTFIdx`, default H1) should be
+*down* — a pullback — and between `InpMinRetrace` and `InpMaxRetrace`
+(0.25–0.90) of the impulse before it. Deeper than that and it stops reading
+as a pullback and starts reading as a reversal, so the bonus turns negative.
+If the leg is already running in the trade direction and is more than
+`InpLateLegATR` (6 ATR) long, the setup is late and takes the penalty.
+
+### The optimal-trade calculation
+
+A setup that passes the read still has to be worth taking:
+
+- **Stop** — behind the reaction extreme by `InpSLBufferATR × ATR`, pushed
+  further out to the last trigger-TF swing when `InpSLBeyondSwing` is on.
+  Widened to the broker minimum. If the resulting risk exceeds
+  `InpMaxRiskATR × ATR` (4) the setup is **rejected** rather than traded with
+  a bad stop.
+- **Room** — the next structural obstacle ahead (mapped swing extremes and
+  cloud edges on the context timeframes). If it sits closer than
+  `InpMinRR × risk` (1.5R) the trade is **skipped** — no buying into a
+  ceiling, no selling into a floor. Nothing ahead at all is the best case:
+  clear air, all runners.
+- **Target** — the obstacle front-run by `InpTPBufferATR × ATR`, applied to
+  part of the ladder; `InpRunnerFrac` (default half) is left without a take
+  profit for the trail to manage. Obstacles beyond `InpMaxRR` (8R) are
+  ignored and those orders run free too.
+
+### Anchoring the stack
+
+The six slots take any timeframe, so the read can start anywhere from the
+monthly candle down. Three presets, from the mildest anchor to the heaviest.
+
+#### Default — H4 anchor (H4 / H1 / M15 / M5)
+
+What ships. Slots 5–6 off, trigger and exit both on M15, levels from H4 and
+H1. Intraday cadence, several setups a week on gold.
+
+#### Daily anchor (D1 / H4 / H1 / M15)
+
+The recommended starting point for a swing configuration, and the setting
+where none of the ceilings below bite. It is the default stack shifted up
+one scale — same weight shape, same slot roles. **Shipped as its own build**
+(`experimental-structure-map-d1-ea.mq5`, section 15) so it can run alongside
+the H4 build; the settings below are what that file already defaults to:
+
+| Input | Value | Why |
+|---|---|---|
+| `InpTF1`…`InpTF4` | D1 / H4 / H1 / M15 | Slots 5–6 stay off; add M5 in slot 5 at weight 0.5 if you want timing texture |
+| `InpW1`…`InpW4` | 3 / 2 / 1.5 / 0.5 | Identical shape to the shipped default, one scale higher |
+| `InpTrigIdx` | 3 (M15) | Time the entry on M15 |
+| `InpExitIdx` | 2 (H1) | Hold on the H1 scale |
+| `InpLegTFIdx` | 1 (H4) | Grade the pullback on H4 legs — one slot below the anchor, as in the default |
+| `InpLevelTFs` | 2 | Bounce off D1 and H4 structures |
+| `InpObstacleTFs` | 3 | Measure room down to H1 |
+
+Three reasons this is the sweet spot:
+
+- **History is a non-issue.** 56 daily bars is under three months. The
+  monthly stack's 4.7-year requirement is what makes it fragile on anything
+  but gold and the majors; D1 has no such problem.
+- **No redundant slots.** The Ichimoku equivalence that makes M30 pointless
+  next to H1 (`Kijun of TF X = Span B of the 2× lower TF`, see section 11)
+  needs an exactly-2× pair. D1 / H4 / H1 / M15 contains none, so every slot
+  measures a genuinely different horizon.
+- **The levels are real.** A D1 kijun and a D1 cloud edge are levels that
+  get traded by people, not just by this EA — which is the entire premise of
+  a bounce strategy.
+
+Two things to retune for the longer hold: `InpReentryCooldownSec` (900s is
+15 minutes — for a D1-anchored trade, something on the order of four hours
+stops it re-entering the same level minutes after a stop-out), and
+`InpExitIdx`. H1 is the recommendation because the M15 kijun cross stops out
+normal swing pullbacks — the same "stopped out too early" failure documented
+on the ignition EA (section 10), which moved its fallback exit to H1 for
+exactly this reason. H4 in slot 1 gives even more room if H1 still proves
+tight.
+
+#### Monthly anchor (MN1 / W1 / D1 / H4 / H1 / M15)
+
+The full stack. Recommended preset:
+
+| Input | Value | Why |
+|---|---|---|
+| `InpTF1`…`InpTF6` | MN1 / W1 / D1 / H4 / H1 / M15 | The full stack, highest to lowest |
+| `InpW1`…`InpW6` | 3 / 2.5 / 2 / 1.5 / 1 / 0.5 | Context weight decays down the stack |
+| `InpTrigIdx` | 5 (M15) | Time the entry on M15 — the reaction, the candle structure and the entry cadence all read here |
+| `InpExitIdx` | 3 (H4) | Hold on the H4 scale — the trail, break even and the kijun-cross exit read here |
+| `InpLegTFIdx` | 2 (D1) | Grade the impulse/pullback on daily legs |
+| `InpLevelTFs` | 3 | Bounce off MN1 / W1 / D1 structures |
+| `InpObstacleTFs` | 4 | Measure room down to H4 |
+
+Two separations make this coherent, and both were added for it:
+
+- **Trigger slot vs exit slot.** `InpTrigIdx` is the *timing* scale — where
+  the reaction is detected, where the candle structure is read, and how
+  often entries are evaluated. `InpExitIdx` is the *holding* scale — the ATR
+  that sizes the trail and the break-even arming, the swings the trail
+  follows, and the kijun whose cross closes the trade. They default to the
+  same slot (`InpExitIdx = -1`), which is the single-scale behaviour. On a
+  monthly-anchored stack they must differ: an M15 kijun cross would close a
+  trade that was taken off a weekly level within the hour. The EA refuses to
+  start if the exit slot is *faster* than the trigger slot.
+- **`InpObstacleTFs`** now sets how far down the stack the target search
+  looks, separately from `InpLevelTFs`. With a monthly anchor, obstacles
+  drawn only from MN1/W1 sit so far away that every setup clears the
+  reward:risk gate and nothing gets filtered — scanning down to H4 restores
+  the gate's meaning.
+
+Level grades scale with `InpLevelTFs` rather than with slot capacity, so a
+top-slot kumo edge grades the same whether the stack is anchored on H4 or on
+MN1, and the conviction arithmetic is unchanged between configurations.
+
+**History is the real constraint.** Each mapped slot needs
+`max(SenkouB, Kijun + InpSlopeBars) + 4` bars — 56 at the defaults. On MN1
+that is 56 monthly candles, roughly 4.7 years. Brokers usually have it for
+gold and the majors, less often for newer symbols. `OnInit` logs a warning
+per symbol/slot that is short rather than failing, because history normally
+fills in once the terminal finishes downloading; until it does, that symbol
+simply produces no signals. If a monthly-anchored build is silent, check the
+log for that warning first.
+
+**Indicator handles** are the other ceiling: two per enabled slot per
+symbol. A six-slot stack across 60 symbols wants 720 handles, which will run
+into the terminal's limit. Keep the symbol list short when running the full
+stack — the monthly read is a swing configuration, not a scanner.
+
+### Exits
+
+- **Structure trail** — once profit reaches `InpTrailActivateATR × ATR`, the
+  stop follows the most recent confirmed fractal swing on the trigger TF
+  (padded by `InpSLBufferATR × ATR`). Tighten-only, broker-minimum aware.
+  It arms late on purpose: the entry already carries a tight structural stop,
+  and an unarmed trail would drag it into the noise straight away.
+- **Break even** — at `InpBEActivateATR × ATR` of profit the stop moves to
+  the volume-weighted open ± `InpBECoverPoints`. One-shot, but only marked
+  done once the modify actually lands, so a stop blocked by the broker's
+  minimum distance is retried.
+- **Kijun cross** — a trigger-TF close back across its own kijun closes
+  everything.
+- **Map flip** (`InpExitOnFlip`, off by default) — the context score itself
+  turning against the trade closes it.
+
+### Key inputs
+
+| Group | Parameter | Default | Purpose |
+|-------|-----------|---------|---------|
+| Map | `InpTF1`…`InpTF6` | H4 / H1 / M15 / M5 / off / off | The mapped timeframe slots, highest to lowest (`PERIOD_CURRENT` = off) |
+| Map | `InpW1`…`InpW6` | 3 / 2 / 1.5 / 0.5 / 0 / 0 | Context-score weights (0 = map the slot, don't score it) |
+| Map | `InpTrigIdx` | 2 | Trigger slot — reaction, candle structure, entry cadence |
+| Map | `InpExitIdx` | −1 | Exit/holding slot — trail, break even, kijun exit (−1 = same as trigger) |
+| Map | `InpLegTFIdx` | 1 | Slot whose legs and retracement are graded |
+| Map | `InpLevelTFs` | 2 | Bounce levels come from the top N slots |
+| Map | `InpObstacleTFs` | 2 | Target obstacles are scanned across the top N slots |
+| Map | `InpSwingWing` / `InpLegBars` | 2 / 120 | Fractal half-width and scan depth |
+| Reaction | `InpReactionBars` | 3 | Trigger-TF bars searched for the touch |
+| Reaction | `InpTouchATR` | 0.25 | How close counts as touching the level |
+| Reaction | `InpMaxEntryDistATR` | 1.25 | Freshness — max distance from the level at entry |
+| Candles | `InpMinCandleScore` | 1.0 | Minimum price-action score at the level |
+| Legs | `InpMinRetrace` / `InpMaxRetrace` | 0.25 / 0.90 | Accepted pullback depth |
+| Legs | `InpLateLegATR` | 6.0 | Extension that marks a setup late (0 = off) |
+| Score | `InpMinContext` | 25 | Min \|context score\| to look for a trade |
+| Score | `InpMinScore` / `InpStrongScore` | 55 / 75 | Trade threshold / full-ladder threshold |
+| Score | `InpHTFVetoScore` | 0.10 | How far the top TF may oppose the trade |
+| Trade | `InpMaxRiskATR` | 4.0 | Reject setups whose structural stop is too wide |
+| Trade | `InpMinRR` / `InpMaxRR` | 1.5 / 8.0 | Room gate / obstacle horizon |
+| Trade | `InpRunnerFrac` | 0.50 | Share of the ladder left without a take profit |
+| Exit | `InpTrailActivateATR` | 0.5 | Profit needed before the structure trail arms |
+| Exit | `InpExitOnFlip` | `false` | Close when the map flips against the trade |
+
+Risk sizing is the same equity ladder as the VPS builds (`GetEquityRisk`,
+`RiskBasedLots` above $8k, `CapToRisk`, `CapToMargin`), sized off the
+structural stop rather than a fixed ATR multiple.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.** No MetaEditor was available
+  during development — braces and call sites were checked mechanically only.
+  F7-compile and fix any warnings before the first Strategy-Tester run.
+- The natural A/B partner is `experimental-h4-m1-pullback-ea.mq5` (section
+  7): both buy the pullback, but the pullback EA requires a prior
+  full-alignment breakout to arm and only ever uses the H4 kijun, while this
+  one needs no breakout at all and reads every level on both context
+  timeframes. Running them on the same symbol/period isolates what the
+  breakout precondition is worth.
+- **The score weights are hand-set, not fitted.** They encode a view (cloud
+  side and swing structure matter most, tenkan least); nothing has measured
+  them yet. Treat `InpW1`…`InpW4` and the component weights in `ScoreMap()`
+  as the first thing to test, not as settled numbers.
+- **The room filter can idle the EA.** In a range, every direction has an
+  obstacle within 1.5R, so nothing qualifies — by design, but if trade count
+  is near zero that gate is the first suspect. Loosen `InpMinRR` before
+  loosening the read.
+- `InpLogMap` writes a line per symbol per trigger bar. That is the point of
+  the build — the recorded map is the research output — but turn it off for
+  a long multi-symbol Strategy Tester run or the log will dominate the run
+  time.
+- The context score is a *sum*, not a gate: a strong top-slot read can carry
+  a neutral middle of the stack. `InpHTFVetoScore` is the only hard
+  directional veto, and it only guards the top slot. If entries look like
+  they are fighting the intermediate timeframes, raise their weights before
+  touching anything else. This matters more the taller the stack: with six
+  slots a dominant MN1 reading can outvote four lower ones.
+- **A monthly anchor changes what the EA is, not just its settings.** MN1
+  and W1 readings move a handful of times a year, so the context score
+  becomes near-constant and the trade rate collapses to whatever the D1/H4
+  levels produce. That is the intent — swing trades off big structures — but
+  it means a monthly-anchored backtest needs years of data to produce a
+  meaningful trade count, and the first thing to verify is that the top
+  slots are not simply frozen for the whole run.
+- Chikou is read here as clear-of-the-candle only (not clear of the levels
+  too, as in the alignment builds). It is one weighted component out of
+  eight rather than a veto, which is deliberate — the strict chikou test is
+  what makes the alignment builds late.
+
+---
+
+## 15. Structure-Map EA — D1 anchor
+
+**File:** `experimental-structure-map-d1-ea.mq5`
+**Magic number:** `20260835`
+
+The [Structure-Map EA](#14-structure-map-ea-price-action-bounce-reader)
+(section 14) with its stack shifted up one scale: **D1 / H4 / H1 / M15**
+instead of H4 / H1 / M15 / M5. It bounces off *daily* structures — the D1
+kijun, the D1 cloud edges, the H4 levels beneath them — while still timing
+the entry on M15, so the stop stays small even though the level is a daily
+one.
+
+**The engine is byte-identical to section 14.** Only the input defaults, the
+magic number and the order comments differ, so the two builds run side by
+side on one account without colliding. Everything about how the map is
+built, how the reaction is detected, how conviction is scored and how the
+trade is constructed is documented in section 14 and is not repeated here.
+
+### What differs from the H4 build
+
+| Input | H4 build | D1 build | Why |
+|---|---|---|---|
+| `InpTF1`…`InpTF4` | H4 / H1 / M15 / M5 | **D1 / H4 / H1 / M15** | The whole stack, one scale up |
+| `InpTrigIdx` | 2 (M15) | **3 (M15)** | Same timing scale, different slot number |
+| `InpExitIdx` | −1 (= trigger, M15) | **2 (H1)** | Hold on H1 — the M15 kijun cross stops swing pullbacks out too early |
+| `InpLegTFIdx` | 1 (H1) | **1 (H4)** | Still one slot below the anchor |
+| `InpLevelTFs` | 2 (H4, H1) | **2 (D1, H4)** | Bounce off daily and H4 structures |
+| `InpObstacleTFs` | 2 | **3 (down to H1)** | Daily obstacles alone are too far away for the reward:risk gate to filter anything |
+| `InpReactionBars` | 3 | **8** | A daily level gets worked for hours, not 45 minutes — the touch window has to be wide enough to still be looking when momentum confirms |
+| `InpMaxEntryDistATR` | 1.25 | **1.5** | Slightly looser freshness, since the wider touch window lets price drift further from the level before the entry fires |
+| `InpReentryCooldownSec` | 900 (15 min) | **14400 (4 h)** | Stops it re-entering the same daily level minutes after a stop-out |
+
+Weights are unchanged at 3 / 2 / 1.5 / 0.5 — the shape that decays down the
+stack is the same, it is just applied one scale higher. Slots 5 and 6 stay
+off; put M5 in slot 5 at weight 0.5 if you want the timing texture back.
+
+### Why the daily anchor is the sensible one
+
+- **History is a non-issue.** A mapped slot needs 56 bars; on D1 that is
+  under three months. The MN1 configuration wants 4.7 years, which is what
+  makes it fragile on anything but gold and the majors.
+- **No redundant slots.** The equivalence that makes M30 pointless next to
+  H1 (`Kijun of TF X = Span B of the 2× lower TF`, section 11) needs an
+  exactly-2× pair. D1 / H4 / H1 / M15 contains none, so every slot measures
+  a genuinely different horizon.
+- **The levels are traded by people.** A D1 kijun and a D1 cloud edge are
+  levels other participants act on. For a strategy whose entire premise is
+  that price reacts at a level, that matters more than the indicator
+  arithmetic.
+
+### Status & caveats
+
+- **Not compiled, not backtested** — same as section 14. No MetaEditor was
+  available; the fork was verified to differ from the H4 build only in
+  inputs, magic number and order comments, and its shipped defaults were
+  checked against the `OnInit` validation rules (trigger/exit/leg slots all
+  enabled, exit timeframe not faster than the trigger).
+- **The obvious A/B is against the H4 build** on the same symbol and period.
+  Both engines are identical, so the entire difference in results is the
+  anchor scale — which is the cleanest experiment in this repo, since
+  nothing else varies.
+- **`InpReactionBars = 8` is a judgement call, not a measurement.** Eight
+  M15 bars is two hours of touch window. Daily levels can be worked for a
+  full session; if the trade count comes back low, this is the first input
+  to widen, before touching the score weights or `InpMinRR`.
+- **Expect far fewer trades than the H4 build.** Daily structures are
+  touched a handful of times a month, not several times a week. Do not read
+  a low trade count as a broken configuration until the map log has been
+  checked — with `InpLogMap` on, a run that never produced a setup still
+  shows exactly which gate was never passed.
+- The score weights remain hand-set rather than fitted, exactly as in
+  section 14, and shifting the stack up a scale does not make them any more
+  measured.
