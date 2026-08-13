@@ -1284,7 +1284,9 @@ H1. Intraday cadence, several setups a week on gold.
 
 The recommended starting point for a swing configuration, and the setting
 where none of the ceilings below bite. It is the default stack shifted up
-one scale — same weight shape, same slot roles:
+one scale — same weight shape, same slot roles. **Shipped as its own build**
+(`experimental-structure-map-d1-ea.mq5`, section 14) so it can run alongside
+the H4 build; the settings below are what that file already defaults to:
 
 | Input | Value | Why |
 |---|---|---|
@@ -1454,3 +1456,79 @@ structural stop rather than a fixed ATR multiple.
   too, as in the alignment builds). It is one weighted component out of
   eight rather than a veto, which is deliberate — the strict chikou test is
   what makes the alignment builds late.
+
+---
+
+## 14. Structure-Map EA — D1 anchor
+
+**File:** `experimental-structure-map-d1-ea.mq5`
+**Magic number:** `20260833`
+
+The [Structure-Map EA](#13-structure-map-ea-price-action-bounce-reader)
+(section 13) with its stack shifted up one scale: **D1 / H4 / H1 / M15**
+instead of H4 / H1 / M15 / M5. It bounces off *daily* structures — the D1
+kijun, the D1 cloud edges, the H4 levels beneath them — while still timing
+the entry on M15, so the stop stays small even though the level is a daily
+one.
+
+**The engine is byte-identical to section 13.** Only the input defaults, the
+magic number and the order comments differ, so the two builds run side by
+side on one account without colliding. Everything about how the map is
+built, how the reaction is detected, how conviction is scored and how the
+trade is constructed is documented in section 13 and is not repeated here.
+
+### What differs from the H4 build
+
+| Input | H4 build | D1 build | Why |
+|---|---|---|---|
+| `InpTF1`…`InpTF4` | H4 / H1 / M15 / M5 | **D1 / H4 / H1 / M15** | The whole stack, one scale up |
+| `InpTrigIdx` | 2 (M15) | **3 (M15)** | Same timing scale, different slot number |
+| `InpExitIdx` | −1 (= trigger, M15) | **2 (H1)** | Hold on H1 — the M15 kijun cross stops swing pullbacks out too early |
+| `InpLegTFIdx` | 1 (H1) | **1 (H4)** | Still one slot below the anchor |
+| `InpLevelTFs` | 2 (H4, H1) | **2 (D1, H4)** | Bounce off daily and H4 structures |
+| `InpObstacleTFs` | 2 | **3 (down to H1)** | Daily obstacles alone are too far away for the reward:risk gate to filter anything |
+| `InpReactionBars` | 3 | **8** | A daily level gets worked for hours, not 45 minutes — the touch window has to be wide enough to still be looking when momentum confirms |
+| `InpMaxEntryDistATR` | 1.25 | **1.5** | Slightly looser freshness, since the wider touch window lets price drift further from the level before the entry fires |
+| `InpReentryCooldownSec` | 900 (15 min) | **14400 (4 h)** | Stops it re-entering the same daily level minutes after a stop-out |
+
+Weights are unchanged at 3 / 2 / 1.5 / 0.5 — the shape that decays down the
+stack is the same, it is just applied one scale higher. Slots 5 and 6 stay
+off; put M5 in slot 5 at weight 0.5 if you want the timing texture back.
+
+### Why the daily anchor is the sensible one
+
+- **History is a non-issue.** A mapped slot needs 56 bars; on D1 that is
+  under three months. The MN1 configuration wants 4.7 years, which is what
+  makes it fragile on anything but gold and the majors.
+- **No redundant slots.** The equivalence that makes M30 pointless next to
+  H1 (`Kijun of TF X = Span B of the 2× lower TF`, section 11) needs an
+  exactly-2× pair. D1 / H4 / H1 / M15 contains none, so every slot measures
+  a genuinely different horizon.
+- **The levels are traded by people.** A D1 kijun and a D1 cloud edge are
+  levels other participants act on. For a strategy whose entire premise is
+  that price reacts at a level, that matters more than the indicator
+  arithmetic.
+
+### Status & caveats
+
+- **Not compiled, not backtested** — same as section 13. No MetaEditor was
+  available; the fork was verified to differ from the H4 build only in
+  inputs, magic number and order comments, and its shipped defaults were
+  checked against the `OnInit` validation rules (trigger/exit/leg slots all
+  enabled, exit timeframe not faster than the trigger).
+- **The obvious A/B is against the H4 build** on the same symbol and period.
+  Both engines are identical, so the entire difference in results is the
+  anchor scale — which is the cleanest experiment in this repo, since
+  nothing else varies.
+- **`InpReactionBars = 8` is a judgement call, not a measurement.** Eight
+  M15 bars is two hours of touch window. Daily levels can be worked for a
+  full session; if the trade count comes back low, this is the first input
+  to widen, before touching the score weights or `InpMinRR`.
+- **Expect far fewer trades than the H4 build.** Daily structures are
+  touched a handful of times a month, not several times a week. Do not read
+  a low trade count as a broken configuration until the map log has been
+  checked — with `InpLogMap` on, a run that never produced a setup still
+  shows exactly which gate was never passed.
+- The score weights remain hand-set rather than fitted, exactly as in
+  section 13, and shifting the stack up a scale does not make them any more
+  measured.
