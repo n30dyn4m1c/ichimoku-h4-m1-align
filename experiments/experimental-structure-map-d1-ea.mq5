@@ -192,7 +192,7 @@ double   entryConv[MAX_SYMS];    // conviction score the trade was opened on
 
 TFMap    g_map[TF_COUNT];        // structure map of the symbol under evaluation
 
-int MAGIC = 20260833;
+int MAGIC = 20260835;
 
 CTrade trade;
 

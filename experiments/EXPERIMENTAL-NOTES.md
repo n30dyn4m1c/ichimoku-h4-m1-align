@@ -1153,10 +1153,97 @@ lower-TF confirmation.
 
 ---
 
-## 13. Structure-Map EA (price-action bounce reader)
+## 13. H4-M1 News-Filter EA (high-impact event blackout)
+
+**File:** `experimental-h4-m1-news-filter-ea.mq5`
+**Magic number:** `20260832` (independent of every other EA)
+
+A fork of the H4-M1 desktop build (`ichimoku-h4-m1-mt5pc-ea.mq5`, magic
+`20260830`) that refuses to hold or open a position around high-impact
+news. Every rule of the parent build is unchanged — H4→M1 alignment entry,
+ATR stop, chandelier trail, ADX choppy gate, BE30, M15-kijun exit, weekly
+equity alert. The only addition is the news blackout.
+
+### Rules
+
+- **Source:** the terminal's built-in MQL5 Economic Calendar
+  (`CalendarValueHistory` / `CalendarEventById`). Same feed as the
+  Calendar tab in MT5, supplied by MetaQuotes rather than the broker, so
+  it works on any MT5 account including XM. No WebRequest permission, no
+  DLL, no scraping of Forex Factory.
+- **Impact:** `CALENDAR_IMPORTANCE_HIGH` only by default — the calendar's
+  equivalent of a Forex Factory red folder. `InpNewsIncludeMedium` adds
+  medium impact (orange) as well.
+- **Which events count:** those whose currency matches the symbol's base
+  or profit currency, plus anything listed in `InpNewsCurrencies`. On
+  `GOLDm#` the profit currency is USD, so US releases (NFP, CPI, FOMC)
+  qualify; the XAU base matches nothing, which is harmless. Add
+  `"EUR,GBP"` to sit out ECB/BoE releases on gold as well.
+- **Blackout window:** from `InpNewsBlockBeforeMin` minutes before the
+  event (default 60) to `InpNewsBlockAfterMin` minutes after it (default
+  5). Open positions on that symbol are closed the moment the window
+  opens, and no entry is taken until it closes. Overlapping events extend
+  the window to the latest end time.
+- **Ordering:** the news check runs before the M15 exit, trail, BE and
+  entry checks, so a news exit always wins. A close that fails (requote,
+  halt) is retried on the next M1 bar, and the trail/BE keep managing the
+  position in the meantime.
+- **Alerts:** one print + popup + push per blackout window (event name,
+  event time, and when trading resumes), plus a separate alert for the
+  positions actually closed.
+
+### Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `InpNewsFilterEnabled` | `true` | Master switch for the whole filter |
+| `InpNewsBlockBeforeMin` | `60` | Flatten and block entries this long before an event |
+| `InpNewsBlockAfterMin` | `5` | Resume trading this long after an event |
+| `InpNewsIncludeMedium` | `false` | Also block on medium (orange) impact |
+| `InpNewsCurrencies` | `""` | Extra currencies to watch, comma-separated |
+
+### Implementation notes
+
+- Calendar times are in **trade-server time**, which is what
+  `TimeTradeServer()` returns, so no broker GMT-offset conversion is
+  needed. Alert timestamps are labelled `(server)` for that reason.
+- The event cache is rebuilt every 15 minutes over a −6h/+36h window and
+  filtered per symbol on each M1 bar, so the calendar is not re-queried on
+  every bar.
+- **Fails open.** If the calendar can't be read (terminal offline,
+  calendar disabled), the EA warns once — print, popup and push — and then
+  trades normally rather than freezing the account indefinitely.
+- Because everything is gated on closed M1 bars, the blackout starts
+  within about a minute of the exact `InpNewsBlockBeforeMin` mark. Set 60
+  minutes and expect the flatten between T−60 and T−59.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.**
+- **The Strategy Tester has no calendar access**, so a backtest of this
+  file trades exactly like the parent build — the blackout never triggers
+  and the results say nothing about the filter. Forward-testing on a demo
+  account is the only way to see it work; watch the Experts log for the
+  blackout lines around a scheduled release.
+- **Check the calendar before running this on a VPS.** MetaTrader VPS
+  runs a stripped terminal, and calendar availability there should be
+  verified on a demo account first — a fail-open filter on a VPS that
+  can't read the calendar is a filter that never fires. The one-shot
+  "calendar unavailable" push exists to make that obvious.
+- Flattening an hour ahead of every red-folder release cuts trades that
+  would have run through the news profitably; on a USD-heavy symbol like
+  gold it also removes a large share of the week's trading hours. The
+  point of the experiment is to measure that trade-off against the parent
+  build over the same period.
+- The filter never *blocks* an exit: stops, trail, BE and the M15-kijun
+  exit all keep working normally outside the window.
+
+---
+
+## 14. Structure-Map EA (price-action bounce reader)
 
 **File:** `experimental-structure-map-ea.mq5`
-**Magic number:** `20260832`
+**Magic number:** `20260834`
 
 Every other build in this repo asks one boolean question — *are the
 timeframes aligned?* — and trades the answer. This one asks a different
@@ -1285,7 +1372,7 @@ H1. Intraday cadence, several setups a week on gold.
 The recommended starting point for a swing configuration, and the setting
 where none of the ceilings below bite. It is the default stack shifted up
 one scale — same weight shape, same slot roles. **Shipped as its own build**
-(`experimental-structure-map-d1-ea.mq5`, section 14) so it can run alongside
+(`experimental-structure-map-d1-ea.mq5`, section 15) so it can run alongside
 the H4 build; the settings below are what that file already defaults to:
 
 | Input | Value | Why |
@@ -1459,23 +1546,23 @@ structural stop rather than a fixed ATR multiple.
 
 ---
 
-## 14. Structure-Map EA — D1 anchor
+## 15. Structure-Map EA — D1 anchor
 
 **File:** `experimental-structure-map-d1-ea.mq5`
-**Magic number:** `20260833`
+**Magic number:** `20260835`
 
-The [Structure-Map EA](#13-structure-map-ea-price-action-bounce-reader)
-(section 13) with its stack shifted up one scale: **D1 / H4 / H1 / M15**
+The [Structure-Map EA](#14-structure-map-ea-price-action-bounce-reader)
+(section 14) with its stack shifted up one scale: **D1 / H4 / H1 / M15**
 instead of H4 / H1 / M15 / M5. It bounces off *daily* structures — the D1
 kijun, the D1 cloud edges, the H4 levels beneath them — while still timing
 the entry on M15, so the stop stays small even though the level is a daily
 one.
 
-**The engine is byte-identical to section 13.** Only the input defaults, the
+**The engine is byte-identical to section 14.** Only the input defaults, the
 magic number and the order comments differ, so the two builds run side by
 side on one account without colliding. Everything about how the map is
 built, how the reaction is detected, how conviction is scored and how the
-trade is constructed is documented in section 13 and is not repeated here.
+trade is constructed is documented in section 14 and is not repeated here.
 
 ### What differs from the H4 build
 
@@ -1511,7 +1598,7 @@ off; put M5 in slot 5 at weight 0.5 if you want the timing texture back.
 
 ### Status & caveats
 
-- **Not compiled, not backtested** — same as section 13. No MetaEditor was
+- **Not compiled, not backtested** — same as section 14. No MetaEditor was
   available; the fork was verified to differ from the H4 build only in
   inputs, magic number and order comments, and its shipped defaults were
   checked against the `OnInit` validation rules (trigger/exit/leg slots all
@@ -1530,5 +1617,5 @@ off; put M5 in slot 5 at weight 0.5 if you want the timing texture back.
   checked — with `InpLogMap` on, a run that never produced a setup still
   shows exactly which gate was never passed.
 - The score weights remain hand-set rather than fitted, exactly as in
-  section 13, and shifting the stack up a scale does not make them any more
+  section 14, and shifting the stack up a scale does not make them any more
   measured.
