@@ -1197,7 +1197,7 @@ sign is the direction the EA thinks price is headed; `InpMinContext`
 at all.
 
 Any slot can hold any timeframe, so the stack can be anchored as high as
-**MN1** — see [Anchoring the stack](#anchoring-the-stack-monthly-and-down)
+**MN1** — see [Anchoring the stack](#anchoring-the-stack)
 below. A slot set to `PERIOD_CURRENT` is switched off entirely: never
 mapped, never scored, supplies no levels, allocates no indicator handles.
 
@@ -1270,10 +1270,57 @@ A setup that passes the read still has to be worth taking:
   profit for the trail to manage. Obstacles beyond `InpMaxRR` (8R) are
   ignored and those orders run free too.
 
-### Anchoring the stack (monthly and down)
+### Anchoring the stack
 
-The six slots take any timeframe, so the whole read can start at the monthly
-candle and work down. The recommended monthly preset:
+The six slots take any timeframe, so the read can start anywhere from the
+monthly candle down. Three presets, from the mildest anchor to the heaviest.
+
+#### Default — H4 anchor (H4 / H1 / M15 / M5)
+
+What ships. Slots 5–6 off, trigger and exit both on M15, levels from H4 and
+H1. Intraday cadence, several setups a week on gold.
+
+#### Daily anchor (D1 / H4 / H1 / M15)
+
+The recommended starting point for a swing configuration, and the setting
+where none of the ceilings below bite. It is the default stack shifted up
+one scale — same weight shape, same slot roles:
+
+| Input | Value | Why |
+|---|---|---|
+| `InpTF1`…`InpTF4` | D1 / H4 / H1 / M15 | Slots 5–6 stay off; add M5 in slot 5 at weight 0.5 if you want timing texture |
+| `InpW1`…`InpW4` | 3 / 2 / 1.5 / 0.5 | Identical shape to the shipped default, one scale higher |
+| `InpTrigIdx` | 3 (M15) | Time the entry on M15 |
+| `InpExitIdx` | 2 (H1) | Hold on the H1 scale |
+| `InpLegTFIdx` | 1 (H4) | Grade the pullback on H4 legs — one slot below the anchor, as in the default |
+| `InpLevelTFs` | 2 | Bounce off D1 and H4 structures |
+| `InpObstacleTFs` | 3 | Measure room down to H1 |
+
+Three reasons this is the sweet spot:
+
+- **History is a non-issue.** 56 daily bars is under three months. The
+  monthly stack's 4.7-year requirement is what makes it fragile on anything
+  but gold and the majors; D1 has no such problem.
+- **No redundant slots.** The Ichimoku equivalence that makes M30 pointless
+  next to H1 (`Kijun of TF X = Span B of the 2× lower TF`, see section 11)
+  needs an exactly-2× pair. D1 / H4 / H1 / M15 contains none, so every slot
+  measures a genuinely different horizon.
+- **The levels are real.** A D1 kijun and a D1 cloud edge are levels that
+  get traded by people, not just by this EA — which is the entire premise of
+  a bounce strategy.
+
+Two things to retune for the longer hold: `InpReentryCooldownSec` (900s is
+15 minutes — for a D1-anchored trade, something on the order of four hours
+stops it re-entering the same level minutes after a stop-out), and
+`InpExitIdx`. H1 is the recommendation because the M15 kijun cross stops out
+normal swing pullbacks — the same "stopped out too early" failure documented
+on the ignition EA (section 10), which moved its fallback exit to H1 for
+exactly this reason. H4 in slot 1 gives even more room if H1 still proves
+tight.
+
+#### Monthly anchor (MN1 / W1 / D1 / H4 / H1 / M15)
+
+The full stack. Recommended preset:
 
 | Input | Value | Why |
 |---|---|---|

@@ -540,7 +540,8 @@ VPS builds, breakout/hold experiments, and the older standard builds moved
 to [`archives/`](archives/). The newest addition is the
 **Structure-Map EA** (`experimental-structure-map-ea.mq5`), which drops the
 alignment gate entirely: it records where price sits relative to every
-Ichimoku structure on four timeframes, maps the swing legs and the candle
+Ichimoku structure across up to six timeframe slots — anchored anywhere from
+H4 to MN1 — maps the swing legs and the candle
 structure at the level price is reacting to, scores that read into a
 conviction number, and takes the continuation bounce — off the cloud, off
 the kijun — only when the stop, the room to the next obstacle, and the
