@@ -6,17 +6,21 @@
 //| differ, so the two builds can run side by side on one account.    |
 //|                                                                   |
 //| Idea:  instead of a boolean "all timeframes aligned" breakout     |
-//|        gate, this build READS the market: on every timeframe it   |
-//|        records where price sits relative to every Ichimoku        |
-//|        structure (tenkan, kijun, cloud, chikou, future twist),    |
-//|        maps the swing legs (impulse / pullback / retracement      |
-//|        depth), and reads the candle structure at the level price  |
-//|        is currently reacting to.                                  |
-//| Entry: continuation bounces off DAILY and H4 structures — price   |
-//|        pulls back into the D1/H4 kijun, tenkan or cloud edge and  |
-//|        reacts away from it in the direction the structure map     |
-//|        already favours. Entries are still timed on M15, so the    |
-//|        stop stays small even though the level is a daily one.     |
+//|        gate, the direction is anchored top-down: scan the         |
+//|        timeframes from the highest down (D1 first, then H4) and   |
+//|        take the FIRST one where price and the chikou are "free    |
+//|        to move" (price past its kijun, chikou clear of the candle |
+//|        Kijun bars back). That timeframe decides the direction.    |
+//|        Being inside the cloud is acceptable — the cloud is read   |
+//|        as an obstacle and a target, never as a veto.              |
+//| Entry: the lower timeframes do NOT have to align — they only      |
+//|        have to show potential movement in the Ichimoku structures:|
+//|        price pulls back into a level (kijun, tenkan, cloud edge)  |
+//|        on the anchor timeframes, reacts away from it on the       |
+//|        trigger timeframe with a confirming candle, and the leg    |
+//|        on the swing timeframe still reads as a pullback.          |
+//|        Entries are still timed on M15, so the stop stays small    |
+//|        even though the level is a daily one.                      |
 //| Trade: the setup is only taken when the numbers work — a          |
 //|        structure-based stop behind the reaction level, the next   |
 //|        structural obstacle as the target, and a minimum           |
@@ -39,6 +43,8 @@ input int    Slippage = 30;
 
 //--- Timeframe slots run highest to lowest. Set a slot to PERIOD_CURRENT to
 //--- switch it off; the stack can be anchored anywhere from MN1 downwards.
+//--- Direction: the first of the top InpAnchorTFs slots with a "price and
+//--- chikou free to move" read; the lower slots only add conviction.
 //--- This build ships the DAILY preset: D1 / H4 / H1 / M15, which is the H4
 //--- build's stack shifted up exactly one scale — same weight shape, same
 //--- slot roles. Add M5 in slot 5 at weight 0.5 for timing texture.
@@ -53,12 +59,13 @@ input ENUM_TIMEFRAMES InpTF3 = PERIOD_H1;      // Slot 3
 input ENUM_TIMEFRAMES InpTF4 = PERIOD_M15;     // Slot 4
 input ENUM_TIMEFRAMES InpTF5 = PERIOD_CURRENT; // Slot 5 (PERIOD_CURRENT = off)
 input ENUM_TIMEFRAMES InpTF6 = PERIOD_CURRENT; // Slot 6 (PERIOD_CURRENT = off)
-input double InpW1 = 3.0;    // Weight of slot 1 in the context score (0 = map it, don't score it)
-input double InpW2 = 2.0;    // Weight of slot 2 in the context score
-input double InpW3 = 1.5;    // Weight of slot 3 in the context score
-input double InpW4 = 0.5;    // Weight of slot 4 in the context score
-input double InpW5 = 0.0;    // Weight of slot 5 in the context score
-input double InpW6 = 0.0;    // Weight of slot 6 in the context score
+input int    InpAnchorTFs    = 2;   // Top N slots scanned for the "free to move" read
+input double InpW1 = 3.0;    // Weight of slot 1 in the conviction bonus (never a gate)
+input double InpW2 = 2.0;    // Weight of slot 2 in the conviction bonus
+input double InpW3 = 1.5;    // Weight of slot 3 in the conviction bonus
+input double InpW4 = 0.5;    // Weight of slot 4 in the conviction bonus
+input double InpW5 = 0.0;    // Weight of slot 5 in the conviction bonus
+input double InpW6 = 0.0;    // Weight of slot 6 in the conviction bonus
 input int    InpTrigIdx     = 3;  // Trigger slot — M15: reaction, candles, entry cadence
 input int    InpExitIdx     = 2;  // Exit/holding slot — H1: trail, break even, kijun exit
 input int    InpLegTFIdx    = 1;  // Leg slot — H4: grades the impulse/pullback
@@ -92,8 +99,7 @@ input double InpMaxRetrace  = 0.90; // Deepest pullback accepted before it reads
 input double InpLateLegATR  = 6.0;  // Move already this extended (x ATR) reads as late (0 = off)
 
 input group  "Conviction scoring"
-input double InpMinContext   = 25.0; // Min |context score| for a directional read (0..100)
-input double InpHTFVetoScore = 0.10; // Top-TF score may not oppose the trade by more than this
+input double InpMinContext   = 25.0; // Min anchor "free to move" strength to trade (0..100)
 input double InpMinScore     = 55.0; // Min conviction score to open a trade (0..100)
 input double InpStrongScore  = 75.0; // Conviction at/above this uses the full order ladder
 input bool   InpLogMap       = true; // Print the structure map on every evaluated setup
@@ -291,6 +297,7 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
    if(InpLevelTFs    < 1 || InpLevelTFs    > TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
    if(InpObstacleTFs < 1 || InpObstacleTFs > TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
+   if(InpAnchorTFs   < 1 || InpAnchorTFs   > TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
 
    // The exit/holding slot defaults to the trigger slot, which keeps the
    // single-scale behaviour when no separate holding timeframe is wanted.
@@ -601,13 +608,83 @@ double ScoreMap(TFMap &m)
    return m.score;
 }
 
-// Build every timeframe's map for the symbol and return the weighted
-// context score in -100..+100. Fills g_map as a side effect.
-bool BuildContext(int s, double &ctx)
+//==============================================================
+// The "price and chikou free to move" read. For a long, price must
+// be on top of its kijun with the chikou clear of the candle Kijun
+// bars back — then nothing structural blocks the move upward. Being
+// inside the cloud is acceptable: the cloud is a target/obstacle,
+// never a veto. Returns +1 / -1 / 0.
+//==============================================================
+
+int ReadOpportunity(TFMap &m)
 {
-   ctx = 0.0;
-   double wsum = 0.0, acc = 0.0;
-   bool   anyTop = false;
+   if(!m.ok) return 0;
+   if(m.close > m.kijun && m.chikou >= 0) return  1;
+   if(m.close < m.kijun && m.chikou <= 0) return -1;
+   return 0;
+}
+
+// How clean that read is, 0..100. A bare pass (price barely over a
+// flat kijun, tangled chikou) scores ~40 and needs reaction quality
+// elsewhere to reach the conviction gate.
+double OppStrength(TFMap &m, int dir)
+{
+   if(!m.ok || dir == 0) return 0.0;
+   double s = 0.0;
+   if(dir == 1)
+   {
+      if(m.close > m.kijun)                 s += 40.0;
+      if(m.chikou > 0)                      s += 30.0;
+      else if(m.chikou == 0)                s += 15.0;
+      if(m.twist > 0)                       s += 15.0;
+      if(m.kijunSlopeATR > InpFlatSlopeATR) s += 15.0;
+   }
+   else
+   {
+      if(m.close < m.kijun)                 s += 40.0;
+      if(m.chikou < 0)                      s += 30.0;
+      else if(m.chikou == 0)                s += 15.0;
+      if(m.twist < 0)                       s += 15.0;
+      if(m.kijunSlopeATR < -InpFlatSlopeATR)s += 15.0;
+   }
+   return Clamp(s, 0.0, 100.0);
+}
+
+// Same idea without the opportunity gate: how much structure on this
+// timeframe supports the trade direction, 0..100. Lower timeframes do
+// not need to align — this only adds conviction when they do.
+double DirStrength(TFMap &m, int dir)
+{
+   if(!m.ok || dir == 0) return 0.0;
+   double s = 0.0;
+   if(dir == 1)
+   {
+      if(m.close > m.kijun)                 s += 30.0;
+      if(m.chikou > 0)                      s += 20.0;
+      if(m.twist > 0)                       s += 20.0;
+      if(m.structDir > 0)                   s += 20.0;
+      if(m.kijunSlopeATR > InpFlatSlopeATR) s += 10.0;
+   }
+   else
+   {
+      if(m.close < m.kijun)                 s += 30.0;
+      if(m.chikou < 0)                      s += 20.0;
+      if(m.twist < 0)                       s += 20.0;
+      if(m.structDir < 0)                   s += 20.0;
+      if(m.kijunSlopeATR < -InpFlatSlopeATR)s += 10.0;
+   }
+   return Clamp(s, 0.0, 100.0);
+}
+
+// Build every timeframe's map for the symbol. The direction is NOT
+// derived here — the anchor cascade in EvaluateSetup picks the highest
+// timeframe with a "free to move" read, and the lower timeframes never
+// gate the trade, they only add conviction. Returns false only when a
+// slot needed for timing (trigger) or levels cannot be read.
+bool BuildContext(int s)
+{
+   bool okTrig   = false;
+   bool okAnyTop = false;
 
    for(int t = 0; t < TF_COUNT; t++)
    {
@@ -616,24 +693,20 @@ bool BuildContext(int s, double &ctx)
       bool built = BuildMap(s, t, g_map[t]);
       if(built) ScoreMap(g_map[t]);
 
-      if(t < InpLevelTFs && built) anyTop = true;
-      if(wts[t] <= 0.0) continue;
-      if(!built) return false;      // a weighted timeframe must be readable
-
-      acc  += wts[t] * g_map[t].score;
-      wsum += wts[t];
+      if(t == InpTrigIdx && built) okTrig   = true;
+      if(t <  InpLevelTFs && built) okAnyTop = true;
    }
 
-   if(!anyTop || wsum <= 0.0) return false;
-   ctx = 100.0 * acc / wsum;
-   return true;
+   return (okTrig && okAnyTop);
 }
 
-// Compact human-readable dump of the map — this is the "record where price
-// is in relation to the Ichimoku structures" part, written to the log.
-string MapToString(int s, double ctx)
+// Compact human-readable dump of the map — the anchor read, its strength,
+// and where price sits in relation to the Ichimoku structures per slot.
+string MapToString(int s, int anchor, int opp, double strength)
 {
-   string out = syms[s] + " ctx=" + DoubleToString(ctx, 1);
+   string out = syms[s] + " anchor=" + (anchor >= 0 ? TFName(anchor) : "none") +
+                " opp=" + IntegerToString(opp) +
+                " str=" + DoubleToString(strength, 0);
    for(int t = 0; t < TF_COUNT; t++)
    {
       if(!tfOn[t]) continue;
@@ -642,7 +715,9 @@ string MapToString(int s, double ctx)
                    : (g_map[t].cloudSide == -1 ? "belowKumo" : "inKumo");
       string legs  = (g_map[t].structDir == 1) ? "HH/HL"
                    : (g_map[t].structDir == -1 ? "LH/LL" : "mixed");
-      out += " | " + TFName(t) + "[" + cloud +
+      string opps  = (g_map[t].close > g_map[t].kijun && g_map[t].chikou >= 0) ? "opp+"
+                   : (g_map[t].close < g_map[t].kijun && g_map[t].chikou <= 0 ? "opp-" : "opp0");
+      out += " | " + TFName(t) + "[" + opps + " " + cloud +
              " thick" + DoubleToString(g_map[t].cloudThickATR, 1) +
              " kj" + DoubleToString(g_map[t].dKijunATR, 2) +
              (g_map[t].kijunFlat ? "flat" : "") +
@@ -900,31 +975,40 @@ bool EvaluateSetup(int s, int &dir, double &slOut, double &tpOut,
 {
    dir = 0; slOut = 0.0; tpOut = 0.0; riskOut = 0.0; convOut = 0.0; why = "";
 
-   double ctx;
-   if(!BuildContext(s, ctx)) return false;
-   if(InpLogMap) Print(PCTime() + " | MAP " + MapToString(s, ctx));
+   if(!BuildContext(s)) return false;
 
-   if(MathAbs(ctx) < InpMinContext) return false;
-   int d = Sgn(ctx);
-
-   // The trend anchor may be neutral, but never clearly against the trade.
-   if(g_map[0].ok && g_map[0].score * d < -InpHTFVetoScore) return false;
+   // 1) Direction: the FIRST (highest) timeframe with a "price and chikou
+   //    free to move" read decides. No read on D1 -> drop to H4. Being
+   //    inside the cloud does not disqualify a timeframe — the cloud is an
+   //    obstacle and a target, not a veto. Lower timeframes never override.
+   int    anchor = -1, opp = 0;
+   double oppStr = 0.0;
+   for(int t = 0; t < InpAnchorTFs && t < TF_COUNT; t++)
+   {
+      if(!tfOn[t] || !g_map[t].ok) continue;
+      opp = ReadOpportunity(g_map[t]);
+      if(opp != 0) { anchor = t; oppStr = OppStrength(g_map[t], opp); break; }
+   }
+   if(anchor < 0) return false;
+   if(InpLogMap) Print(PCTime() + " | MAP " + MapToString(s, anchor, opp, oppStr));
+   if(oppStr < InpMinContext) return false;    // read present but too weak to act on
+   int d = opp;
 
    double atrTrig = g_map[InpTrigIdx].atr;
    if(atrTrig <= 0.0) return false;
 
-   // 1) Price must be reacting off a real Ichimoku structure right now
+   // 2) Price must be reacting off a real Ichimoku structure right now
    Level  lvl;
    double touchExt;
    int    touchIdx;
    if(!FindReaction(s, d, lvl, touchExt, touchIdx)) return false;
 
-   // 2) The candle structure at that level must confirm the bounce
+   // 3) The candle structure at that level must confirm the bounce
    string cdesc;
    double cs = CandleScore(s, d, touchIdx, cdesc);
    if(cs < InpMinCandleScore) return false;
 
-   // 3) Leg quality: a continuation trade wants a pullback of sane depth
+   // 4) Leg quality: a continuation trade wants a pullback of sane depth
    //    against an impulse, not an already-extended run.
    double retraceBonus = 0.0, latePenalty = 0.0;
    TFMap  legs         = g_map[InpLegTFIdx];
@@ -944,14 +1028,26 @@ bool EvaluateSetup(int s, int &dir, double &slOut, double &tpOut,
       }
    }
 
-   // 4) Conviction
+   // 5) Conviction — the anchor read leads, the reaction adds, and the
+   //    lower timeframes only help. Nothing below the anchor can veto.
    double gradeBonus  = 10.0 * Clamp(lvl.grade / (4.0 + InpLevelTFs), 0.0, 1.0);
    double candleBonus = 10.0 * Clamp(cs / 3.0, 0.0, 1.0);
-   double conv = Clamp(0.7 * MathAbs(ctx) + gradeBonus + candleBonus + retraceBonus - latePenalty,
-                       0.0, 100.0);
+   double anchorBonus = 0.6 * oppStr;
+   double trigBonus   = (InpTrigIdx != anchor) ? 0.2 * DirStrength(g_map[InpTrigIdx], d) : 0.0;
+   double supportBonus = 0.0, wsum = 0.0;
+   for(int t = 0; t < TF_COUNT; t++)
+   {
+      if(t == anchor || t == InpTrigIdx || !tfOn[t] || !g_map[t].ok) continue;
+      if(wts[t] <= 0.0) continue;
+      supportBonus += wts[t] * DirStrength(g_map[t], d);
+      wsum += wts[t];
+   }
+   if(wsum > 0.0) supportBonus = 0.15 * (supportBonus / wsum);
+   double conv = Clamp(anchorBonus + trigBonus + supportBonus + gradeBonus +
+                       candleBonus + retraceBonus - latePenalty, 0.0, 100.0);
    if(conv < InpMinScore) return false;
 
-   // 5) Structural stop: behind the reaction extreme, and behind the last
+   // 6) Structural stop: behind the reaction extreme, and behind the last
    //    trigger-TF swing when that sits further out.
    double price = (d == 1) ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
                            : SymbolInfoDouble(syms[s], SYMBOL_BID);
@@ -986,7 +1082,7 @@ bool EvaluateSetup(int s, int &dir, double &slOut, double &tpOut,
    if(InpMaxRiskATR > 0.0 && risk > InpMaxRiskATR * atrTrig) return false;  // stop too wide to be optimal
    sl = NormalizeDouble(sl, digits);
 
-   // 6) Room to the next obstacle decides whether the trade is worth taking
+   // 7) Room to the next obstacle decides whether the trade is worth taking
    double obst = NextObstacle(d, price);
    double tp   = 0.0;
    if(obst > 0.0)
@@ -1007,8 +1103,8 @@ bool EvaluateSetup(int s, int &dir, double &slOut, double &tpOut,
    tpOut   = tp;
    riskOut = risk;
    convOut = conv;
-   why     = "conv " + DoubleToString(conv, 0) +
-             " | ctx " + DoubleToString(ctx, 1) +
+   why     = "anchor " + TFName(anchor) + " opp " + DoubleToString(oppStr, 0) +
+             " | conv " + DoubleToString(conv, 0) +
              " | " + lvl.name + " @ " + DoubleToString(lvl.price, digits) +
              " | pa: " + cdesc +
              "| retr " + DoubleToString(legs.retraceFrac, 2) +
@@ -1304,13 +1400,19 @@ bool CheckKijunExit(int s, int dir)
    return false;
 }
 
-// Optional: the structure map itself flips against an open trade.
+// Optional: the anchor cascade now reads "free to move" against the trade.
 bool CheckFlipExit(int s, int dir)
 {
    if(!InpExitOnFlip) return false;
-   double ctx;
-   if(!BuildContext(s, ctx)) return false;
-   return (ctx * dir < -InpMinContext);
+   if(!BuildContext(s)) return false;
+   for(int t = 0; t < InpAnchorTFs && t < TF_COUNT; t++)
+   {
+      if(!tfOn[t] || !g_map[t].ok) continue;
+      int opp = ReadOpportunity(g_map[t]);
+      if(opp == -dir) return true;    // the anchor now reads the other way
+      if(opp ==  dir) return false;   // a higher timeframe still confirms
+   }
+   return false;
 }
 
 //==============================================================
