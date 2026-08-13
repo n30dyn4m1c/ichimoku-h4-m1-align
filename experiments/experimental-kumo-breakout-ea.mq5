@@ -12,11 +12,12 @@
 //|        InpMinCloudATR * ATR(M1)), and the future cloud (the       |
 //|        Senkou spans drawn Kijun bars ahead) is angled in the      |
 //|        breakout direction too                                     |
-//| Exit:  ADX regime decides the exit — with great ADX (>=          |
-//|        InpADXHigh) all positions close when price closes back    |
-//|        inside the cloud; with medium ADX they close when price   |
-//|        closes across the kijun against the trade; small ADX      |
-//|        (< InpADXLow) never opens a trade at all                  |
+//| Exit:  the ADX tier decides how far price may pull back — with   |
+//|        the lowest ADX (< InpADXLow) the trade closes when price  |
+//|        closes across the tenkan against it, with mid ADX at the  |
+//|        kijun cross, and with big ADX (>= InpADXHigh) only when   |
+//|        price closes back inside the cloud. Every tier opens      |
+//|        trades — ADX never blocks entry, it only picks the exit.  |
 //| Risk:  VPS-style ladder sizing (20% risk up to $8k, 10% to       |
 //|        $13k, 5% above), ATR(M1) stop loss on every order, caps   |
 //|        by InpMaxRiskPct and free margin, spread filter, re-entry |
@@ -52,10 +53,10 @@ input double InpFlatATRMult  = 0.15;  // A line is "flat" if its move over InpFl
 input group  "Cloud Thickness"
 input double InpMinCloudATR = 0.5;   // Cloud width |Span A - Span B| must be >= this * ATR(M1) to open
 
-input group  "ADX Regime Filter"
+input group  "ADX Exit Tiers"
 input int    InpADXPeriod = 14;   // ADX period (M1)
-input double InpADXLow    = 22.0; // ADX below this = small — no trade is opened
-input double InpADXHigh   = 35.0; // ADX >= this = great — exit at price closing inside the cloud; in between = medium — exit at price closing across the kijun
+input double InpADXLow    = 22.0; // ADX below this = lowest tier — exit at price closing across the tenkan
+input double InpADXHigh   = 35.0; // ADX >= this = big tier — exit at price closing inside the cloud; in between = mid tier — exit at price closing across the kijun
 
 input group  "Logging"
 input bool   InpLogSkips     = true;  // Log skipped entries (flat detected / kijun not angled)
@@ -66,7 +67,7 @@ input bool   InpLogSkips     = true;  // Log skipped entries (flat detected / ki
 
 int      ich[MAX_SYMS];   // iIchimoku(M1) handle per symbol
 int      atr[MAX_SYMS];   // iATR(M1) handle per symbol
-int      adx[MAX_SYMS];   // iADX(M1) handle per symbol — regime filter for entry and exit
+int      adx[MAX_SYMS];   // iADX(M1) handle per symbol — tier filter that picks the exit
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -302,11 +303,11 @@ bool PriceInsideCloud(int s)
 }
 
 //==============================================================
-// ADX Regime: great (>= InpADXHigh) holds to the cloud exit,
-// medium (InpADXLow..InpADXHigh) exits at the kijun cross, small
-// (< InpADXLow) never opens a trade. An unreadable ADX is treated
-// as small at entry (no unverifiable trades) and as great at exit
-// (falls back to the original cloud exit).
+// ADX Exit Tiers: the tier decides how far price may pull back —
+// lowest ADX (< InpADXLow) exits at the tenkan cross, mid ADX
+// (InpADXLow..InpADXHigh) exits at the kijun cross, big ADX
+// (>= InpADXHigh) holds until a close back inside the cloud. An
+// unreadable ADX is treated as mid (kijun exit).
 //==============================================================
 
 double GetADX(int s)
@@ -317,14 +318,23 @@ double GetADX(int s)
    return d[0];
 }
 
-bool ADXSmall(int s)
+// Lowest-tier exit: price closed across the tenkan against the trade
+// (long exits on a close below the tenkan, short on a close above it)
+bool CheckTenkanExit(int s, int dir)
 {
-   double v = GetADX(s);
-   if(v <= 0) return true;
-   return v < InpADXLow;
+   double tenkan[1];
+   if(CopyBuffer(ich[s], 0, 1, 1, tenkan) <= 0) return false;
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], TF_M1, 1, 1, rt) <= 0) return false;
+   double closeP = rt[0].close;
+
+   if(dir ==  1 && closeP < tenkan[0]) return true;
+   if(dir == -1 && closeP > tenkan[0]) return true;
+   return false;
 }
 
-// Medium-ADX exit: price closed across the kijun against the trade
+// Mid-tier exit: price closed across the kijun against the trade
 // (long exits on a close below the kijun, short on a close above it)
 bool CheckKijunExit(int s, int dir)
 {
@@ -558,19 +568,29 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: the ADX regime decides how far price may pull back —
-      // great ADX holds until a close back inside the cloud, medium ADX
-      // exits at the kijun cross (unreadable ADX falls back to the cloud exit)
+      // Exit check: the ADX tier decides how far price may pull back —
+      // lowest ADX exits at the tenkan cross, mid ADX at the kijun
+      // cross, big ADX holds until a close back inside the cloud
+      // (unreadable ADX is treated as mid)
       if(state[s] != 0)
       {
          double adxVal = GetADX(s);
-         bool useCloud = (adxVal <= 0) || (adxVal >= InpADXHigh);
-         bool exitSig = useCloud ? PriceInsideCloud(s) : CheckKijunExit(s, state[s]);
+         int tier = 1;   // 0 = lowest (tenkan), 1 = mid (kijun), 2 = big (cloud)
+         if(adxVal <= 0)       tier = 1;
+         else if(adxVal >= InpADXHigh) tier = 2;
+         else if(adxVal >= InpADXLow)  tier = 1;
+         else                        tier = 0;
+
+         bool exitSig = false;
+         string why = "";
+         if(tier == 2)      { exitSig = PriceInsideCloud(s);      why = "price back inside cloud"; }
+         else if(tier == 1) { exitSig = CheckKijunExit(s, state[s]); why = "price closed across kijun"; }
+         else               { exitSig = CheckTenkanExit(s, state[s]); why = "price closed across tenkan"; }
+
          if(exitSig)
          {
             string side = (state[s] == 1) ? "Long" : "Short";
-            string why  = useCloud ? "price back inside cloud" : "price closed across kijun";
-            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (" + why + ")";
+            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (ADX " + DoubleToString(adxVal, 1) + " — " + why + ")";
             Print(msg); SendNotification(msg);
 
             if(ClosePositions(syms[s]))
@@ -627,13 +647,6 @@ void OnTick()
                   string way = (dir == 1) ? "up" : "down";
                   Print(PCTime() + " | " + syms[s] + " kumo breakout, kijun not flat but not angled " + way + " — waiting");
                }
-               continue;
-            }
-
-            if(ADXSmall(s))
-            {
-               if(InpLogSkips)
-                  Print(PCTime() + " | " + syms[s] + " kumo breakout but ADX below " + DoubleToString(InpADXLow, 1) + " — no trade");
                continue;
             }
 
