@@ -535,7 +535,11 @@ experiments — `experimental-h4-m1-be30-ea.mq5`, which moves the stop to
 break even + a few points (spread cover) when a trade turns profitable
 within 30 minutes of entry, and `experimental-h4-m1-be15-ea.mq5`, which
 moves the stop to break even after the trade has been in profit
-continuously for 15 minutes — plus alignment-filter pruning forks of both
+continuously for 15 minutes — an **order block** build
+(`experimental-h4-m1-orderblock-ea.mq5`) that trades the retrace into the
+origin candle of a displacement leg once only H4+H1 agree, so entries land
+early and the stop sits at the zone edge instead of 3 x ATR behind price —
+plus alignment-filter pruning forks of both
 VPS builds, breakout/hold experiments, and the older standard builds moved
 to [`archives/`](archives/). They're newer and less battle-tested than the
 main builds; see

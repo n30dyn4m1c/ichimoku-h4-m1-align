@@ -1143,6 +1143,178 @@ lower-TF confirmation.
   H1 trade simultaneously, in either direction — the laddered lot counts
   from each can stack on one symbol.
 
+---
+
+## 13. H4-M1 Order Block EA (early entries)
+
+**File:** `experimental-h4-m1-orderblock-ea.mq5`
+**Magic number:** `20260901` (independent of every other EA)
+
+The alignment stack is a *confirmation* signal: it fires only once H4, H1,
+M30, M15, M5 and M1 all agree, which is by construction the **last** thing
+that happens in a move. Every trade therefore starts late, at a worse price,
+with an ATR stop that sits far behind entry.
+
+This build attacks that directly. Instead of waiting for the whole stack, it
+waits only for the **higher timeframes** (default H4 + H1) and then enters at
+the **origin** of the move — the order block — when price retraces back into
+it. The lower timeframes are still pointing the wrong way at the moment of
+entry; that is the entire point.
+
+### What counts as an order block here
+
+An order block is the **last opposite-colour candle before a displacement leg
+that breaks structure**. Loose "last red candle before green candles"
+definitions produce a zone on nearly every bar, so three gates are required
+before a candle is stored:
+
+1. **Origin candle** — bearish candle for a bullish (demand) block, bullish
+   candle for a bearish (supply) block. Dojis are skipped.
+2. **Displacement** — within the next `InpOBImpulseBars` bars (default 3),
+   price travels at least `InpOBImpulseATR` × ATR (default 1.5) away from the
+   block. A slow drift out of a candle is not an order block.
+3. **Break of structure** — one of those bars must *close* beyond the block's
+   own high (bullish) or low (bearish). This is the proof that the move was
+   initiated at that candle rather than passing through it.
+4. **Fair-value gap** (optional, `InpOBRequireFVG`, default on) — the
+   displacement leg must contain a three-candle imbalance (`low[j] >
+   high[j+2]`). This is the strictest of the filters and the one to turn off
+   first if the EA trades too rarely.
+
+The zone is the candle's full high–low range by default, or its body only
+with `InpOBUseBody = true` (tighter zone, tighter stop, more misses).
+
+**Invalidation and mitigation** are recomputed from bar data, not tracked
+incrementally:
+
+- A bullish block is **dead** once any later bar *closes* below its low
+  (the level failed) — closes, not wicks, so a stop-run through the zone
+  does not delete it.
+- A block is **touched** once a later bar trades back into it. With
+  `InpOBFirstTouchOnly = true` (default) only the first return is traded —
+  the second and third taps of a zone are statistically much weaker.
+- Bars inside the displacement leg itself are excluded from the mitigation
+  scan; they start on top of the block and would otherwise mark every fresh
+  zone as already used.
+- Blocks older than `InpOBMaxAgeBars` (default 60) are dropped, and
+  overlapping same-direction blocks collapse to the newest one.
+
+Because the entire list is rebuilt from bars on each closed OB-timeframe bar,
+the EA sees identical zones after a restart, a reattach, or a history
+refresh — there is no accumulated state to go stale.
+
+### Entry logic
+
+Per new M1 bar, per symbol:
+
+1. **Trend gate** — the top `InpOBTrendTFs` timeframes (default 2 → H4 + H1)
+   pass the standard `CheckAlign()` price+chikou test in the same direction.
+   This is the only alignment requirement; M30/M15/M5/M1 are not consulted.
+2. **Mitigation** — price has come back to a live block in that direction:
+   within `InpOBEntryBufferATR` × ATR of the zone edge (default 0.15, so the
+   entry arms just before the zone) and not yet through the far edge.
+3. **Confirmation** (optional, `InpOBUseConfirm`, default on) — the last
+   closed `InpOBConfirmTF` bar (default M5) traded into the zone and closed
+   back out of it in the trend direction. This is the cheap substitute for
+   the M5/M1 alignment the build deliberately skips; without it the EA buys
+   into whatever is falling.
+
+One trade per block: the zone that was traded is remembered (`obTraded`) and
+never re-entered, even after an exit frees the symbol.
+
+`InpEntryMode` picks the behaviour: `ENTRY_ALIGNMENT` (0) is the original
+6-TF build byte-for-byte — the A/B baseline — `ENTRY_ORDERBLOCK` (1, default)
+is order blocks only, `ENTRY_BOTH` (2) tries the order block first and falls
+back to full alignment.
+
+### Stop placement — the real payoff
+
+With `InpOBStopMode = OB_STOP_ZONE` (default), the stop goes just beyond the
+**far edge of the zone** — `InpOBStopBufferATR` × ATR below the block low for
+a long — instead of ATR(M15) × 3 behind entry. Entering at the origin means
+the invalidation level is close, so the same money risk buys a larger
+position, and a move that used to be a 1R winner becomes a 3R winner.
+
+The guard is `InpOBMaxStopATR` (default 3.0 × ATR(M15)): if price has already
+run so deep through the zone that the zone stop is wider than the ATR stop
+would have been, the entry is **skipped** rather than taken with widened
+risk. A late order-block entry is just a bad alignment entry.
+
+`OB_STOP_ATR` restores the main EA's ATR stop for order-block entries, which
+is the honest comparison when testing whether the edge is the entry or the
+stop.
+
+### Exit logic
+
+Untouched from the main H4-M1 desktop build: ATR chandelier trail (choppy-only
+via ADX(M15) by default), BE30 break-even, M15 kijun cross as the final
+fallback, protective stop on every position.
+
+Note the asymmetry this creates: entries are now early and higher-TF driven,
+but the exit is still an M15 kijun cross. On a deep retrace entry the M15
+kijun can be on the wrong side of price *at entry*, closing the trade almost
+immediately. If the Strategy Tester shows a cluster of one-to-two-bar
+round trips, that is the cause — the H1 kijun (or dropping the M15 exit for
+order-block trades) is the first thing to test.
+
+### Order block inputs
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `InpEntryMode` | `ENTRY_ORDERBLOCK` | 0 = alignment only, 1 = order blocks only, 2 = both |
+| `InpOBTimeframe` | `PERIOD_H1` | Timeframe the blocks are mapped on |
+| `InpOBTrendTFs` | 2 | Top-N timeframes that must align (2 = H4+H1) |
+| `InpOBScanBars` | 150 | Bars scanned for blocks |
+| `InpOBImpulseBars` | 3 | Bars after the block that must deliver the displacement |
+| `InpOBImpulseATR` | 1.5 | Displacement size from the block (× ATR of the OB timeframe) |
+| `InpOBRequireFVG` | `true` | Require a fair-value gap inside the displacement leg |
+| `InpOBUseBody` | `false` | Zone = body only (false = full high/low range) |
+| `InpOBMaxAgeBars` | 60 | Ignore blocks older than this |
+| `InpOBFirstTouchOnly` | `true` | Only trade the first return into a zone |
+| `InpOBEntryBufferATR` | 0.15 | Arm the entry this far before the zone (× ATR) |
+| `InpOBUseConfirm` | `true` | Require a confirmation close on `InpOBConfirmTF` |
+| `InpOBConfirmTF` | `PERIOD_M5` | Timeframe of the confirmation close |
+| `InpOBStopMode` | `OB_STOP_ZONE` | 0 = ATR stop (as main EA), 1 = beyond the zone edge |
+| `InpOBStopBufferATR` | 0.5 | Stop sits this far beyond the zone edge (× ATR) |
+| `InpOBMaxStopATR` | 3.0 | Skip the entry if the zone stop exceeds this × ATR(M15) (0 = off) |
+
+All other inputs match the main H4-M1 desktop build (see
+[README](../README.md#configuration-inputs)).
+
+### How to test it
+
+1. `ENTRY_ORDERBLOCK` vs `ENTRY_ALIGNMENT` on the same symbol and period —
+   mode 0 is the known baseline, so the comparison isolates the entry.
+2. Then `OB_STOP_ZONE` vs `OB_STOP_ATR` inside order-block mode — this splits
+   "the entry is better" from "the tighter stop is better". They are separate
+   claims and only one of them may survive.
+3. Then relax the strictness in this order: `InpOBRequireFVG = false`,
+   `InpOBTrendTFs = 3`, `InpOBFirstTouchOnly = false`. Each one increases the
+   trade count; check whether expectancy holds.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.** Nothing here has been validated
+  in the Strategy Tester — treat every default as a starting hypothesis.
+- **The entry is early by design, which means it is wrong more often.** A
+  retrace into a block is a bet the trend resumes; the alignment stack waits
+  for proof that it already has. Expect a lower win rate. The case for the
+  build is R multiple, not hit rate, and that case dies if the zone stop
+  isn't used.
+- Order-block detection is a **heuristic**, not a market structure. The
+  displacement + break-of-structure + FVG gates keep the zone count sane, but
+  no combination of them makes a zone "institutional" — a level either holds
+  or it doesn't.
+- The ladder sizing is unchanged, so a tighter zone stop with
+  `InpMaxRiskPct = 0` risks *less* money per trade than the ATR stop, not
+  more. Set `InpMaxRiskPct` if the intent is to hold risk constant and let
+  the tighter stop buy a bigger position.
+- Deep retraces can put the M15 kijun exit on the wrong side of price at
+  entry (see the exit note above).
+- Runs a `CopyRates` of ~155 OB-timeframe bars per symbol per closed OB bar.
+  Negligible on H1; check the load before setting `InpOBTimeframe` to M5 with
+  a long symbol list on a VPS.
+
 > **Removed:** the per-symbol US30, Silver, and BTCUSD variants of the
 > H4-H1 swing EA (`experimental-h4-h1-align-us30-ea.mq5`,
 > `experimental-h4-h1-align-silver-ea.mq5`,
