@@ -12,12 +12,13 @@
 //|        InpMinCloudATR * ATR(M1)), and the future cloud (the       |
 //|        Senkou spans drawn Kijun bars ahead) is angled in the      |
 //|        breakout direction too                                     |
-//| Exit:  the ADX tier decides how far price may pull back — with   |
-//|        the lowest ADX (< InpADXLow) the trade closes when price  |
-//|        closes across the tenkan against it, with mid ADX at the  |
-//|        kijun cross, and with big ADX (>= InpADXHigh) only when   |
-//|        price closes back inside the cloud. Every tier opens      |
-//|        trades — ADX never blocks entry, it only picks the exit.  |
+//| Exit:  the ADX tier at entry sets the exit — with the lowest     |
+//|        ADX (< InpADXLow) the trade closes when price closes       |
+//|        across the tenkan against it, with mid ADX at the kijun    |
+//|        cross, and with big ADX (>= InpADXHigh) only when price    |
+//|        closes back inside the cloud. The tier is locked at entry  |
+//|        and never re-evaluated while the trade is open; it is      |
+//|        baked into the order comment so a restart keeps it.        |
 //| Risk:  VPS-style ladder sizing (20% risk up to $8k, 10% to       |
 //|        $13k, 5% above), ATR(M1) stop loss on every order, caps   |
 //|        by InpMaxRiskPct and free margin, spread filter, re-entry |
@@ -74,6 +75,7 @@ datetime lastM1bar[MAX_SYMS];
 datetime noReentryUntil[MAX_SYMS];
 int      lastMinuteKey = -1;
 int      state[MAX_SYMS];   // 0=no position, 1=long, -1=short
+int      exitTier[MAX_SYMS];   // exit tier locked at entry: 0=tenkan, 1=kijun, 2=cloud
 
 int MAGIC = 20260845;   // fresh — no other EA uses this
 
@@ -113,6 +115,7 @@ int OnInit()
       state[s] = 0;
       lastM1bar[s] = 0;
       noReentryUntil[s] = 0;
+      exitTier[s] = 1;   // mid tier until a real entry sets it
 
       ich[s] = iIchimoku(syms[s], TF_M1, Tenkan, Kijun, SenkouB);
       if(ich[s] == INVALID_HANDLE) return(INIT_FAILED);
@@ -169,6 +172,13 @@ void SyncStateFromPositions()
          {
             state[s] = dir;
             hasPos[s] = true;
+            // The exit tier was baked into the order comment at entry so
+            // a restart mid-trade keeps the tier that was locked in.
+            string cmt = PositionGetString(POSITION_COMMENT);
+            exitTier[s] = 1;
+            if(StringFind(cmt, "T0") >= 0)      exitTier[s] = 0;
+            else if(StringFind(cmt, "T1") >= 0) exitTier[s] = 1;
+            else if(StringFind(cmt, "T2") >= 0) exitTier[s] = 2;
             break;
          }
       }
@@ -303,11 +313,12 @@ bool PriceInsideCloud(int s)
 }
 
 //==============================================================
-// ADX Exit Tiers: the tier decides how far price may pull back —
-// lowest ADX (< InpADXLow) exits at the tenkan cross, mid ADX
+// ADX Exit Tiers: the tier is locked at entry and never
+// re-evaluated while the trade is open — lowest ADX
+// (< InpADXLow) exits at the tenkan cross, mid ADX
 // (InpADXLow..InpADXHigh) exits at the kijun cross, big ADX
 // (>= InpADXHigh) holds until a close back inside the cloud. An
-// unreadable ADX is treated as mid (kijun exit).
+// unreadable ADX at entry is treated as mid (kijun exit).
 //==============================================================
 
 double GetADX(int s)
@@ -316,6 +327,23 @@ double GetADX(int s)
    double d[1];
    if(CopyBuffer(adx[s], 0, 1, 1, d) <= 0 || d[0] <= 0) return 0.0;
    return d[0];
+}
+
+// Map the ADX at entry to the locked exit tier
+int ADXExitTier(int s)
+{
+   double v = GetADX(s);
+   if(v <= 0)                    return 1;
+   if(v >= InpADXHigh)           return 2;
+   if(v >= InpADXLow)            return 1;
+   return 0;
+}
+
+string TierName(int tier)
+{
+   if(tier == 0) return "tenkan";
+   if(tier == 2) return "cloud";
+   return "kijun";
 }
 
 // Lowest-tier exit: price closed across the tenkan against the trade
@@ -495,9 +523,10 @@ double BuildStopLoss(int s, bool isBuy, double price, double dist)
    return NormalizeDouble(isBuy ? price - dist : price + dist, digits);
 }
 
-int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
+int OpenPositions(int s, bool isBuy, double dist, int count, double lots, int tier)
 {
    string sym = syms[s];
+   string cmt = "Kumo Breakout T" + IntegerToString(tier);
 
    int filled = 0;
    for(int i = 0; i < count; i++)
@@ -506,8 +535,8 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots)
                            : SymbolInfoDouble(sym, SYMBOL_BID);
       double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
 
-      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Kumo Breakout")
-                      : trade.Sell(lots, sym, price, sl, 0, "Kumo Breakout");
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, cmt)
+                      : trade.Sell(lots, sym, price, sl, 0, cmt);
       if(!ok) break;   // out of margin or rejected — don't hammer the server
       filled++;
    }
@@ -568,29 +597,22 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: the ADX tier decides how far price may pull back —
-      // lowest ADX exits at the tenkan cross, mid ADX at the kijun
-      // cross, big ADX holds until a close back inside the cloud
-      // (unreadable ADX is treated as mid)
+      // Exit check: the tier locked at entry decides how far price may
+      // pull back — lowest exits at the tenkan cross, mid at the kijun
+      // cross, big holds until a close back inside the cloud
       if(state[s] != 0)
       {
-         double adxVal = GetADX(s);
-         int tier = 1;   // 0 = lowest (tenkan), 1 = mid (kijun), 2 = big (cloud)
-         if(adxVal <= 0)       tier = 1;
-         else if(adxVal >= InpADXHigh) tier = 2;
-         else if(adxVal >= InpADXLow)  tier = 1;
-         else                        tier = 0;
-
+         int tier = exitTier[s];
          bool exitSig = false;
          string why = "";
-         if(tier == 2)      { exitSig = PriceInsideCloud(s);      why = "price back inside cloud"; }
+         if(tier == 2)      { exitSig = PriceInsideCloud(s);        why = "price back inside cloud"; }
          else if(tier == 1) { exitSig = CheckKijunExit(s, state[s]); why = "price closed across kijun"; }
          else               { exitSig = CheckTenkanExit(s, state[s]); why = "price closed across tenkan"; }
 
          if(exitSig)
          {
             string side = (state[s] == 1) ? "Long" : "Short";
-            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (ADX " + DoubleToString(adxVal, 1) + " — " + why + ")";
+            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (exit tier " + TierName(tier) + " — " + why + ")";
             Print(msg); SendNotification(msg);
 
             if(ClosePositions(syms[s]))
@@ -665,17 +687,23 @@ void OnTick()
             CapToRisk(syms[s], dist, count, lots);
             CapToMargin(syms[s], isBuy, count, lots);
 
+            // Lock the exit tier from the ADX at entry — it never changes
+            // for the life of this trade (restored from the order comment).
+            int tier = ADXExitTier(s);
+
             // Track state if any order filled — keeps exit logic and re-entry
             // guard correct even when only some of the orders go through.
             // Alert reports the actual fill count, not the requested count.
-            int filled = OpenPositions(s, isBuy, dist, count, lots);
+            int filled = OpenPositions(s, isBuy, dist, count, lots, tier);
             if(filled > 0)
             {
                state[s] = dir;
+               exitTier[s] = tier;
                string action = isBuy ? "Buy" : "Sell";
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +
-                            " @ " + DoubleToString(lots, 2) + " (kumo breakout)";
+                            " @ " + DoubleToString(lots, 2) +
+                            " (kumo breakout, exit tier " + TierName(tier) + ")";
                Print(msg); SendNotification(msg);
             }
             else

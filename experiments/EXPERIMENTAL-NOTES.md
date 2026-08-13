@@ -1760,16 +1760,19 @@ tests the concern that breakouts are preceded by flat, choppy areas:
 - **Angled kijun:** the kijun must also be angled *in the breakout
   direction* — rising for a long, falling for a short — so the cross fires
   with the trend, not against it.
-- **Exit:** the ADX tier decides how far price may pull back. With the
-  **lowest** ADX (below `InpADXLow`, default 22) the trade closes when
-  price closes across the tenkan against it (long on a close below the
-  tenkan, short on a close above). With **mid** ADX (between `InpADXLow`
-  and `InpADXHigh`) it closes when price closes across the kijun against
-  the trade. With **big** ADX (`InpADXHigh`, default 35, or above) it
-  holds until price closes back inside the cloud (between the two Senkou
-  spans). Every tier opens trades — ADX never blocks entry, it only picks
-  the exit. The ATR(M1) stop loss is the only other way out. An
-  unreadable ADX is treated as mid (kijun exit).
+- **Exit:** the ADX tier **at entry** sets the exit — it is locked when
+  the trade opens and never re-evaluated while the trade is open. With
+  the **lowest** ADX (below `InpADXLow`, default 22) the trade closes
+  when price closes across the tenkan against it (long on a close below
+  the tenkan, short on a close above). With **mid** ADX (between
+  `InpADXLow` and `InpADXHigh`) it closes when price closes across the
+  kijun against the trade. With **big** ADX (`InpADXHigh`, default 35,
+  or above) it holds until price closes back inside the cloud (between
+  the two Senkou spans). Every tier opens trades — ADX never blocks
+  entry, it only picks the exit. The tier is baked into the order
+  comment (`Kumo Breakout T0/T1/T2`) so a restart mid-trade keeps it.
+  The ATR(M1) stop loss is the only other way out. An unreadable ADX at
+  entry is treated as mid (kijun exit).
 - **Risk:** the H4-M1 VPS risk engine verbatim — equity-tiered ladder
   sizing, `CapToRisk`, `CapToMargin`, spread filter, re-entry cooldown,
   verified closes, ATR-based hard stop on every order, once-per-minute
@@ -1795,14 +1798,16 @@ build answers is whether filtering out flat-kijun breakouts and only
 entering when the kijun is angled in the trade direction raises the win
 rate enough to pay for the later, higher-risk entries it accepts.
 
-The ADX tier adds a second layer to that same concern: trend strength
-decides how long to hold. In a strong trend (big ADX) the cloud exit is
-right — the move is big enough that giving back a close back inside the
-cloud is still a healthy exit. In a weaker trend (mid ADX) that same
-giveback is too much, so the kijun cross takes the trade out earlier.
-And in chop (lowest ADX) the tenkan cross locks the trade up almost
-immediately — the entry filters (flat kijun, thick cloud, future-cloud
-angle) still have to pass, but ADX only decides the exit.
+The ADX tier adds a second layer to that same concern: trend strength at
+entry decides how long to hold. In a strong trend (big ADX) the cloud
+exit is right — the move is big enough that giving back a close back
+inside the cloud is still a healthy exit. In a weaker trend (mid ADX)
+that same giveback is too much, so the kijun cross takes the trade out
+earlier. And in chop (lowest ADX) the tenkan cross locks the trade up
+almost immediately — the entry filters (flat kijun, thick cloud,
+future-cloud angle) still have to pass, but ADX only decides the exit,
+and only from the value at entry: the trade is managed against the
+regime it was born into, not the one it later drifts into.
 
 ### Status & caveats
 
