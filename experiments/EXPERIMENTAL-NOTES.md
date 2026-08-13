@@ -1735,13 +1735,14 @@ tests the concern that breakouts are preceded by flat, choppy areas:
 
 ### Rules
 
-- **Entry:** on a closed M1 bar, the close must be above the cloud top
-  (long) or below the cloud bottom (short), *and* the chikou span must be
-  clear of the cloud at its plotted position (`chShift = 1 + Kijun`), *and*
-  the kumo twist must agree (Span A above Span B for longs, below for
-  shorts). Entry fires while the breakout state holds — if the flat-kijun
-  filter blocks the first bar of a breakout, the EA waits and enters later
-  in the same move once the kijun angles.
+- **Entry:** on a closed M1 bar, VPS-style alignment plus breakout: the
+  close must be above tenkan, kijun and the cloud top (long) or below
+  all three (short), *and* the chikou span must be clear of tenkan,
+  kijun and the cloud at its plotted position (`chShift = 1 + Kijun`),
+  *and* the kumo twist must agree (Span A above Span B for longs, below
+  for shorts). Entry fires while the breakout state holds — if the
+  flat-kijun filter blocks the first bar of a breakout, the EA waits and
+  enters later in the same move once the kijun angles.
 - **Flat-kijun filter:** before opening, the kijun's slope over
   `InpFlatBars` (default 10) M1 bars is checked against `InpFlatATRMult`
   (default 0.15) x ATR(M1). A flat kijun — a move within that threshold —
@@ -1773,10 +1774,11 @@ tests the concern that breakouts are preceded by flat, choppy areas:
   comment (`Kumo Breakout T0/T1/T2`) so a restart mid-trade keeps it.
   The ATR(M1) stop loss is the only other way out. An unreadable ADX at
   entry is treated as mid (kijun exit).
-- **Risk:** the H4-M1 VPS risk engine verbatim — equity-tiered ladder
-  sizing, `CapToRisk`, `CapToMargin`, spread filter, re-entry cooldown,
-  verified closes, ATR-based hard stop on every order, once-per-minute
-  gating, no Alert popups (Print + push only).
+- **Risk:** one fixed position of `InpFixedLots` (default 0.10) by
+  default — flip `InpUseFixedLots` off to get the H4-M1 VPS equity-tiered
+  ladder sizing, `CapToRisk` and `CapToMargin`. Either way: ATR(M1) stop
+  loss on every order, spread filter, re-entry cooldown, verified
+  closes, once-per-minute gating, no Alert popups (Print + push only).
 - **Logging:** skipped entries are journaled with the reason (`InpLogSkips`,
   default on) so the "waiting" behavior is visible — e.g. *kumo breakout but
   kijun flat — skipping and waiting*.

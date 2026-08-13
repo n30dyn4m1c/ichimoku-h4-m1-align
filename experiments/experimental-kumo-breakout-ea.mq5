@@ -1,9 +1,10 @@
 //+------------------------------------------------------------------+
 //| Ichimoku Kumo Breakout EA — experimental                         |
-//| Entry: price close breaks out of the cloud AND the chikou span   |
-//|        breaks out of the cloud at its plotted position, and the  |
-//|        kumo twist (Senkou Span A vs Span B) agrees with the      |
-//|        breakout direction                                         |
+//| Entry: price close above/below tenkan, kijun AND the cloud (VPS- |
+//|        style alignment), the chikou span clear of tenkan, kijun  |
+//|        and the cloud at its plotted position, and the kumo twist |
+//|        (Senkou Span A vs Span B) agrees with the breakout         |
+//|        direction                                                  |
 //| Flat filter: at the point of breakout, before opening, the kijun |
 //|        must be sloping — a flat kijun (move over InpFlatBars <=  |
 //|        InpFlatATRMult * ATR(M1)) skips the trade and waits; the  |
@@ -19,10 +20,11 @@
 //|        closes back inside the cloud. The tier is locked at entry  |
 //|        and never re-evaluated while the trade is open; it is      |
 //|        baked into the order comment so a restart keeps it.        |
-//| Risk:  VPS-style ladder sizing (20% risk up to $8k, 10% to       |
-//|        $13k, 5% above), ATR(M1) stop loss on every order, caps   |
-//|        by InpMaxRiskPct and free margin, spread filter, re-entry |
-//|        cooldown; exits are verified so failed closes retry       |
+//| Risk:  one fixed position (InpFixedLots, default 0.10) instead of |
+//|        the equity-tiered ladder by default — flip InpUseFixedLots |
+//|        for the VPS ladder sizing; ATR(M1) stop loss on every      |
+//|        order, spread filter, re-entry cooldown; exits are         |
+//|        verified so failed closes retry                            |
 //| VPS:   no Alert popups; all logic runs only on closed M1 bars    |
 //|        (once per minute) to cut CPU usage                        |
 //| Author: Neo Malesa                                               |
@@ -53,6 +55,10 @@ input double InpFlatATRMult  = 0.15;  // A line is "flat" if its move over InpFl
 
 input group  "Cloud Thickness"
 input double InpMinCloudATR = 0.5;   // Cloud width |Span A - Span B| must be >= this * ATR(M1) to open
+
+input group  "Position Sizing"
+input bool   InpUseFixedLots  = true;   // Trade one fixed position instead of the equity-tiered ladder
+input double InpFixedLots     = 0.10;   // Fixed lot size for the single position
 
 input group  "ADX Exit Tiers"
 input int    InpADXPeriod = 14;   // ADX period (M1)
@@ -194,9 +200,11 @@ void SyncStateFromPositions()
 }
 
 //==============================================================
-// Kumo Breakout Check: price close and chikou both outside the
-// cloud, with the kumo twist agreeing. Returns 1 (bullish),
-// -1 (bearish), 0 (none). Read on the last closed M1 bar.
+// Kumo Breakout Check (VPS-style alignment): price close above/
+// below tenkan, kijun AND the cloud, and the chikou span clear of
+// tenkan, kijun AND the cloud at its plotted position, with the
+// kumo twist agreeing. Returns 1 (bullish), -1 (bearish), 0 (none).
+// Read on the last closed M1 bar.
 //==============================================================
 
 int CheckKumoBreakout(int s)
@@ -211,11 +219,16 @@ int CheckKumoBreakout(int s)
    ArraySetAsSeries(rt, true);
    if(ArraySize(rt) <= chShift) return 0;
 
-   double senA[1], senB[1], senA_ch[1], senB_ch[1];
-   if(CopyBuffer(ich[s], 2, sh,      1, senA)    <= 0) return 0;
-   if(CopyBuffer(ich[s], 3, sh,      1, senB)    <= 0) return 0;
-   if(CopyBuffer(ich[s], 2, chShift, 1, senA_ch) <= 0) return 0;
-   if(CopyBuffer(ich[s], 3, chShift, 1, senB_ch) <= 0) return 0;
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
+   if(CopyBuffer(ich[s], 0, sh,      1, tenkan)    <= 0) return 0;
+   if(CopyBuffer(ich[s], 1, sh,      1, kijun)     <= 0) return 0;
+   if(CopyBuffer(ich[s], 2, sh,      1, senA)      <= 0) return 0;
+   if(CopyBuffer(ich[s], 3, sh,      1, senB)      <= 0) return 0;
+   if(CopyBuffer(ich[s], 0, chShift, 1, tenkan_ch) <= 0) return 0;
+   if(CopyBuffer(ich[s], 1, chShift, 1, kijun_ch)  <= 0) return 0;
+   if(CopyBuffer(ich[s], 2, chShift, 1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s], 3, chShift, 1, senB_ch)   <= 0) return 0;
 
    double closeP = rt[sh].close;
    double cHi    = MathMax(senA[0], senB[0]);
@@ -223,13 +236,17 @@ int CheckKumoBreakout(int s)
    double cHiC   = MathMax(senA_ch[0], senB_ch[0]);
    double cLoC   = MathMin(senA_ch[0], senB_ch[0]);
 
-   // bullish: price closed above the cloud, chikou (the close plotted Kijun
-   // bars back) clear above the cloud at its plotted position, and the
-   // kumo twist agrees (Span A above Span B)
-   if(closeP > cHi && closeP > cHiC && senA[0] > senB[0]) return  1;
+   // bullish: price above tenkan, kijun and cloud; chikou (the close
+   // plotted Kijun bars back) clear above tenkan, kijun and cloud at
+   // its plotted position; the kumo twist agrees (Span A above Span B)
+   if(closeP > tenkan[0]    && closeP > kijun[0]    && closeP > cHi &&
+      closeP > tenkan_ch[0] && closeP > kijun_ch[0] && closeP > cHiC &&
+      senA[0] > senB[0]) return  1;
 
    // bearish: mirror of the above
-   if(closeP < cLo && closeP < cLoC && senA[0] < senB[0]) return -1;
+   if(closeP < tenkan[0]    && closeP < kijun[0]    && closeP < cLo &&
+      closeP < tenkan_ch[0] && closeP < kijun_ch[0] && closeP < cLoC &&
+      senA[0] < senB[0]) return -1;
 
    return 0;
 }
@@ -683,9 +700,22 @@ void OnTick()
             if(InpUseStopLoss && !GetStopDistance(s, dist)) continue;   // ATR unavailable — skip entry
 
             int count; double lots;
-            GetEquityRisk(syms[s], dist, count, lots);
-            CapToRisk(syms[s], dist, count, lots);
-            CapToMargin(syms[s], isBuy, count, lots);
+            if(InpUseFixedLots)
+            {
+               count = 1;
+               lots = InpFixedLots;
+               double lotStep = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_STEP);
+               double lotMin  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN);
+               double lotMax  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MAX);
+               if(lotStep > 0) lots = MathFloor(lots / lotStep) * lotStep;
+               lots = MathMax(lotMin, MathMin(lotMax, lots));
+            }
+            else
+            {
+               GetEquityRisk(syms[s], dist, count, lots);
+               CapToRisk(syms[s], dist, count, lots);
+               CapToMargin(syms[s], isBuy, count, lots);
+            }
 
             // Lock the exit tier from the ADX at entry — it never changes
             // for the life of this trade (restored from the order comment).
