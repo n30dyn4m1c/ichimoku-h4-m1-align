@@ -537,7 +537,14 @@ within 30 minutes of entry, and `experimental-h4-m1-be15-ea.mq5`, which
 moves the stop to break even after the trade has been in profit
 continuously for 15 minutes — plus alignment-filter pruning forks of both
 VPS builds, breakout/hold experiments, and the older standard builds moved
-to [`archives/`](archives/). They're newer and less battle-tested than the
+to [`archives/`](archives/). The newest addition is the
+**Structure-Map EA** (`experimental-structure-map-ea.mq5`), which drops the
+alignment gate entirely: it records where price sits relative to every
+Ichimoku structure on four timeframes, maps the swing legs and the candle
+structure at the level price is reacting to, scores that read into a
+conviction number, and takes the continuation bounce — off the cloud, off
+the kijun — only when the stop, the room to the next obstacle, and the
+reward:risk all work out. They're newer and less battle-tested than the
 main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
 for the full catalog.

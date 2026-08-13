@@ -1151,3 +1151,193 @@ lower-TF confirmation.
 > `Symbols` input.
 
 
+---
+
+## 13. Structure-Map EA (price-action bounce reader)
+
+**File:** `experimental-structure-map-ea.mq5`
+**Magic number:** `20260832`
+
+Every other build in this repo asks one boolean question — *are the
+timeframes aligned?* — and trades the answer. This one asks a different
+question: **where is price, relative to everything, and what is the obvious
+next move?** It reads the chart instead of gating on it. There is no
+breakout-alignment requirement anywhere in the entry path.
+
+The trade it looks for is the continuation bounce: price is in an
+established structure, pulls back into an Ichimoku level (kijun, tenkan, or
+a cloud edge), rejects it, and resumes. Bouncing off the cloud to resume the
+trend, bouncing off the kijun to resume the trend — that is the whole thesis.
+
+### The three readings
+
+**1. The structure map (where price is).** On each of four timeframes
+(H4, H1, M15, M5 by default — every one configurable) the EA records, on the
+last closed bar:
+
+| Recorded | Meaning |
+|---|---|
+| Cloud side | above / inside / below the kumo |
+| Cloud thickness | in ATR — a thin cloud is a weak floor |
+| Future twist | span A vs span B projected 26 bars ahead, computed from the tenkan/kijun midpoint and the 52-bar midpoint rather than read off a plotted buffer |
+| Tenkan/kijun state | which is on top |
+| Distance to kijun / tenkan / cloud edge | signed, in ATR — the "how extended is it" measure |
+| Kijun slope + flat flag | slope over `InpSlopeBars` in ATR; flat = balance, and a flat kijun is graded as a stronger level |
+| Chikou free space | the close plotted 26 bars back, clear above / clear below / tangled in the candle there |
+| Swing structure | higher highs + higher lows, lower highs + lower lows, or mixed |
+| Legs | the last completed impulse in ATR, the leg in progress, and the retracement fraction between them |
+
+Each timeframe's reading is scored into a single number in −1…+1 from eight
+signed components (cloud side ±2, structure ±2, chikou ±1.5, price vs kijun
+±1.5, tenkan/kijun ±1, twist ±1, price vs tenkan ±0.5, kijun slope ±0.5 —
+raw sum ÷ 10). The weighted sum across timeframes (`InpW1`…`InpW4`,
+default 3 / 2 / 1.5 / 0.5) is the **context score**, −100…+100. Its sign is
+the direction the EA thinks price is headed; `InpMinContext` (default 25) is
+how convinced it has to be before it will look for a trade at all.
+
+With `InpLogMap` on (the default) the whole map is printed on every closed
+trigger bar whether or not a trade follows, so the reasoning is on the
+record:
+
+```
+MAP GOLDm# ctx=48.3 | H4[aboveKumo thick1.8 kj0.62 tn0.31 tk+ ch+ tw+ HH/HL leg+2.1 retr0.44 s0.65]
+ | H1[aboveKumo thick1.2 kj0.08flat tn-0.12 tk+ ch0 tw+ HH/HL leg-1.3 retr0.51 s0.45] | ...
+```
+
+**2. The reaction (what price is doing right now).** Levels are collected
+from the top `InpLevelTFs` timeframes (default 2 → H4 and H1): kumo top,
+kumo base, kijun, tenkan. Only levels on the correct side qualify — support
+below price for a long, resistance above for a short. Within the last
+`InpReactionBars` closed trigger-TF bars, a level counts as **reacted off**
+when a bar reached into it (within `InpTouchATR × ATR`) **and closed back
+out of it** on the trade side. Price must still be on that side and within
+`InpMaxEntryDistATR × ATR` of the level, so stale re-touches from hours ago
+don't qualify. The strongest level touched wins, graded by type and
+timeframe (kumo edge > flat kijun > kijun > tenkan; H4 > H1).
+
+**3. The candle structure (is the bounce real).** At the reaction bar and
+the last closed bar: rejection wick (`InpPinWickFrac` / `InpPinBodyFrac`
+with the close in the right half), engulfing in the trade direction, a
+momentum close beyond the reaction bar's extreme (+1.5 — the strongest
+single reading), and a plain directional close (+0.5). The total must reach
+`InpMinCandleScore` (default 1.0), so a bare close in the right direction is
+never enough on its own.
+
+### Conviction, and what it buys
+
+```
+conviction = 0.7 × |context score|
+           + level grade bonus      (0…10)
+           + candle score bonus     (0…10)
+           + retracement bonus      (+10 sane pullback, −10 too deep)
+           − lateness penalty       (15 when the move is already extended)
+```
+
+Clamped to 0…100. Below `InpMinScore` (55) nothing happens. Between
+`InpMinScore` and `InpStrongScore` (75) the equity ladder is halved. At or
+above `InpStrongScore` the full ladder goes on.
+
+The retracement term is where the leg map earns its keep: for a long, the
+leg in progress on the leg timeframe (`InpLegTFIdx`, default H1) should be
+*down* — a pullback — and between `InpMinRetrace` and `InpMaxRetrace`
+(0.25–0.90) of the impulse before it. Deeper than that and it stops reading
+as a pullback and starts reading as a reversal, so the bonus turns negative.
+If the leg is already running in the trade direction and is more than
+`InpLateLegATR` (6 ATR) long, the setup is late and takes the penalty.
+
+### The optimal-trade calculation
+
+A setup that passes the read still has to be worth taking:
+
+- **Stop** — behind the reaction extreme by `InpSLBufferATR × ATR`, pushed
+  further out to the last trigger-TF swing when `InpSLBeyondSwing` is on.
+  Widened to the broker minimum. If the resulting risk exceeds
+  `InpMaxRiskATR × ATR` (4) the setup is **rejected** rather than traded with
+  a bad stop.
+- **Room** — the next structural obstacle ahead (mapped swing extremes and
+  cloud edges on the context timeframes). If it sits closer than
+  `InpMinRR × risk` (1.5R) the trade is **skipped** — no buying into a
+  ceiling, no selling into a floor. Nothing ahead at all is the best case:
+  clear air, all runners.
+- **Target** — the obstacle front-run by `InpTPBufferATR × ATR`, applied to
+  part of the ladder; `InpRunnerFrac` (default half) is left without a take
+  profit for the trail to manage. Obstacles beyond `InpMaxRR` (8R) are
+  ignored and those orders run free too.
+
+### Exits
+
+- **Structure trail** — once profit reaches `InpTrailActivateATR × ATR`, the
+  stop follows the most recent confirmed fractal swing on the trigger TF
+  (padded by `InpSLBufferATR × ATR`). Tighten-only, broker-minimum aware.
+  It arms late on purpose: the entry already carries a tight structural stop,
+  and an unarmed trail would drag it into the noise straight away.
+- **Break even** — at `InpBEActivateATR × ATR` of profit the stop moves to
+  the volume-weighted open ± `InpBECoverPoints`. One-shot, but only marked
+  done once the modify actually lands, so a stop blocked by the broker's
+  minimum distance is retried.
+- **Kijun cross** — a trigger-TF close back across its own kijun closes
+  everything.
+- **Map flip** (`InpExitOnFlip`, off by default) — the context score itself
+  turning against the trade closes it.
+
+### Key inputs
+
+| Group | Parameter | Default | Purpose |
+|-------|-----------|---------|---------|
+| Map | `InpTF1`…`InpTF4` | H4 / H1 / M15 / M5 | The four mapped timeframes |
+| Map | `InpW1`…`InpW4` | 3 / 2 / 1.5 / 0.5 | Context-score weights (0 = ignore that TF) |
+| Map | `InpTrigIdx` | 2 | Index of the trigger / exit / ATR timeframe |
+| Map | `InpLegTFIdx` | 1 | Timeframe whose legs and retracement are graded |
+| Map | `InpLevelTFs` | 2 | Levels come from the top N timeframes |
+| Map | `InpSwingWing` / `InpLegBars` | 2 / 120 | Fractal half-width and scan depth |
+| Reaction | `InpReactionBars` | 3 | Trigger-TF bars searched for the touch |
+| Reaction | `InpTouchATR` | 0.25 | How close counts as touching the level |
+| Reaction | `InpMaxEntryDistATR` | 1.25 | Freshness — max distance from the level at entry |
+| Candles | `InpMinCandleScore` | 1.0 | Minimum price-action score at the level |
+| Legs | `InpMinRetrace` / `InpMaxRetrace` | 0.25 / 0.90 | Accepted pullback depth |
+| Legs | `InpLateLegATR` | 6.0 | Extension that marks a setup late (0 = off) |
+| Score | `InpMinContext` | 25 | Min \|context score\| to look for a trade |
+| Score | `InpMinScore` / `InpStrongScore` | 55 / 75 | Trade threshold / full-ladder threshold |
+| Score | `InpHTFVetoScore` | 0.10 | How far the top TF may oppose the trade |
+| Trade | `InpMaxRiskATR` | 4.0 | Reject setups whose structural stop is too wide |
+| Trade | `InpMinRR` / `InpMaxRR` | 1.5 / 8.0 | Room gate / obstacle horizon |
+| Trade | `InpRunnerFrac` | 0.50 | Share of the ladder left without a take profit |
+| Exit | `InpTrailActivateATR` | 0.5 | Profit needed before the structure trail arms |
+| Exit | `InpExitOnFlip` | `false` | Close when the map flips against the trade |
+
+Risk sizing is the same equity ladder as the VPS builds (`GetEquityRisk`,
+`RiskBasedLots` above $8k, `CapToRisk`, `CapToMargin`), sized off the
+structural stop rather than a fixed ATR multiple.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.** No MetaEditor was available
+  during development — braces and call sites were checked mechanically only.
+  F7-compile and fix any warnings before the first Strategy-Tester run.
+- The natural A/B partner is `experimental-h4-m1-pullback-ea.mq5` (section
+  7): both buy the pullback, but the pullback EA requires a prior
+  full-alignment breakout to arm and only ever uses the H4 kijun, while this
+  one needs no breakout at all and reads every level on both context
+  timeframes. Running them on the same symbol/period isolates what the
+  breakout precondition is worth.
+- **The score weights are hand-set, not fitted.** They encode a view (cloud
+  side and swing structure matter most, tenkan least); nothing has measured
+  them yet. Treat `InpW1`…`InpW4` and the component weights in `ScoreMap()`
+  as the first thing to test, not as settled numbers.
+- **The room filter can idle the EA.** In a range, every direction has an
+  obstacle within 1.5R, so nothing qualifies — by design, but if trade count
+  is near zero that gate is the first suspect. Loosen `InpMinRR` before
+  loosening the read.
+- `InpLogMap` writes a line per symbol per trigger bar. That is the point of
+  the build — the recorded map is the research output — but turn it off for
+  a long multi-symbol Strategy Tester run or the log will dominate the run
+  time.
+- The context score is a *sum*, not a gate: a strong H4 read can carry a
+  neutral H1 and M15. `InpHTFVetoScore` is the only hard directional veto,
+  and it only guards the top timeframe. If entries look like they are
+  fighting the intermediate timeframe, raise `InpW2` before touching
+  anything else.
+- Chikou is read here as clear-of-the-candle only (not clear of the levels
+  too, as in the alignment builds). It is one weighted component out of
+  eight rather than a veto, which is deliberate — the strict chikou test is
+  what makes the alignment builds late.
