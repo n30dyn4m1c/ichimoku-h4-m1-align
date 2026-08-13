@@ -1171,9 +1171,9 @@ trend, bouncing off the kijun to resume the trend — that is the whole thesis.
 
 ### The three readings
 
-**1. The structure map (where price is).** On each of four timeframes
-(H4, H1, M15, M5 by default — every one configurable) the EA records, on the
-last closed bar:
+**1. The structure map (where price is).** On each of up to **six**
+timeframe slots, running highest to lowest (H4 / H1 / M15 / M5 by default,
+with two spare slots off), the EA records, on the last closed bar:
 
 | Recorded | Meaning |
 |---|---|
@@ -1190,10 +1190,16 @@ last closed bar:
 Each timeframe's reading is scored into a single number in −1…+1 from eight
 signed components (cloud side ±2, structure ±2, chikou ±1.5, price vs kijun
 ±1.5, tenkan/kijun ±1, twist ±1, price vs tenkan ±0.5, kijun slope ±0.5 —
-raw sum ÷ 10). The weighted sum across timeframes (`InpW1`…`InpW4`,
-default 3 / 2 / 1.5 / 0.5) is the **context score**, −100…+100. Its sign is
-the direction the EA thinks price is headed; `InpMinContext` (default 25) is
-how convinced it has to be before it will look for a trade at all.
+raw sum ÷ 10). The weighted sum across timeframes (`InpW1`…`InpW6`,
+default 3 / 2 / 1.5 / 0.5 / 0 / 0) is the **context score**, −100…+100. Its
+sign is the direction the EA thinks price is headed; `InpMinContext`
+(default 25) is how convinced it has to be before it will look for a trade
+at all.
+
+Any slot can hold any timeframe, so the stack can be anchored as high as
+**MN1** — see [Anchoring the stack](#anchoring-the-stack-monthly-and-down)
+below. A slot set to `PERIOD_CURRENT` is switched off entirely: never
+mapped, never scored, supplies no levels, allocates no indicator handles.
 
 With `InpLogMap` on (the default) the whole map is printed on every closed
 trigger bar whether or not a trade follows, so the reasoning is on the
@@ -1264,6 +1270,56 @@ A setup that passes the read still has to be worth taking:
   profit for the trail to manage. Obstacles beyond `InpMaxRR` (8R) are
   ignored and those orders run free too.
 
+### Anchoring the stack (monthly and down)
+
+The six slots take any timeframe, so the whole read can start at the monthly
+candle and work down. The recommended monthly preset:
+
+| Input | Value | Why |
+|---|---|---|
+| `InpTF1`…`InpTF6` | MN1 / W1 / D1 / H4 / H1 / M15 | The full stack, highest to lowest |
+| `InpW1`…`InpW6` | 3 / 2.5 / 2 / 1.5 / 1 / 0.5 | Context weight decays down the stack |
+| `InpTrigIdx` | 5 (M15) | Time the entry on M15 — the reaction, the candle structure and the entry cadence all read here |
+| `InpExitIdx` | 3 (H4) | Hold on the H4 scale — the trail, break even and the kijun-cross exit read here |
+| `InpLegTFIdx` | 2 (D1) | Grade the impulse/pullback on daily legs |
+| `InpLevelTFs` | 3 | Bounce off MN1 / W1 / D1 structures |
+| `InpObstacleTFs` | 4 | Measure room down to H4 |
+
+Two separations make this coherent, and both were added for it:
+
+- **Trigger slot vs exit slot.** `InpTrigIdx` is the *timing* scale — where
+  the reaction is detected, where the candle structure is read, and how
+  often entries are evaluated. `InpExitIdx` is the *holding* scale — the ATR
+  that sizes the trail and the break-even arming, the swings the trail
+  follows, and the kijun whose cross closes the trade. They default to the
+  same slot (`InpExitIdx = -1`), which is the single-scale behaviour. On a
+  monthly-anchored stack they must differ: an M15 kijun cross would close a
+  trade that was taken off a weekly level within the hour. The EA refuses to
+  start if the exit slot is *faster* than the trigger slot.
+- **`InpObstacleTFs`** now sets how far down the stack the target search
+  looks, separately from `InpLevelTFs`. With a monthly anchor, obstacles
+  drawn only from MN1/W1 sit so far away that every setup clears the
+  reward:risk gate and nothing gets filtered — scanning down to H4 restores
+  the gate's meaning.
+
+Level grades scale with `InpLevelTFs` rather than with slot capacity, so a
+top-slot kumo edge grades the same whether the stack is anchored on H4 or on
+MN1, and the conviction arithmetic is unchanged between configurations.
+
+**History is the real constraint.** Each mapped slot needs
+`max(SenkouB, Kijun + InpSlopeBars) + 4` bars — 56 at the defaults. On MN1
+that is 56 monthly candles, roughly 4.7 years. Brokers usually have it for
+gold and the majors, less often for newer symbols. `OnInit` logs a warning
+per symbol/slot that is short rather than failing, because history normally
+fills in once the terminal finishes downloading; until it does, that symbol
+simply produces no signals. If a monthly-anchored build is silent, check the
+log for that warning first.
+
+**Indicator handles** are the other ceiling: two per enabled slot per
+symbol. A six-slot stack across 60 symbols wants 720 handles, which will run
+into the terminal's limit. Keep the symbol list short when running the full
+stack — the monthly read is a swing configuration, not a scanner.
+
 ### Exits
 
 - **Structure trail** — once profit reaches `InpTrailActivateATR × ATR`, the
@@ -1284,11 +1340,13 @@ A setup that passes the read still has to be worth taking:
 
 | Group | Parameter | Default | Purpose |
 |-------|-----------|---------|---------|
-| Map | `InpTF1`…`InpTF4` | H4 / H1 / M15 / M5 | The four mapped timeframes |
-| Map | `InpW1`…`InpW4` | 3 / 2 / 1.5 / 0.5 | Context-score weights (0 = ignore that TF) |
-| Map | `InpTrigIdx` | 2 | Index of the trigger / exit / ATR timeframe |
-| Map | `InpLegTFIdx` | 1 | Timeframe whose legs and retracement are graded |
-| Map | `InpLevelTFs` | 2 | Levels come from the top N timeframes |
+| Map | `InpTF1`…`InpTF6` | H4 / H1 / M15 / M5 / off / off | The mapped timeframe slots, highest to lowest (`PERIOD_CURRENT` = off) |
+| Map | `InpW1`…`InpW6` | 3 / 2 / 1.5 / 0.5 / 0 / 0 | Context-score weights (0 = map the slot, don't score it) |
+| Map | `InpTrigIdx` | 2 | Trigger slot — reaction, candle structure, entry cadence |
+| Map | `InpExitIdx` | −1 | Exit/holding slot — trail, break even, kijun exit (−1 = same as trigger) |
+| Map | `InpLegTFIdx` | 1 | Slot whose legs and retracement are graded |
+| Map | `InpLevelTFs` | 2 | Bounce levels come from the top N slots |
+| Map | `InpObstacleTFs` | 2 | Target obstacles are scanned across the top N slots |
 | Map | `InpSwingWing` / `InpLegBars` | 2 / 120 | Fractal half-width and scan depth |
 | Reaction | `InpReactionBars` | 3 | Trigger-TF bars searched for the touch |
 | Reaction | `InpTouchATR` | 0.25 | How close counts as touching the level |
@@ -1332,11 +1390,19 @@ structural stop rather than a fixed ATR multiple.
   the build — the recorded map is the research output — but turn it off for
   a long multi-symbol Strategy Tester run or the log will dominate the run
   time.
-- The context score is a *sum*, not a gate: a strong H4 read can carry a
-  neutral H1 and M15. `InpHTFVetoScore` is the only hard directional veto,
-  and it only guards the top timeframe. If entries look like they are
-  fighting the intermediate timeframe, raise `InpW2` before touching
-  anything else.
+- The context score is a *sum*, not a gate: a strong top-slot read can carry
+  a neutral middle of the stack. `InpHTFVetoScore` is the only hard
+  directional veto, and it only guards the top slot. If entries look like
+  they are fighting the intermediate timeframes, raise their weights before
+  touching anything else. This matters more the taller the stack: with six
+  slots a dominant MN1 reading can outvote four lower ones.
+- **A monthly anchor changes what the EA is, not just its settings.** MN1
+  and W1 readings move a handful of times a year, so the context score
+  becomes near-constant and the trade rate collapses to whatever the D1/H4
+  levels produce. That is the intent — swing trades off big structures — but
+  it means a monthly-anchored backtest needs years of data to produce a
+  meaningful trade count, and the first thing to verify is that the top
+  slots are not simply frozen for the whole run.
 - Chikou is read here as clear-of-the-candle only (not clear of the levels
   too, as in the alignment builds). It is one weighted component out of
   eight rather than a veto, which is deliberate — the strict chikou test is

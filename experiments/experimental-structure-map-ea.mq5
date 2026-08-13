@@ -32,18 +32,32 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
+//--- Timeframe slots run highest to lowest. Set a slot to PERIOD_CURRENT to
+//--- switch it off; the stack can be anchored anywhere from MN1 downwards.
+//--- Monthly-anchored preset — MN1 / W1 / D1 / H4 / H1 / M15, weights
+//--- 3 / 2.5 / 2 / 1.5 / 1 / 0.5, InpTrigIdx = 5 (time entries on M15),
+//--- InpExitIdx = 3 (hold on the H4 scale), InpLegTFIdx = 2 (grade D1 legs),
+//--- InpLevelTFs = 3 (bounce off MN1/W1/D1 structures), InpObstacleTFs = 4
+//--- (measure room down to H4 — monthly obstacles alone are so far away that
+//--- the reward:risk gate stops filtering anything).
 input group  "Structure Map — timeframes and weights"
-input ENUM_TIMEFRAMES InpTF1 = PERIOD_H4;   // Context TF 1 (highest — trend anchor)
-input ENUM_TIMEFRAMES InpTF2 = PERIOD_H1;   // Context TF 2 (level / leg timeframe)
-input ENUM_TIMEFRAMES InpTF3 = PERIOD_M15;  // Context TF 3 (trigger / exit timeframe)
-input ENUM_TIMEFRAMES InpTF4 = PERIOD_M5;   // Context TF 4 (lowest — timing texture)
-input double InpW1 = 3.0;    // Weight of TF1 in the context score (0 = ignore)
-input double InpW2 = 2.0;    // Weight of TF2 in the context score
-input double InpW3 = 1.5;    // Weight of TF3 in the context score
-input double InpW4 = 0.5;    // Weight of TF4 in the context score
-input int    InpTrigIdx  = 2; // Index of the trigger/exit TF (0..3 -> TF1..TF4)
-input int    InpLegTFIdx = 1; // Index of the TF whose legs/retracement are graded
-input int    InpLevelTFs = 2; // Levels are taken from the top N timeframes
+input ENUM_TIMEFRAMES InpTF1 = PERIOD_H4;      // Slot 1 (highest — trend anchor)
+input ENUM_TIMEFRAMES InpTF2 = PERIOD_H1;      // Slot 2
+input ENUM_TIMEFRAMES InpTF3 = PERIOD_M15;     // Slot 3
+input ENUM_TIMEFRAMES InpTF4 = PERIOD_M5;      // Slot 4
+input ENUM_TIMEFRAMES InpTF5 = PERIOD_CURRENT; // Slot 5 (PERIOD_CURRENT = off)
+input ENUM_TIMEFRAMES InpTF6 = PERIOD_CURRENT; // Slot 6 (PERIOD_CURRENT = off)
+input double InpW1 = 3.0;    // Weight of slot 1 in the context score (0 = map it, don't score it)
+input double InpW2 = 2.0;    // Weight of slot 2 in the context score
+input double InpW3 = 1.5;    // Weight of slot 3 in the context score
+input double InpW4 = 0.5;    // Weight of slot 4 in the context score
+input double InpW5 = 0.0;    // Weight of slot 5 in the context score
+input double InpW6 = 0.0;    // Weight of slot 6 in the context score
+input int    InpTrigIdx     = 2;  // Slot of the trigger TF — reaction, candles, entry cadence
+input int    InpExitIdx     = -1; // Slot of the exit/holding TF (-1 = same as the trigger slot)
+input int    InpLegTFIdx    = 1;  // Slot of the TF whose legs/retracement are graded
+input int    InpLevelTFs    = 2;  // Bounce levels are taken from the top N slots
+input int    InpObstacleTFs = 2;  // Target obstacles are scanned across the top N slots
 
 input group  "Structure Map — measurement"
 input int    InpSlopeBars     = 5;    // Bars used to measure kijun slope
@@ -97,19 +111,19 @@ input double InpMaxRiskPct         = 0.0;   // Cap total initial-stop risk per l
 
 input group  "Exit Management"
 input bool   InpStructTrail      = true;  // Trail the stop behind each new confirmed swing
-input double InpTrailActivateATR = 0.5;   // Arm the structure trail once profit >= this x ATR(trigger)
+input double InpTrailActivateATR = 0.5;   // Arm the structure trail once profit >= this x ATR(exit TF)
 input int    InpTrailWing        = 2;     // Fractal half-width for trail swings
-input int    InpTrailSwingBars   = 60;    // Trigger-TF bars scanned for the trail swing
-input bool   InpKijunExit        = true;  // Close on a trigger-TF close across its kijun
+input int    InpTrailSwingBars   = 60;    // Exit-TF bars scanned for the trail swing
+input bool   InpKijunExit        = true;  // Close on an exit-TF close across its kijun
 input bool   InpExitOnFlip       = false; // Close when the context score flips against the trade
 input bool   InpBEEnabled        = true;  // Move the stop to break even once in profit
-input double InpBEActivateATR    = 1.0;   // Profit needed to arm break even (x ATR trigger)
+input double InpBEActivateATR    = 1.0;   // Profit needed to arm break even (x ATR exit TF)
 input int    InpBECoverPoints    = 15;    // Points beyond break even (covers the spread)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS   60
-#define TF_COUNT   4
-#define MAX_LEVELS 16
+#define TF_COUNT   6
+#define MAX_LEVELS 32
 #define SCORE_MAX  10.0   // maximum raw component sum in ScoreMap()
 
 // One timeframe's complete reading of where price sits and what the legs did.
@@ -151,6 +165,8 @@ struct Level
 
 ENUM_TIMEFRAMES tfs[TF_COUNT];
 double          wts[TF_COUNT];
+bool            tfOn[TF_COUNT];   // slot enabled (not PERIOD_CURRENT)
+int             g_exitIdx = 0;    // resolved exit/holding slot
 
 int      ich[MAX_SYMS][TF_COUNT];
 int      atrH[MAX_SYMS][TF_COUNT];
@@ -244,22 +260,51 @@ int ParseSymbols(string list)
    return cnt;
 }
 
+// Bars of history a slot needs before its map can be built. A monthly slot
+// asks for ~56 monthly candles (about 4.5 years), so this is worth checking
+// up front rather than discovering it as a silent no-trade condition.
+int BarsNeeded()
+{
+   return (int)MathMax(SenkouB, Kijun + InpSlopeBars) + 4;
+}
+
 int OnInit()
 {
-   tfs[0] = InpTF1; tfs[1] = InpTF2; tfs[2] = InpTF3; tfs[3] = InpTF4;
-   wts[0] = InpW1;  wts[1] = InpW2;  wts[2] = InpW3;  wts[3] = InpW4;
+   tfs[0] = InpTF1; tfs[1] = InpTF2; tfs[2] = InpTF3;
+   tfs[3] = InpTF4; tfs[4] = InpTF5; tfs[5] = InpTF6;
+   wts[0] = InpW1;  wts[1] = InpW2;  wts[2] = InpW3;
+   wts[3] = InpW4;  wts[4] = InpW5;  wts[5] = InpW6;
 
-   if(InpTrigIdx  < 0 || InpTrigIdx  >= TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
-   if(InpLegTFIdx < 0 || InpLegTFIdx >= TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
-   if(InpLevelTFs < 1 || InpLevelTFs >  TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
+   // A slot left at PERIOD_CURRENT is switched off: it is never mapped, never
+   // scored, supplies no levels, and allocates no indicator handles.
+   for(int t = 0; t < TF_COUNT; t++) tfOn[t] = (tfs[t] != PERIOD_CURRENT);
+
+   if(InpTrigIdx  < 0 || InpTrigIdx  >= TF_COUNT || !tfOn[InpTrigIdx])
+      return(INIT_PARAMETERS_INCORRECT);
+   if(InpLegTFIdx < 0 || InpLegTFIdx >= TF_COUNT || !tfOn[InpLegTFIdx])
+      return(INIT_PARAMETERS_INCORRECT);
+   if(InpLevelTFs    < 1 || InpLevelTFs    > TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
+   if(InpObstacleTFs < 1 || InpObstacleTFs > TF_COUNT) return(INIT_PARAMETERS_INCORRECT);
+
+   // The exit/holding slot defaults to the trigger slot, which keeps the
+   // single-scale behaviour when no separate holding timeframe is wanted.
+   g_exitIdx = (InpExitIdx < 0) ? InpTrigIdx : InpExitIdx;
+   if(g_exitIdx >= TF_COUNT || !tfOn[g_exitIdx]) return(INIT_PARAMETERS_INCORRECT);
+
+   // The exit timeframe must not be faster than the trigger timeframe — a
+   // holding scale shorter than the timing scale is incoherent.
+   if(PeriodSeconds(tfs[g_exitIdx]) < PeriodSeconds(tfs[InpTrigIdx]))
+      return(INIT_PARAMETERS_INCORRECT);
 
    double wsum = 0.0;
-   for(int t = 0; t < TF_COUNT; t++) wsum += MathMax(0.0, wts[t]);
+   for(int t = 0; t < TF_COUNT; t++)
+      if(tfOn[t]) wsum += MathMax(0.0, wts[t]);
    if(wsum <= 0.0) return(INIT_PARAMETERS_INCORRECT);
 
    symsCount = ParseSymbols(Symbols);
    if(symsCount <= 0) return(INIT_FAILED);
 
+   int need = BarsNeeded();
    for(int s = 0; s < symsCount; s++)
    {
       state[s]          = 0;
@@ -273,11 +318,24 @@ int OnInit()
 
       for(int t = 0; t < TF_COUNT; t++)
       {
+         ich[s][t]  = INVALID_HANDLE;
+         atrH[s][t] = INVALID_HANDLE;
+         if(!tfOn[t]) continue;
+
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
 
          atrH[s][t] = iATR(syms[s], tfs[t], InpATRPeriod);
          if(atrH[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+
+         // Warn rather than fail: history often fills in after the terminal
+         // finishes downloading, and a weighted slot that stays short simply
+         // keeps the EA flat until it is ready.
+         int have = Bars(syms[s], tfs[t]);
+         if(have < need)
+            Print(PCTime() + " | " + syms[s] + " " + TFName(t) + " has " +
+                  IntegerToString(have) + " bars, needs " + IntegerToString(need) +
+                  " — no signals on this symbol until the history fills in");
       }
    }
 
@@ -547,6 +605,8 @@ bool BuildContext(int s, double &ctx)
 
    for(int t = 0; t < TF_COUNT; t++)
    {
+      if(!tfOn[t]) { ZeroMemory(g_map[t]); continue; }
+
       bool built = BuildMap(s, t, g_map[t]);
       if(built) ScoreMap(g_map[t]);
 
@@ -570,6 +630,7 @@ string MapToString(int s, double ctx)
    string out = syms[s] + " ctx=" + DoubleToString(ctx, 1);
    for(int t = 0; t < TF_COUNT; t++)
    {
+      if(!tfOn[t]) continue;
       if(!g_map[t].ok) { out += " | " + TFName(t) + "[n/a]"; continue; }
       string cloud = (g_map[t].cloudSide == 1) ? "aboveKumo"
                    : (g_map[t].cloudSide == -1 ? "belowKumo" : "inKumo");
@@ -604,8 +665,11 @@ int CollectLevels(int dir, double refPrice, Level &lv[])
 
    for(int t = 0; t < InpLevelTFs && t < TF_COUNT; t++)
    {
-      if(!g_map[t].ok) continue;
-      int tfBonus = (TF_COUNT - t);   // higher timeframe = stronger level
+      if(!tfOn[t] || !g_map[t].ok) continue;
+      // Higher slot = stronger level. Ranked against the number of level slots
+      // in play, not the slot capacity, so grades keep the same scale whether
+      // the stack is anchored on H4 or on MN1. Max grade = 4 + InpLevelTFs.
+      int tfBonus = (InpLevelTFs - t);
 
       double prices[4];
       int    grades[4];
@@ -787,9 +851,9 @@ double NextObstacle(int dir, double entry)
 {
    double best = 0.0;
 
-   for(int t = 0; t < InpLevelTFs && t < TF_COUNT; t++)
+   for(int t = 0; t < InpObstacleTFs && t < TF_COUNT; t++)
    {
-      if(!g_map[t].ok) continue;
+      if(!tfOn[t] || !g_map[t].ok) continue;
 
       double cands[6];
       int    n = 0;
@@ -875,7 +939,7 @@ bool EvaluateSetup(int s, int &dir, double &slOut, double &tpOut,
    }
 
    // 4) Conviction
-   double gradeBonus  = 10.0 * Clamp(lvl.grade / 8.0, 0.0, 1.0);
+   double gradeBonus  = 10.0 * Clamp(lvl.grade / (4.0 + InpLevelTFs), 0.0, 1.0);
    double candleBonus = 10.0 * Clamp(cs / 3.0, 0.0, 1.0);
    double conv = Clamp(0.7 * MathAbs(ctx) + gradeBonus + candleBonus + retraceBonus - latePenalty,
                        0.0, 100.0);
@@ -1162,7 +1226,9 @@ void ManageStructureTrail(int s)
 {
    if(!InpStructTrail || state[s] == 0 || !InpUseStopLoss) return;
 
-   double atrv = ATRv(s, InpTrigIdx);
+   // Everything here runs on the holding scale, not the timing scale: an M15
+   // trail on a trade anchored to a monthly level would hand back the move.
+   double atrv = ATRv(s, g_exitIdx);
    if(atrv <= 0.0) return;
 
    // The entry already carries a structural stop behind the reaction level.
@@ -1176,7 +1242,7 @@ void ManageStructureTrail(int s)
 
    double swHi, swLo, pHi, pLo;
    int    iHi, iLo;
-   if(!FindSwings(s, tfs[InpTrigIdx], InpTrailSwingBars, InpTrailWing,
+   if(!FindSwings(s, tfs[g_exitIdx], InpTrailSwingBars, InpTrailWing,
                   swHi, swLo, pHi, pLo, iHi, iLo)) return;
 
    double anchor = isLong ? swLo : swHi;
@@ -1192,7 +1258,9 @@ void ManageBE(int s)
 {
    if(!InpBEEnabled || state[s] == 0 || beMoved[s] || !InpUseStopLoss) return;
 
-   double atrv = ATRv(s, InpTrigIdx);
+   // Break even arms on the holding scale too — on the timing scale a swing
+   // trade would reach the activation buffer within minutes of entry.
+   double atrv = ATRv(s, g_exitIdx);
    if(atrv <= 0.0) return;
 
    double avg = AvgOpenPrice(s);
@@ -1220,10 +1288,10 @@ bool CheckKijunExit(int s, int dir)
    if(!InpKijunExit) return false;
 
    double kj[1];
-   if(CopyBuffer(ich[s][InpTrigIdx], 1, 1, 1, kj) <= 0) return false;
+   if(CopyBuffer(ich[s][g_exitIdx], 1, 1, 1, kj) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], tfs[InpTrigIdx], 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], tfs[g_exitIdx], 1, 1, rt) <= 0) return false;
 
    if(dir ==  1 && rt[0].close < kj[0]) return true;
    if(dir == -1 && rt[0].close > kj[0]) return true;
@@ -1279,7 +1347,7 @@ void OnTick()
       if(state[s] != 0)
       {
          string reason = "";
-         if(CheckKijunExit(s, state[s]))     reason = TFName(InpTrigIdx) + " kijun crossed";
+         if(CheckKijunExit(s, state[s]))     reason = TFName(g_exitIdx) + " kijun crossed";
          else if(CheckFlipExit(s, state[s])) reason = "structure map flipped";
 
          if(reason != "")
