@@ -540,7 +540,13 @@ continuously for 15 minutes — a news-filter fork of the H4-M1 desktop build
 MQL5 Economic Calendar and closes positions an hour before every high-impact
 ("red folder") release, staying flat until five minutes after it — plus
 alignment-filter pruning forks of both VPS builds, breakout/hold experiments,
-and the older standard builds moved to [`archives/`](archives/). The newest
+and the older standard builds moved to [`archives/`](archives/). There is also
+a family of **Karen Peloille multi-timeframe EAs** (`experimental-karen-*.mq5`)
+that mechanise her system from *Trading with Ichimoku* (ch. 3–4): the Kijun
+break is the signal, the Lagging Span validates it, and the entry is a Tenkan
+(or Kijun) pullback on the management time frame — five builds covering her
+medium-term (D1→H4→H1), VST (H1→M15→M5), Kijun-retest, counter-trend-at-the-SSB,
+and 3-candle impulse strategies, each with its own magic number. The newest
 addition is the **Structure-Map EA**
 (`experimental-structure-map-ea.mq5`), which drops the alignment gate
 entirely: it records where price sits relative to every Ichimoku structure

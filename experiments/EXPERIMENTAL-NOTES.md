@@ -1619,3 +1619,107 @@ off; put M5 in slot 5 at weight 0.5 if you want the timing texture back.
 - The score weights remain hand-set rather than fitted, exactly as in
   section 14, and shifting the stack up a scale does not make them any more
   measured.
+
+---
+
+## 16. Karen Peloille Multi-Timeframe EAs (her strategies, made mechanical)
+
+**Files:** `experimental-karen-multitf-ea.mq5`, `experimental-karen-vst-ea.mq5`,
+`experimental-karen-kijun-retest-ea.mq5`, `experimental-karen-countertrend-ea.mq5`,
+`experimental-karen-candle3-ea.mq5`
+**Magic numbers:** `20260840` … `20260844` (one per build — all five can run
+side by side on one account, even on the same symbol)
+
+A family of experimental EAs implementing the trading system described by
+Karen Peloille in *Trading with Ichimoku: A Practical Guide* (ch. 3-4) and her
+article *Trader avec Ichimoku: 3 techniques* (karenpeloille.com). Her system is
+discretionary; these builds are a faithful, mechanical approximation for
+backtesting on `GOLDm#`.
+
+### Her strategies and which EA implements what
+
+| Strategy (book source) | Rule summary | EA |
+|---|---|---|
+| **Kijun-break trend continuation** (ch. 4, "Trading with Ichimoku as the only indicator") | 3 time frames per trade: ANALYSIS (prices vs cloud = market state), STRATEGY (Kijun break = the signal, LS validates), MANAGEMENT (entry/exit timing). Pullback to the Tenkan, bounce entry. Exit on Tenkan cross; optional cloud-edge target with her 1:3 RR gate | `experimental-karen-multitf-ea.mq5` (D1→H4→H1, her "medium term" table) |
+| **VST — very short term** (ch. 4, table of horizons) | Same engine on her "short term" table: 60 / 15 / 5 minutes, gated on M5 closes ("always wait for the current candlestick to close") | `experimental-karen-vst-ea.mq5` (H1→M15→M5) |
+| **Kijun retest** (ch. 4, EURAUD "Dynamic Market Reading") | Deeper pullback: "A sell trade is initiated on the first red candlestick whose shadow tested the Kijun and validated" — wick test of the Kijun (not the Tenkan), bounce bar closes back above it | `experimental-karen-kijun-retest-ea.mq5` (D1→H4→H1) |
+| **Counter-trend at the SSB** (ch. 4 AUDNZD/NZDUSD; article Technique A) | Strong trend on D1, trend confirmed on H4 (beyond its cloud), the correction is faded at the H4 cloud edge — "entrer une position vendeuse sur le niveau de cette SSB". Stop beyond the SSB ("place au-dessus de la SSB"), target the H4 Kijun ("fall as far as the 240-minute Kijun") | `experimental-karen-countertrend-ea.mq5` (D1→H4→H1) |
+| **3-candle impulse** (ch. 4, "Dynamic Market Reading") | Trends move in impulses of three candles. H4 Kijun break starts the run; on H1 count directional progress candles (Dojis/tests ignored, a close through the Kijun ends the run). Enter at the 2nd candle ("the trader will prefer to take the second candlestick, the first giving the signal and the third being able to reject it"), exit at the 3rd ("the position is unwound as soon as the shadow is formed on the third red candlestick") | `experimental-karen-candle3-ea.mq5` (D1→H4→H1) |
+
+What she says about her own method, worth remembering while testing these:
+
+- "Kijun breaks are what provide trading signals" — not Tenkan/Kijun crossovers,
+  which she dismisses as "much too late" (ch. 1).
+- The Lagging Span validates every break: "a sell signal validated by the
+  Lagging Span in both time frames". All builds gate on the chikou side of the
+  strategy-TF Kijun by default.
+- "Time frames of 240-minute and 15-minute are of prime importance in
+  Ichimoku" — the H4 and M15 slots of these builds carry the signal.
+- Stops are technical, tight at entry (the broken Kijun), wider mid-trade
+  (SSB), Tenkan at the end: "the position will be closed once the Tenkan is
+  broken". The builds approximate this with the entry-TF Tenkan cross exit
+  (default), ATR hard stop, chandelier trail and BE30.
+- "I personally take only trades with a risk reward ratio of 1:3" — the
+  cloud-edge/Kijun target and `InpMinRR` gate implement this.
+- "Never pre-empt entry strategies... wait for signals to be confirmed even if
+  this means giving up a few extra points" — all entries act on closed bars of
+  the management TF.
+
+### Shared engine
+
+All five builds reuse the risk and management machinery of the H4-M1 VPS build
+verbatim: equity-tiered ladder sizing, `CapToRisk`, `CapToMargin`, spread
+filter, re-entry cooldown, verified closes, ATR-based hard stop on every order,
+chandelier trail (ADX choppy filter), BE30 break-even, once-per-minute gating
+and push notifications. Only the entry logic, time frames, magic numbers and
+order comments differ between them.
+
+### Chikou reading
+
+Identical to the alignment builds: the chikou value is the close of the
+reference bar read directly from rates, compared against the Kijun at its
+plotted position (`chShift = 1 + Kijun`).
+
+### Karen input table (multi-TF build; the forks share the same shapes)
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpAnalysisTF` | D1 (VST: H1) | Analysis screen — prices vs cloud, LS optional |
+| `InpSignalTF` | H4 (VST: M15) | Strategy screen — the Kijun break + LS validation |
+| `InpEntryTF` | H1 (VST: M5) | Management screen — pullback entry, Tenkan exit, stop anchor |
+| `InpSignalCloud` | `true` | Strategy-TF close must be on the trade side of its cloud |
+| `InpSignalChikou` | `true` | Strategy-TF LS on the trade side of its Kijun |
+| `InpAnalysisChikou` | `true` | Analysis-TF LS on the trade side of its Kijun |
+| `InpPullbackBars` | 6 | Management-TF bars back to find the Tenkan/Kijun wick test |
+| `InpBounceCandle` | `true` | Bounce bar must close in the trade direction |
+| `InpChikouEntry` | `true` | Management-TF LS must confirm too |
+| `InpMinRR` | 3.0 (counter-trend: 1.5) | Reward:risk gate to the target (her 1:3) |
+| `InpUseTakeProfit` | `true` | TP at the strategy-TF cloud edge (counter-trend: H4 Kijun), quarter-ATR front-run |
+| `InpExitMode` | 0 | 0 = entry-TF Tenkan cross, 1 = entry-TF Kijun cross, 2 = strategy-TF Kijun cross |
+| `InpLevelBufferATR` | 0.5 | Counter-trend only: stop distance beyond the touched cloud edge |
+
+Counter-trend specifics: the stop is the larger of ATR×`InpATRMultiplier` and
+the distance to the H4 cloud edge plus `InpLevelBufferATR × ATR`; the touch is
+read against the *current* cloud edge (the edge moves as the cloud recalculates
+— a documented approximation); the target is the strategy-TF Kijun.
+
+3-candle specifics: `InpCountEntry` (2) and `InpCountExit` (3) drive entry/exit;
+the count scans back up to `Kijun + 6` bars; a stale count (the second impulse
+candle not being the last closed bar) never enters; the exit also fires when a
+bar closes through the Kijun against the trade or when the strategy-TF close
+crosses its Kijun back.
+
+### Status & caveats
+
+- **Not compiled, not backtested** — no MetaEditor was available. Files were
+  reviewed for identifier/input consistency across all five builds, but treat
+  the first tester run as a compile check.
+- These are discretionary rules made mechanical: her actual counting of
+  candles, level retests and target choices involve judgment the EAs
+  approximate (see the approximations noted above).
+- The book's original parameter settings are respected: 9-26-52 on every time
+  frame ("Changing the original settings damages Ichimoku's ability to provide
+  a precise glimpse of price action").
+- She trades currencies with these rules; gold is faster and more volatile.
+  Expect `InpPullbackBars`, `InpMinRR` and the exit mode to need tuning on
+  `GOLDm#`.

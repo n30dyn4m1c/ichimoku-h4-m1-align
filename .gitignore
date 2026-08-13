@@ -24,3 +24,6 @@ Reports/
 monitor/state/
 __pycache__/
 *.pyc
+
+# Local reference copies of copyrighted books (never commit)
+experiments/_OceanofPDF.com_*
