@@ -1723,3 +1723,70 @@ crosses its Kijun back.
 - She trades currencies with these rules; gold is faster and more volatile.
   Expect `InpPullbackBars`, `InpMinRR` and the exit mode to need tuning on
   `GOLDm#`.
+## 17. Kumo Breakout EA (flat-kijun filter)
+
+**File:** `experimental-kumo-breakout-ea.mq5` (Magic `20260845`)
+
+A single-timeframe (M1) breakout experiment: price and the chikou span both
+must break out of the cloud, the kumo twist must agree, and — the point of
+the build — the kijun must be sloping before a trade opens. It directly
+tests the concern that breakouts are preceded by flat, choppy areas:
+**skip and wait** instead of trading through the noise.
+
+### Rules
+
+- **Entry:** on a closed M1 bar, the close must be above the cloud top
+  (long) or below the cloud bottom (short), *and* the chikou span must be
+  clear of the cloud at its plotted position (`chShift = 1 + Kijun`), *and*
+  the kumo twist must agree (Span A above Span B for longs, below for
+  shorts). Entry fires while the breakout state holds — if the flat-kijun
+  filter blocks the first bar of a breakout, the EA waits and enters later
+  in the same move once the kijun angles.
+- **Flat-kijun filter:** before opening, the kijun's slope over
+  `InpFlatBars` (default 10) M1 bars is checked against `InpFlatATRMult`
+  (default 0.15) x ATR(M1). A flat kijun — a move within that threshold —
+  skips the trade and waits. Unreadable values count as flat (conservative).
+- **Angled kijun:** the kijun must also be angled *in the breakout
+  direction* — rising for a long, falling for a short — so the cross fires
+  with the trend, not against it.
+- **Exit:** all positions close when price closes back inside the cloud
+  (between the two Senkou spans) on a closed M1 bar. The ATR(M1) stop loss
+  is the only other way out.
+- **Risk:** the H4-M1 VPS risk engine verbatim — equity-tiered ladder
+  sizing, `CapToRisk`, `CapToMargin`, spread filter, re-entry cooldown,
+  verified closes, ATR-based hard stop on every order, once-per-minute
+  gating, no Alert popups (Print + push only).
+- **Logging:** skipped entries are journaled with the reason (`InpLogSkips`,
+  default on) so the "waiting" behavior is visible — e.g. *kumo breakout but
+  kijun flat — skipping and waiting*.
+
+### Flat-kijun filter meaning
+
+The kijun counts as flat when its move over `InpFlatBars` bars is <=
+`InpFlatATRMult` x ATR(M1) — the same measure as the reversion build
+(section 2) and the structure-map builds (sections 14-15). On M1 gold,
+`InpFlatBars = 10` and `InpFlatATRMult = 0.15` means roughly: the kijun may
+not have moved more than a bar-and-a-half of typical M1 range over the last
+ten bars.
+
+### Why it exists
+
+The previous discussion: breakouts on M1 are preceded by consolidation —
+price inside a narrowing cloud, flat lines, whipsaw. The question this
+build answers is whether filtering out flat-kijun breakouts and only
+entering when the kijun is angled in the trade direction raises the win
+rate enough to pay for the later, higher-risk entries it accepts.
+
+### Status & caveats
+
+- **Not yet compiled / not yet backtested.** Treat the first tester run as
+  a compile check.
+- The flat filter necessarily delays entries — the first bars of a real
+  breakout can have a still-flat kijun, and this EA will sit those out. The
+  `InpLogSkips` journal shows how often that happens.
+- Strict-inside-cloud exits mean a trade that runs far outside the cloud
+  gives back profit while waiting for a close back inside; there is no
+  trail in this build. Add one later if giveback hurts.
+- Single-timeframe by design — the tradeoff being tested is the flat
+  filter itself, not multi-TF agreement. `TF_M1` is a single constant at
+  the top of the file if a higher timeframe is ever wanted.
