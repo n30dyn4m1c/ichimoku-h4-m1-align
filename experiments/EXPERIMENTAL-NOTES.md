@@ -1640,10 +1640,10 @@ backtesting on `GOLDm#`.
 
 | Strategy (book source) | Rule summary | EA |
 |---|---|---|
-| **Kijun-break trend continuation** (ch. 4, "Trading with Ichimoku as the only indicator") | 3 time frames per trade: ANALYSIS (prices vs cloud = market state), STRATEGY (Kijun break = the signal, LS validates), MANAGEMENT (entry/exit timing). Pullback to the Tenkan, bounce entry. Exit on Tenkan cross; optional cloud-edge target with her 1:3 RR gate | `experimental-karen-multitf-ea.mq5` (D1→H4→H1, her "medium term" table) |
+| **Kijun-break trend continuation** (ch. 4, "Trading with Ichimoku as the only indicator") | 3 time frames per trade: ANALYSIS (prices vs cloud = market state), STRATEGY (Kijun break = the signal, LS validates), MANAGEMENT (entry/exit timing). Pullback to the Tenkan, bounce entry. Exit on Tenkan cross; optional target at the nearest qualifying level with her 1:3 RR gate | `experimental-karen-multitf-ea.mq5` (D1→H4→H1, her "medium term" table) |
 | **VST — very short term** (ch. 4, table of horizons) | Same engine on her "short term" table: 60 / 15 / 5 minutes, gated on M5 closes ("always wait for the current candlestick to close") | `experimental-karen-vst-ea.mq5` (H1→M15→M5) |
 | **Kijun retest** (ch. 4, EURAUD "Dynamic Market Reading") | Deeper pullback: "A sell trade is initiated on the first red candlestick whose shadow tested the Kijun and validated" — wick test of the Kijun (not the Tenkan), bounce bar closes back above it | `experimental-karen-kijun-retest-ea.mq5` (D1→H4→H1) |
-| **Counter-trend at the SSB** (ch. 4 AUDNZD/NZDUSD; article Technique A) | Strong trend on D1, trend confirmed on H4 (beyond its cloud), the correction is faded at the H4 cloud edge — "entrer une position vendeuse sur le niveau de cette SSB". Stop beyond the SSB ("place au-dessus de la SSB"), target the H4 Kijun ("fall as far as the 240-minute Kijun") | `experimental-karen-countertrend-ea.mq5` (D1→H4→H1) |
+| **Counter-trend at the SSB** (ch. 4 AUDNZD/NZDUSD; article Technique A) | Strong trend on D1, trend confirmed on H4 (beyond its cloud), the correction is faded at the H4 cloud edge — "entrer une position vendeuse sur le niveau de cette SSB". Stop beyond the SSB ("place au-dessus de la SSB"), target the nearest qualifying level, her "fall as far as the 240-minute Kijun" | `experimental-karen-countertrend-ea.mq5` (D1→H4→H1) |
 | **3-candle impulse** (ch. 4, "Dynamic Market Reading") | Trends move in impulses of three candles. H4 Kijun break starts the run; on H1 count directional progress candles (Dojis/tests ignored, a close through the Kijun ends the run). Enter at the 2nd candle ("the trader will prefer to take the second candlestick, the first giving the signal and the third being able to reject it"), exit at the 3rd ("the position is unwound as soon as the shadow is formed on the third red candlestick") | `experimental-karen-candle3-ea.mq5` (D1→H4→H1) |
 
 What she says about her own method, worth remembering while testing these:
@@ -1693,15 +1693,15 @@ plotted position (`chShift = 1 + Kijun`).
 | `InpPullbackBars` | 6 | Management-TF bars back to find the Tenkan/Kijun wick test |
 | `InpBounceCandle` | `true` | Bounce bar must close in the trade direction |
 | `InpChikouEntry` | `true` | Management-TF LS must confirm too |
-| `InpMinRR` | 3.0 (counter-trend: 1.5) | Reward:risk gate to the target (her 1:3) |
-| `InpUseTakeProfit` | `true` | TP at the strategy-TF cloud edge (counter-trend: H4 Kijun), quarter-ATR front-run |
+| `InpMinRR` | 3.0 (counter-trend: 1.5) | Reward:risk gate to the nearest qualifying level (her 1:3) |
+| `InpUseTakeProfit` | `true` | TP at the nearest qualifying level beyond entry: analysis-TF Tenkan/Kijun/cloud edge plus the strategy-TF Kijun, quarter-ATR front-run |
 | `InpExitMode` | 0 | 0 = entry-TF Tenkan cross, 1 = entry-TF Kijun cross, 2 = strategy-TF Kijun cross |
 | `InpLevelBufferATR` | 0.5 | Counter-trend only: stop distance beyond the touched cloud edge |
 
 Counter-trend specifics: the stop is the larger of ATR×`InpATRMultiplier` and
 the distance to the H4 cloud edge plus `InpLevelBufferATR × ATR`; the touch is
 read against the *current* cloud edge (the edge moves as the cloud recalculates
-— a documented approximation); the target is the strategy-TF Kijun.
+— a documented approximation); the target is the nearest qualifying level beyond the entry (analysis-TF Tenkan/Kijun/cloud edge, strategy-TF Kijun).
 
 3-candle specifics: `InpCountEntry` (2) and `InpCountExit` (3) drive entry/exit;
 the count scans back up to `Kijun + 6` bars; a stale count (the second impulse

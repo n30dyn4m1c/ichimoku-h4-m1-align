@@ -17,8 +17,9 @@
 //|     the third impulse candle, or immediately when a bar closes   |
 //|     through the Kijun against the trade, or when the strategy-TF |
 //|     close crosses its Kijun back (signal invalidation).          |
-//|   - Optional take-profit at the strategy-TF cloud edge ("we are  |
-//|     confident that price will go to the cloud").                 |
+//|   - Optional take-profit at the nearest qualifying level beyond  |
+//|     entry (her "we are confident that price will go to the       |
+//|     cloud"), front-run by a quarter ATR.                         |
 //| Risk: identical to the other Karen builds (VPS-style ladder,     |
 //|        ATR stop, trail, BE30).                                   |
 //| Author: Neo Malesa                                               |
@@ -50,8 +51,8 @@ input bool   InpAnalysisChikou    = true;  // Analysis TF chikou (LS) on the tra
 input int    InpCountEntry        = 2;     // Enter at this many impulse candles (her: the second)
 input int    InpCountExit         = 3;     // Exit at this many impulse candles (her: the third)
 input bool   InpChikouEntry       = true;  // Count TF chikou (LS) must confirm too
-input double InpMinRR             = 3.0;   // Skip entries with less than this reward:risk to the cloud-edge target (0 = off)
-input bool   InpUseTakeProfit     = true;  // Attach TP at the strategy-TF cloud edge (quarter-ATR buffer)
+input double InpMinRR             = 3.0;   // Skip entries with less than this reward:risk to the nearest qualifying level (0 = off)
+input bool   InpUseTakeProfit     = true;  // Attach TP at the nearest qualifying level beyond entry (analysis TF Tenkan/Kijun/cloud, strategy-TF Kijun)
 
 input group  "Risk Protection"
 input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
@@ -457,27 +458,54 @@ bool CheckCandle3Exit(int s, int dir)
 }
 
 //==============================================================
-// Take-profit at the strategy-TF cloud edge (her price targets
-// are always a level: SSB, cloud edge, Kijun). The buffer keeps
-// the order a few ATRs short of the level since price often
-// stalls just below it. Returns 0 when no target is usable.
+// Take-profit selection — her targets are always a level: the
+// Tenkan, the Kijun or a cloud edge, read on the analysis TF,
+// plus the strategy-TF Kijun (her "fall as far as the 240-minute
+// Kijun" target). Only levels BEYOND the entry price qualify —
+// a level the entry screen already crossed (e.g. the cloud edge
+// with InpSignalCloud on) is on the wrong side and is skipped.
+// The nearest qualifying level that still leaves at least
+// InpMinRR reward:risk becomes the target, front-run by a
+// quarter ATR since price often stalls just short of a level
+// ("always leave a few extra points of profit in the market").
+// Returns 0 when no level qualifies — with InpMinRR on, the
+// entry is skipped (her personal 1:3 rule).
 //==============================================================
 
-double BuildTakeProfit(int s, int dir, double atrVal)
+double BuildTakeProfit(int s, int dir, double price, double dist, double atrVal)
 {
    if(!InpUseTakeProfit) return 0.0;
 
-   double senA[1], senB[1];
-   if(CopyBuffer(ich[s][IDX_SIGNAL], 2, 1, 1, senA) <= 0) return 0.0;
-   if(CopyBuffer(ich[s][IDX_SIGNAL], 3, 1, 1, senB) <= 0) return 0.0;
+   double ten[1], kij[1], senA[1], senB[1], kijS[1];
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 0, 1, 1, ten)  <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 1, 1, 1, kij)  <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 2, 1, 1, senA) <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 3, 1, 1, senB) <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_SIGNAL], 1, 1, 1, kijS)   <= 0) return 0.0;
 
-   double target = 0.0;
-   if(dir ==  1) target = MathMax(senA[0], senB[0]);
-   else          target = MathMin(senA[0], senB[0]);
-   if(target <= 0) return 0.0;
+   double edge = (dir == 1) ? MathMax(senA[0], senB[0])
+                            : MathMin(senA[0], senB[0]);
 
-   int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
-   return NormalizeDouble(target - dir * 0.25 * atrVal, digits);
+   double best = 0.0;
+   double cand[4] = { ten[0], kij[0], edge, kijS[0] };
+   for(int i = 0; i < 4; i++)
+   {
+      if(cand[i] <= 0) continue;
+      double reward = (dir == 1) ? cand[i] - price
+                                 : price - cand[i];
+      if(reward <= 0) continue;                               // level on the wrong side
+      if(InpMinRR > 0 && dist > 0 && reward / dist < InpMinRR) continue;   // not enough room
+      if(best == 0.0 ||
+         ((dir == 1) ? cand[i] < best : cand[i] > best))
+         best = cand[i];                                      // nearest qualifying level
+   }
+   if(best == 0.0) return 0.0;
+
+   int    digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   double tp = best - dir * 0.25 * atrVal;
+   if(dir ==  1 && tp <= price) return 0.0;                   // safety: never a TP on the wrong side
+   if(dir == -1 && tp >= price) return 0.0;
+   return NormalizeDouble(tp, digits);
 }
 
 //==============================================================
@@ -870,17 +898,10 @@ void OnTick()
                double a[1];
                if(atr[s] != INVALID_HANDLE && CopyBuffer(atr[s], 0, 1, 1, a) > 0 && a[0] > 0)
                   atrVal = a[0];
-               tp = BuildTakeProfit(s, st, atrVal);
-               if(tp <= 0) tp = 0.0;
-
-               // her personal risk rule: only trades with RR >= InpMinRR
-               if(InpMinRR > 0 && tp > 0 && dist > 0)
-               {
-                  double price = isBuy ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
-                                       : SymbolInfoDouble(syms[s], SYMBOL_BID);
-                  double rr = MathAbs(tp - price) / dist;
-                  if(rr < InpMinRR) continue;
-               }
+               double price = isBuy ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
+                                    : SymbolInfoDouble(syms[s], SYMBOL_BID);
+               tp = BuildTakeProfit(s, st, price, dist, atrVal);
+               if(InpMinRR > 0 && tp <= 0) continue;   // her 1:3 rule — no qualifying level, no trade
             }
 
             int count; double lots;

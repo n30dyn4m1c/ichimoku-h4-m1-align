@@ -23,7 +23,8 @@
 //|     on the trend side of the H1 Tenkan.                          |
 //| Stop: beyond the H4 cloud edge (the touched level) + buffer,     |
 //|        never tighter than the ATR stop.                          |
-//| Target: the strategy-TF (H4) Kijun, with an RR gate of 1.5.      |
+//| Target: the nearest qualifying level beyond the entry (analysis  |
+//|        TF Tenkan/Kijun/cloud, H4 Kijun), with an RR gate of 1.5. |
 //| Risk: identical to the other Karen builds (VPS-style ladder).    |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -56,8 +57,8 @@ input int    InpPullbackBars      = 8;     // Bounce-TF bars back to find the cl
 input bool   InpBounceCandle      = true;  // Bounce bar must close in the trade direction (blue/red body)
 input bool   InpChikouEntry       = true;  // Bounce TF chikou (LS) must confirm too
 input double InpLevelBufferATR    = 0.5;   // Stop distance beyond the touched level (x ATR)
-input double InpMinRR             = 1.5;   // Skip entries with less than this reward:risk to the Kijun target (0 = off)
-input bool   InpUseTakeProfit     = true;  // Attach TP at the strategy-TF Kijun
+input double InpMinRR             = 1.5;   // Skip entries with less than this reward:risk to the nearest qualifying level (0 = off)
+input bool   InpUseTakeProfit     = true;  // Attach TP at the nearest qualifying level beyond entry (analysis TF Tenkan/Kijun/cloud, strategy-TF Kijun)
 
 //--- Exit line: her two exits are the management-TF Tenkan (alert of
 //    the end of the move) and the strategy-TF Kijun (invalidation
@@ -428,23 +429,54 @@ int CheckCounterTrend(int s)
 }
 
 //==============================================================
-// Take-profit at the strategy-TF Kijun — her target in the
-// NZDUSD trade ("the currency pair would in this case fall as
-// far as the 240-minute Kijun"), front-run by a quarter ATR
-// since price often stalls just short of the line ("always
-// leave a few extra points of profit in the market").
+// Take-profit selection — her targets are always a level: the
+// Tenkan, the Kijun or a cloud edge, read on the analysis TF,
+// plus the strategy-TF Kijun (her "fall as far as the 240-minute
+// Kijun" target). Only levels BEYOND the entry price qualify —
+// a level the entry screen already crossed (e.g. the H4 Kijun
+// when it sits above a fresh counter-trend entry) is on the
+// wrong side and is skipped. The nearest qualifying level that
+// still leaves at least InpMinRR reward:risk becomes the target,
+// front-run by a quarter ATR since price often stalls just short
+// of a level ("always leave a few extra points of profit in the
+// market"). Returns 0 when no level qualifies — with InpMinRR
+// on, the entry is skipped.
 //==============================================================
 
-double BuildTakeProfit(int s, int dir, double atrVal)
+double BuildTakeProfit(int s, int dir, double price, double dist, double atrVal)
 {
    if(!InpUseTakeProfit) return 0.0;
 
-   double kij[1];
-   if(CopyBuffer(ich[s][IDX_SIGNAL], 1, 1, 1, kij) <= 0) return 0.0;
-   if(kij[0] <= 0) return 0.0;
+   double ten[1], kij[1], senA[1], senB[1], kijS[1];
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 0, 1, 1, ten)  <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 1, 1, 1, kij)  <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 2, 1, 1, senA) <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_ANALYSIS], 3, 1, 1, senB) <= 0) return 0.0;
+   if(CopyBuffer(ich[s][IDX_SIGNAL], 1, 1, 1, kijS)   <= 0) return 0.0;
 
-   int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
-   return NormalizeDouble(kij[0] - dir * 0.25 * atrVal, digits);
+   double edge = (dir == 1) ? MathMax(senA[0], senB[0])
+                            : MathMin(senA[0], senB[0]);
+
+   double best = 0.0;
+   double cand[4] = { ten[0], kij[0], edge, kijS[0] };
+   for(int i = 0; i < 4; i++)
+   {
+      if(cand[i] <= 0) continue;
+      double reward = (dir == 1) ? cand[i] - price
+                                 : price - cand[i];
+      if(reward <= 0) continue;                               // level on the wrong side
+      if(InpMinRR > 0 && dist > 0 && reward / dist < InpMinRR) continue;   // not enough room
+      if(best == 0.0 ||
+         ((dir == 1) ? cand[i] < best : cand[i] > best))
+         best = cand[i];                                      // nearest qualifying level
+   }
+   if(best == 0.0) return 0.0;
+
+   int    digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   double tp = best - dir * 0.25 * atrVal;
+   if(dir ==  1 && tp <= price) return 0.0;                   // safety: never a TP on the wrong side
+   if(dir == -1 && tp >= price) return 0.0;
+   return NormalizeDouble(tp, digits);
 }
 
 //==============================================================
@@ -873,17 +905,10 @@ void OnTick()
                double a[1];
                if(atr[s] != INVALID_HANDLE && CopyBuffer(atr[s], 0, 1, 1, a) > 0 && a[0] > 0)
                   atrVal = a[0];
-               tp = BuildTakeProfit(s, st, atrVal);
-               if(tp <= 0) tp = 0.0;
-
-               // her personal risk rule: only trades with RR >= InpMinRR
-               if(InpMinRR > 0 && tp > 0 && dist > 0)
-               {
-                  double price = isBuy ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
-                                       : SymbolInfoDouble(syms[s], SYMBOL_BID);
-                  double rr = MathAbs(tp - price) / dist;
-                  if(rr < InpMinRR) continue;
-               }
+               double price = isBuy ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
+                                    : SymbolInfoDouble(syms[s], SYMBOL_BID);
+               tp = BuildTakeProfit(s, st, price, dist, atrVal);
+               if(InpMinRR > 0 && tp <= 0) continue;   // her RR rule — no qualifying level, no trade
             }
 
             int count; double lots;
