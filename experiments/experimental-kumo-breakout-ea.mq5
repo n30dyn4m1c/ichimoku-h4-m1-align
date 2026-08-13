@@ -8,9 +8,15 @@
 //|        must be sloping — a flat kijun (move over InpFlatBars <=  |
 //|        InpFlatATRMult * ATR(M1)) skips the trade and waits; the  |
 //|        trade only opens once the kijun is angled in the breakout |
-//|        direction                                                  |
-//| Exit:  all positions close when price closes back inside the     |
-//|        cloud                                                      |
+//|        direction, the cloud is thick (Span A - Span B >=          |
+//|        InpMinCloudATR * ATR(M1)), and the future cloud (the       |
+//|        Senkou spans drawn Kijun bars ahead) is angled in the      |
+//|        breakout direction too                                     |
+//| Exit:  ADX regime decides the exit — with great ADX (>=          |
+//|        InpADXHigh) all positions close when price closes back    |
+//|        inside the cloud; with medium ADX they close when price   |
+//|        closes across the kijun against the trade; small ADX      |
+//|        (< InpADXLow) never opens a trade at all                  |
 //| Risk:  VPS-style ladder sizing (20% risk up to $8k, 10% to       |
 //|        $13k, 5% above), ATR(M1) stop loss on every order, caps   |
 //|        by InpMaxRiskPct and free margin, spread filter, re-entry |
@@ -43,6 +49,14 @@ input group  "Flat-Kijun Filter"
 input int    InpFlatBars     = 10;    // Bars over which each line's move is measured
 input double InpFlatATRMult  = 0.15;  // A line is "flat" if its move over InpFlatBars <= this * ATR(M1)
 
+input group  "Cloud Thickness"
+input double InpMinCloudATR = 0.5;   // Cloud width |Span A - Span B| must be >= this * ATR(M1) to open
+
+input group  "ADX Regime Filter"
+input int    InpADXPeriod = 14;   // ADX period (M1)
+input double InpADXLow    = 22.0; // ADX below this = small — no trade is opened
+input double InpADXHigh   = 35.0; // ADX >= this = great — exit at price closing inside the cloud; in between = medium — exit at price closing across the kijun
+
 input group  "Logging"
 input bool   InpLogSkips     = true;  // Log skipped entries (flat detected / kijun not angled)
 
@@ -52,6 +66,7 @@ input bool   InpLogSkips     = true;  // Log skipped entries (flat detected / ki
 
 int      ich[MAX_SYMS];   // iIchimoku(M1) handle per symbol
 int      atr[MAX_SYMS];   // iATR(M1) handle per symbol
+int      adx[MAX_SYMS];   // iADX(M1) handle per symbol — regime filter for entry and exit
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -104,6 +119,9 @@ int OnInit()
       // ATR always needed — flat detection measures every line vs ATR(M1)
       atr[s] = iATR(syms[s], TF_M1, InpATRPeriod);
       if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
+
+      adx[s] = iADX(syms[s], TF_M1, InpADXPeriod);
+      if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -118,6 +136,7 @@ void OnDeinit(const int reason)
    {
       if(ich[s] != INVALID_HANDLE) IndicatorRelease(ich[s]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
+      if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
    }
 }
 
@@ -218,6 +237,37 @@ bool KijunFlat(int s, double atrVal)
    return MathAbs(now[0] - past[0]) <= InpFlatATRMult * atrVal;
 }
 
+// The cloud is "thin" when the Senkou spans are closer together than
+// InpMinCloudATR * ATR(M1) — a narrow cloud is consolidation, so a
+// breakout through it is skipped and waited out. Unreadable values
+// count as thin (conservative) so no trade ever opens unfiltered.
+bool CloudThin(int s, double atrVal)
+{
+   double senA[1], senB[1];
+   if(CopyBuffer(ich[s], 2, 1, 1, senA) <= 0) return true;
+   if(CopyBuffer(ich[s], 3, 1, 1, senB) <= 0) return true;
+   return MathAbs(senA[0] - senB[0]) < InpMinCloudATR * atrVal;
+}
+
+// The future cloud (the Senkou spans drawn Kijun bars ahead of price)
+// must be angled in the trade direction: from the last closed bar out
+// to the far end of the drawn cloud (shift 1 - Kijun), every span's
+// move must exceed InpFlatATRMult * ATR(M1) in the breakout direction.
+// Unreadable values count as not angled (conservative).
+bool FutureCloudAngled(int s, int dir, double atrVal)
+{
+   double aNow[1], bNow[1], aFar[1], bFar[1];
+   if(CopyBuffer(ich[s], 2, 1,        1, aNow) <= 0) return false;
+   if(CopyBuffer(ich[s], 3, 1,        1, bNow) <= 0) return false;
+   if(CopyBuffer(ich[s], 2, 1 - Kijun, 1, aFar) <= 0) return false;
+   if(CopyBuffer(ich[s], 3, 1 - Kijun, 1, bFar) <= 0) return false;
+
+   double minMove = InpFlatATRMult * atrVal;
+   if(dir == 1)
+      return aFar[0] - aNow[0] > minMove && bFar[0] - bNow[0] > minMove;
+   return aNow[0] - aFar[0] > minMove && bNow[0] - bFar[0] > minMove;
+}
+
 // The kijun must be angled in the trade direction: a rising kijun for a
 // long breakout, a falling one for a short breakout. A kijun that is still
 // flat (or sloped against the breakout) blocks the entry.
@@ -249,6 +299,45 @@ bool PriceInsideCloud(int s)
    double cHi = MathMax(senA[0], senB[0]);
    double cLo = MathMin(senA[0], senB[0]);
    return closeP < cHi && closeP > cLo;
+}
+
+//==============================================================
+// ADX Regime: great (>= InpADXHigh) holds to the cloud exit,
+// medium (InpADXLow..InpADXHigh) exits at the kijun cross, small
+// (< InpADXLow) never opens a trade. An unreadable ADX is treated
+// as small at entry (no unverifiable trades) and as great at exit
+// (falls back to the original cloud exit).
+//==============================================================
+
+double GetADX(int s)
+{
+   if(adx[s] == INVALID_HANDLE) return 0.0;
+   double d[1];
+   if(CopyBuffer(adx[s], 0, 1, 1, d) <= 0 || d[0] <= 0) return 0.0;
+   return d[0];
+}
+
+bool ADXSmall(int s)
+{
+   double v = GetADX(s);
+   if(v <= 0) return true;
+   return v < InpADXLow;
+}
+
+// Medium-ADX exit: price closed across the kijun against the trade
+// (long exits on a close below the kijun, short on a close above it)
+bool CheckKijunExit(int s, int dir)
+{
+   double kij[1];
+   if(CopyBuffer(ich[s], 1, 1, 1, kij) <= 0) return false;
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], TF_M1, 1, 1, rt) <= 0) return false;
+   double closeP = rt[0].close;
+
+   if(dir ==  1 && closeP < kij[0]) return true;
+   if(dir == -1 && closeP > kij[0]) return true;
+   return false;
 }
 
 //==============================================================
@@ -469,20 +558,29 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: price closed back inside the cloud
-      if(state[s] != 0 && PriceInsideCloud(s))
+      // Exit check: the ADX regime decides how far price may pull back —
+      // great ADX holds until a close back inside the cloud, medium ADX
+      // exits at the kijun cross (unreadable ADX falls back to the cloud exit)
+      if(state[s] != 0)
       {
-         string side = (state[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (price back inside cloud)";
-         Print(msg); SendNotification(msg);
-
-         if(ClosePositions(syms[s]))
+         double adxVal = GetADX(s);
+         bool useCloud = (adxVal <= 0) || (adxVal >= InpADXHigh);
+         bool exitSig = useCloud ? PriceInsideCloud(s) : CheckKijunExit(s, state[s]);
+         if(exitSig)
          {
-            state[s] = 0;
-            noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
+            string side = (state[s] == 1) ? "Long" : "Short";
+            string why  = useCloud ? "price back inside cloud" : "price closed across kijun";
+            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (" + why + ")";
+            Print(msg); SendNotification(msg);
+
+            if(ClosePositions(syms[s]))
+            {
+               state[s] = 0;
+               noReentryUntil[s] = TimeCurrent() + InpReentryCooldownSec;
+            }
+            else
+               Print(PCTime() + " | " + syms[s] + " exit signal but positions still open — will retry");
          }
-         else
-            Print(PCTime() + " | " + syms[s] + " exit signal but positions still open — will retry");
       }
 
       // Entry check: kumo breakout signal, flat filter, angled kijun, spread
@@ -505,13 +603,37 @@ void OnTick()
                continue;
             }
 
+            if(CloudThin(s, atrVal))
+            {
+               if(InpLogSkips)
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but cloud too thin — waiting");
+               continue;
+            }
+
+            if(!FutureCloudAngled(s, dir, atrVal))
+            {
+               if(InpLogSkips)
+               {
+                  string way = (dir == 1) ? "up" : "down";
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but future cloud not angled " + way + " — waiting");
+               }
+               continue;
+            }
+
             if(!KijunAngled(s, dir, atrVal))
             {
                if(InpLogSkips)
                {
                   string way = (dir == 1) ? "up" : "down";
-                  Print(PCTime() + " | " + syms[s] + " kumo breakout, no flats, but kijun not angled " + way + " — waiting");
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout, kijun not flat but not angled " + way + " — waiting");
                }
+               continue;
+            }
+
+            if(ADXSmall(s))
+            {
+               if(InpLogSkips)
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but ADX below " + DoubleToString(InpADXLow, 1) + " — no trade");
                continue;
             }
 

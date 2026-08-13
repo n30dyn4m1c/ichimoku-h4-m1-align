@@ -1746,12 +1746,29 @@ tests the concern that breakouts are preceded by flat, choppy areas:
   `InpFlatBars` (default 10) M1 bars is checked against `InpFlatATRMult`
   (default 0.15) x ATR(M1). A flat kijun — a move within that threshold —
   skips the trade and waits. Unreadable values count as flat (conservative).
+- **Thick-cloud filter:** the cloud itself must be thick — Span A and
+  Span B at least `InpMinCloudATR` (default 0.5) x ATR(M1) apart. A thin,
+  narrowing cloud is the consolidation the build is designed to avoid, so
+  a breakout through it skips and waits until the cloud widens.
+  Unreadable values count as thin (conservative).
+- **Future-cloud angle:** the cloud drawn Kijun bars ahead of price must
+  also be angled in the trade direction — from the last closed bar out to
+  the far end of the drawn cloud, both spans must rise (long) or fall
+  (short) by more than `InpFlatATRMult` x ATR(M1). A cloud that flattens
+  or tilts against the breakout blocks the entry. Unreadable values count
+  as not angled (conservative).
 - **Angled kijun:** the kijun must also be angled *in the breakout
   direction* — rising for a long, falling for a short — so the cross fires
   with the trend, not against it.
-- **Exit:** all positions close when price closes back inside the cloud
-  (between the two Senkou spans) on a closed M1 bar. The ATR(M1) stop loss
-  is the only other way out.
+- **Exit:** the ADX regime decides how far price may pull back. With
+  **great** ADX (`InpADXHigh`, default 35, or above) all positions close
+  when price closes back inside the cloud (between the two Senkou spans).
+  With **medium** ADX (between `InpADXLow` and `InpADXHigh`) they close
+  when price closes across the kijun against the trade (long exits on a
+  close below the kijun, short on a close above). **Small** ADX (below
+  `InpADXLow`, default 22) never opens a trade at all. The ATR(M1) stop
+  loss is the only other way out. An unreadable ADX counts as small at
+  entry and falls back to the cloud exit at exit.
 - **Risk:** the H4-M1 VPS risk engine verbatim — equity-tiered ladder
   sizing, `CapToRisk`, `CapToMargin`, spread filter, re-entry cooldown,
   verified closes, ATR-based hard stop on every order, once-per-minute
@@ -1776,6 +1793,15 @@ price inside a narrowing cloud, flat lines, whipsaw. The question this
 build answers is whether filtering out flat-kijun breakouts and only
 entering when the kijun is angled in the trade direction raises the win
 rate enough to pay for the later, higher-risk entries it accepts.
+
+The ADX regime adds a second layer to that same concern: trend strength
+decides how long to hold. In a strong trend (great ADX) the cloud exit is
+right — the move is big enough that giving back a close back inside the
+cloud is still a healthy exit. In a weaker trend (medium ADX) that same
+giveback is too much, so the kijun cross takes the trade out earlier. And
+in chop (small ADX) the breakout is not traded at all — the flat-kijun
+filter, the thick-cloud filter, the future-cloud angle and the ADX gate
+all have to pass.
 
 ### Status & caveats
 
