@@ -1854,30 +1854,44 @@ trade exits on the cross back, or the ATR stop.
 **File:** `experimental-h4-m1-kijun-start-vps-ea.mq5` (Magic `20260846`)
 
 A fork of the live **H4-M1 VPS build** (`ichimoku-h4-m1-vps-ea.mq5`) —
-entry, exit, BE30, trail and risk are byte-identical — with **one extra
-entry gate**: after the full H4→M1 alignment fires, the EA does a final
-check on the **last 3 values of the M15 kijun**:
+entry, exit, BE30, trail and risk are byte-identical — with **three extra
+entry gates** applied after the full H4→M1 alignment fires:
 
-- **Flat kijun → no entry.** If all three values sit within
-  `InpKijunFlatPoints` (default 30 points) of each other, the kijun is
-  flat and the entry is skipped entirely.
-- **Starting to move + angle in the trade direction → entry.** The kijun
-  must have *broken out* of the flat tolerance with its newest value
-  angled with the trade: rising for a long (`kijun[1] > kijun[2] +
-  tolerance`), falling for a short. A kijun moving against the trade, or
-  one whose values are unavailable, also blocks the entry.
+1. **M15 kijun-start** — the last 3 values of the **M15 kijun**:
+   - **Flat kijun → no entry.** If all three values sit within
+     `InpKijunFlatPoints` (default 30 points) of each other, the kijun is
+     flat and the entry is skipped entirely.
+   - **Starting to move + angle in the trade direction → entry.** The kijun
+     must have *broken out* of the flat tolerance with its newest value
+     angled with the trade: rising for a long (`kijun[1] > kijun[2] +
+     tolerance`), falling for a short. A kijun moving against the trade, or
+     one whose values are unavailable, also blocks the entry.
+2. **H4 cloud thick** — `|Span A − Span B|` at the last closed H4 bar must
+   be ≥ `InpMinCloudATR × ATR(H4)`. A thin, narrowing cloud is
+   consolidation, so a breakout through it is skipped and waited out.
+3. **H4 future-cloud angle** — the H4 cloud *drawn Kijun bars ahead* of
+   price (negative shifts) must be angled with the trade: both spans must
+   rise (long) or fall (short) by at least `InpCloudAngleATR × ATR(H4)`
+   from the last closed bar out to the far end of the drawn cloud.
+4. **M15 cloud thick + future-cloud angle** — the exact same two cloud
+   checks on **M15** with ATR(M15) normalization, so the entry-timing
+   timeframe's cloud is healthy too.
 
-The idea, mirroring the Kumo breakout build (section 17): alignment alone
-can fire while the M15 kijun is still flat from consolidation — the
-multi-hour structure says "long" but the short-term engine has not
-turned yet. This filter waits for the M15 kijun to actually start moving
-in the trade's direction before committing. Entries are gated; exits,
-trail, BE30 and risk are untouched.
+Conditions 2–4 are ported from the Kumo breakout EA (section 17) but
+checked per timeframe with that timeframe's own ATR, on the two
+timeframes that matter for a multi-hour trend entry: the trend anchor
+(H4) and the entry timing (M15). The idea: alignment alone can fire
+while the cloud is still a thin consolidation band or flat/angled
+against the move — this build requires the clouds to be genuinely thick
+and already tilting in the trade direction before committing.
 
 | Parameter | Default | Description |
 |-----------|---------|--------------|
 | `InpKijunStartEnabled` | `true` | Master switch for the M15 kijun-start filter |
 | `InpKijunFlatPoints` | 30 | Flatness tolerance (points): 3 kijun values within this of each other = flat |
+| `InpCloudFiltersEnabled` | `true` | Master switch for the H4+M15 cloud filters |
+| `InpMinCloudATR` | 0.5 | Cloud width `\|Span A − Span B\|` must be ≥ this × ATR(tf) |
+| `InpCloudAngleATR` | 0.15 | Future cloud must angle ≥ this × ATR(tf) in the trade direction |
 
 On gold (`GOLDm#`, 1 point = 0.01), 30 points is a third of a dollar —
 small enough that a genuinely flat kijun is still caught, large enough to
@@ -1886,11 +1900,12 @@ ignore rounding noise.
 ### Status & caveats
 
 - **Not yet backtested.** Suggested first pass: run the same symbol/period
-  with `InpKijunStartEnabled = false` as the known H4-M1 VPS baseline,
-  then with it on — the delta is exactly the filter's effect.
-- The filter necessarily delays entries: the first M15 bar of a real
-  move can still have a flat kijun, and this build will sit those
-  signals out until the kijun angles.
+  with all three filter groups on vs off to isolate each one's effect —
+  `InpKijunStartEnabled = false` + `InpCloudFiltersEnabled = false` is
+  exactly the known H4-M1 VPS baseline.
+- The filters necessarily delay entries: the first bar of a real move can
+  still have a flat kijun or a thin cloud, and this build will sit those
+  signals out until the kijun angles and the clouds thicken/tilt.
 - Only the newest kijun leg (`shift 1` vs `shift 2`) is required to point
   with the trade; the older leg may be flat or already moving — i.e. both
   a *starting* move and a *continuing* one qualify, so long as the whole

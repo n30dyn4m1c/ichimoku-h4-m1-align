@@ -6,7 +6,10 @@
 //|        if the last 3 values of the M15 kijun are flat (within    |
 //|        InpKijunFlatPoints), NO entry. Entry only when the M15    |
 //|        kijun is starting to move with its angle in the direction |
-//|        of the trade (rising for long, falling for short)         |
+//|        of the trade (rising for long, falling for short). Plus    |
+//|        H4+M15 cloud filters: both clouds must be thick (not       |
+//|        consolidation) and their future clouds (drawn Kijun bars   |
+//|        ahead) angled with the trade direction                     |
 //| Exit:  ATR chandelier trailing stop once profitable (locks in    |
 //|        the peak), M15 close crosses M15 kijun as final fallback, |
 //|        or ATR-based protective stop loss                         |
@@ -59,6 +62,11 @@ input group  "M15 Kijun Start Filter (EXPERIMENT)"
 input bool   InpKijunStartEnabled  = true;   // Require M15 kijun starting to move in trade direction
 input int    InpKijunFlatPoints    = 30;     // Flatness tolerance (points): 3 kijun values within this = flat
 
+input group  "H4+M15 Cloud Filters (EXPERIMENT)"
+input bool   InpCloudFiltersEnabled = true;  // Require thick + direction-angled cloud on H4 and M15
+input double InpMinCloudATR         = 0.5;   // Cloud width |Span A - Span B| must be >= this * ATR(tf)
+input double InpCloudAngleATR       = 0.15;  // Future cloud must angle >= this * ATR(tf) in trade direction
+
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
 #define TF_COUNT  6
@@ -70,6 +78,8 @@ ENUM_TIMEFRAMES tfs[TF_COUNT] = {
 
 int      ich[MAX_SYMS][TF_COUNT];
 int      atr[MAX_SYMS];
+int      atrH4[MAX_SYMS];   // ATR(H4) handle for the cloud filters
+int      atrM15[MAX_SYMS];  // ATR(M15) handle for the cloud filters (independent of the SL handle)
 int      adx[MAX_SYMS];   // ADX(M15) handle for choppy-market regime detection
 string   syms[MAX_SYMS];
 int      symsCount = 0;
@@ -144,6 +154,16 @@ int OnInit()
          adx[s] = iADX(syms[s], PERIOD_M15, InpADXPeriod);
          if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
+
+      atrH4[s]  = INVALID_HANDLE;
+      atrM15[s] = INVALID_HANDLE;
+      if(InpCloudFiltersEnabled)
+      {
+         atrH4[s] = iATR(syms[s], PERIOD_H4, InpATRPeriod);
+         if(atrH4[s] == INVALID_HANDLE) return(INIT_FAILED);
+         atrM15[s] = iATR(syms[s], PERIOD_M15, InpATRPeriod);
+         if(atrM15[s] == INVALID_HANDLE) return(INIT_FAILED);
+      }
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -160,6 +180,8 @@ void OnDeinit(const int reason)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
       if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
+      if(atrH4[s] != INVALID_HANDLE) IndicatorRelease(atrH4[s]);
+      if(atrM15[s] != INVALID_HANDLE) IndicatorRelease(atrM15[s]);
    }
 }
 
@@ -360,6 +382,65 @@ bool CheckM15KijunStart(int s, int dir)
    if(dir ==  1) return (k[2] > k[1] + tol);
    if(dir == -1) return (k[2] < k[1] - tol);
    return false;
+}
+
+//==============================================================
+// EXPERIMENT — H4+M15 Cloud Filters: before entry, the cloud on
+// the trend anchor (H4) and the entry timing timeframe (M15) must
+// both be healthy for a breakout:
+//   * Thick — |Span A - Span B| >= InpMinCloudATR * ATR(tf); a
+//     thin, narrowing cloud is consolidation, so it blocks the entry
+//   * Future cloud angled with the trade — the cloud drawn Kijun
+//     bars ahead (negative shifts) must rise (long) or fall (short)
+//     by at least InpCloudAngleATR * ATR(tf) on BOTH spans
+// Ported from the Kumo breakout EA (experimental-kumo-breakout-ea.mq5)
+// but checked per timeframe with that timeframe's own ATR. Unreadable
+// values count as blocking (conservative).
+//==============================================================
+
+// Cloud is "thin" when the Senkou spans are closer together than
+// InpMinCloudATR * ATR(tf) at the last closed bar of that timeframe.
+bool CloudThin(int s, int tfIdx, double atrVal)
+{
+   double senA[1], senB[1];
+   if(CopyBuffer(ich[s][tfIdx], 2, 1, 1, senA) <= 0) return true;
+   if(CopyBuffer(ich[s][tfIdx], 3, 1, 1, senB) <= 0) return true;
+   return MathAbs(senA[0] - senB[0]) < InpMinCloudATR * atrVal;
+}
+
+// The future cloud (the Senkou spans drawn Kijun bars ahead of price)
+// must be angled in the trade direction: from the last closed bar out
+// to the far end of the drawn cloud (shift 1 - Kijun), both spans must
+// move by more than InpCloudAngleATR * ATR(tf) in the trade direction.
+bool FutureCloudAngled(int s, int tfIdx, int dir, double atrVal)
+{
+   double aNow[1], bNow[1], aFar[1], bFar[1];
+   if(CopyBuffer(ich[s][tfIdx], 2, 1,         1, aNow) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 3, 1,         1, bNow) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 2, 1 - Kijun, 1, aFar) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 3, 1 - Kijun, 1, bFar) <= 0) return false;
+
+   double minMove = InpCloudAngleATR * atrVal;
+   if(dir == 1)
+      return aFar[0] - aNow[0] > minMove && bFar[0] - bNow[0] > minMove;
+   return aNow[0] - aFar[0] > minMove && bNow[0] - bFar[0] > minMove;
+}
+
+// Both clouds must pass both conditions; anything unreadable blocks.
+bool CloudFiltersOK(int s, int dir)
+{
+   double a[1];
+   if(atrH4[s] == INVALID_HANDLE || atrM15[s] == INVALID_HANDLE) return false;
+   if(CopyBuffer(atrH4[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   double atrH4Val = a[0];
+   if(CopyBuffer(atrM15[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   double atrM15Val = a[0];
+
+   if(CloudThin(s, 0, atrH4Val))             return false;
+   if(CloudThin(s, IDX_M15, atrM15Val))      return false;
+   if(!FutureCloudAngled(s, 0, dir, atrH4Val))   return false;
+   if(!FutureCloudAngled(s, IDX_M15, dir, atrM15Val)) return false;
+   return true;
 }
 
 //==============================================================
@@ -774,6 +855,10 @@ void OnTick()
             // EXPERIMENT: final filter — M15 kijun must be starting to move
             // in the trade direction, not flat, or the entry is skipped
             if(InpKijunStartEnabled && !CheckM15KijunStart(s, st)) continue;
+
+            // EXPERIMENT: H4 and M15 clouds must be thick and their future
+            // clouds angled with the trade, or the entry is skipped
+            if(InpCloudFiltersEnabled && !CloudFiltersOK(s, st)) continue;
 
             bool   isBuy = (st == 1);
             double dist  = 0.0;
