@@ -1849,52 +1849,70 @@ trade exits on the cross back, or the ATR stop.
 
 ---
 
-## 18. H4-M1 Kijun-Start VPS EA (M15 kijun momentum entry filter)
+## 18. Dual-Mode H4/H1 Kijun-Start EA (VPS merge experiment)
 
-**File:** `experimental-h4-m1-kijun-start-vps-ea.mq5` (Magic `20260846`)
+**File:** `experimental-h4-m1-kijun-start-vps-ea.mq5` (Magic `20260846` = H4
+mode, `20260847` = H1 mode)
 
-A fork of the live **H4-M1 VPS build** (`ichimoku-h4-m1-vps-ea.mq5`) —
-entry, exit, BE30, trail and risk are byte-identical — with **two extra
-entry gates** applied after the full H4→M1 alignment fires:
+A single file that merges **both live VPS builds** — `ichimoku-h4-m1-vps-ea.mq5`
+and `ichimoku-h1-m1-vps-ea.mq5` — selected with `InpTopTF`:
 
-1. **M15 kijun-start** — the last 3 values of the **M15 kijun**:
-   - **Flat kijun → no entry.** If all three values sit within
-     `InpKijunFlatPoints` (default 30 points) of each other, the kijun is
-     flat and the entry is skipped entirely.
+| Mode | Stack | Kijun exit TF | Filter/cloud TFs | Magic |
+|------|-------|---------------|------------------|-------|
+| `TOP_H4` (0) | H4→M1 (6 TFs) | M15 kijun cross | M15 kijun-start; cloud bias H4 + M15 | `20260846` |
+| `TOP_H1` (1) | H1→M1 (5 TFs) | M5 kijun cross | M5 kijun-start; cloud bias H1 + M5 | `20260847` |
+
+Each mode is byte-identical to its live VPS build for entry, exit, trail,
+BE30 and risk — including the mode's own equity ladder (the H1 VPS uses
+smaller order batches than the H4 VPS) — with **two extra entry gates**
+applied after the full stack alignment fires:
+
+1. **Kijun-start** — the last 3 values of the kijun on the filter TF:
+   - **Flat kijun → no entry.** If all three values sit within the
+     flatness tolerance of each other, the kijun is flat and the entry is
+     skipped entirely. Tolerance: `InpKijunFlatPoints` (default 30 points,
+     M15 kijun in H4 mode) or `InpM5KijunFlatPoints` (default 10 points,
+     M5 kijun in H1 mode).
    - **Starting to move + angle in the trade direction → entry.** The kijun
      must have *broken out* of the flat tolerance with its newest value
-     angled with the trade: rising for a long (`kijun[1] > kijun[2] +
-     tolerance`), falling for a short. A kijun moving against the trade, or
-     one whose values are unavailable, also blocks the entry.
-2. **H4+M15 cloud bias** — the cloud must carry the trade's bias on both
-   the trend anchor (H4) and the entry timing timeframe (M15): **Span A
-   above Span B** (bullish cloud) for a long, **Span A below Span B**
-   (bearish cloud) for a short, at both the last closed bar and the far
-   end of the future-cloud window (shift `1 − Kijun`). A buy never opens
-   under a red cloud.
+     angled with the trade: rising for a long, falling for a short. A kijun
+     moving against the trade, or one whose values are unavailable, also
+     blocks the entry.
+2. **Cloud bias** — the cloud must carry the trade's bias on both the top
+   timeframe and the filter timeframe: **Span A above Span B** (bullish
+   cloud) for a long, **Span A below Span B** (bearish cloud) for a short,
+   at both the last closed bar and the far end of the future-cloud window
+   (shift `1 − Kijun`). A buy never opens under a red cloud.
 
 The cloud-bias condition is inspired by the Kumo breakout EA (section
-17) — its alignment check also requires the kumo twist — applied on the
-two timeframes that matter for a multi-hour trend entry. The kumo build's
+17) — its alignment check also requires the kumo twist. The kumo build's
 *thick-cloud* and *future-cloud angle* requirements were deliberately
 **not** ported; the bias alone is the gate.
 
 | Parameter | Default | Description |
 |-----------|---------|--------------|
-| `InpKijunStartEnabled` | `true` | Master switch for the M15 kijun-start filter |
-| `InpKijunFlatPoints` | 30 | Flatness tolerance (points): 3 kijun values within this of each other = flat |
-| `InpCloudBiasEnabled` | `true` | Master switch for the H4+M15 cloud bias filter |
+| `InpTopTF` | `TOP_H4` | 0 = H4 stack (H4→M1), 1 = H1 stack (H1→M1) |
+| `InpKijunStartEnabled` | `true` | Master switch for the kijun-start filter |
+| `InpKijunFlatPoints` | 30 | H4 mode: flatness tolerance (points) for the M15 kijun (3 values within this = flat) |
+| `InpM5KijunFlatPoints` | 10 | H1 mode: flatness tolerance (points) for the M5 kijun (3 values within this = flat) |
+| `InpCloudBiasEnabled` | `true` | Master switch for the cloud bias filter |
 
 On gold (`GOLDm#`, 1 point = 0.01), 30 points is a third of a dollar —
-small enough that a genuinely flat kijun is still caught, large enough to
-ignore rounding noise.
+small enough that a genuinely flat M15 kijun is still caught, large
+enough to ignore rounding noise. 10 points is a tenth of a dollar for the
+faster-moving M5 kijun.
 
 ### Status & caveats
 
-- **Not yet backtested.** Suggested first pass: run the same symbol/period
-  with the filter groups on vs off to isolate each one's effect —
-  `InpKijunStartEnabled = false` + `InpCloudBiasEnabled = false` is
-  exactly the known H4-M1 VPS baseline.
+- **Not yet backtested.** Suggested first pass: per mode, run the same
+  symbol/period with the filter groups on vs off to isolate each one's
+  effect — `InpKijunStartEnabled = false` + `InpCloudBiasEnabled = false`
+  is exactly the known VPS baseline for that mode.
+- The two modes use distinct magic numbers (`20260846` / `20260847`), so
+  an H4-mode and an H1-mode instance can run on the same account/symbol
+  without colliding. The live VPS EAs use `20260815` (H4) and `20260814`
+  (H1) — when replacing a live EA, either close its open positions first
+  or point this build's magic at the live values so it adopts them.
 - The filters necessarily delay entries: the first bar of a real move can
   still have a flat kijun, and this build will sit those signals out until
   the kijun angles and the clouds carry the right bias.
@@ -1902,5 +1920,5 @@ ignore rounding noise.
   with the trade; the older leg may be flat or already moving — i.e. both
   a *starting* move and a *continuing* one qualify, so long as the whole
   three-value shape is not flat. Tighten to "older two flat, newest
-  breaking out" by editing `CheckM15KijunStart()` if backtests show
-  entries too late in the move.
+  breaking out" by editing `CheckKijunStart()` if backtests show entries
+  too late in the move.
