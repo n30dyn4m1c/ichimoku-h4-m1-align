@@ -788,8 +788,10 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double
 
    int filled = 0;
    firstFill = 0.0;
-   string tag = (InpTopTF == TOP_H4) ? "Buy H4-M1" : "Buy H1-M1";
-   string tags = (InpTopTF == TOP_H4) ? "Sell H4-M1" : "Sell H1-M1";
+   // Distinct order comments so trades from this experimental build are
+   // identifiable in the account history vs. the live VPS EAs.
+   string tag = (InpTopTF == TOP_H4) ? "Buy ExpH4-M1" : "Buy ExpH1-M1";
+   string tags = (InpTopTF == TOP_H4) ? "Sell ExpH4-M1" : "Sell ExpH1-M1";
    for(int i = 0; i < count; i++)
    {
       double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
