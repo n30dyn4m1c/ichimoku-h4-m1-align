@@ -1762,19 +1762,21 @@ tests the concern that breakouts are preceded by flat, choppy areas:
   directional index in the trade direction must sit in the window
   **(17, 26]** — a buy needs 17 < +DI <= 26, a sell 17 < -DI <= 26.
   Below 17 the breakout is too weak, above 26 it is overextended —
-  either way, no trade. The +DI/-DI lines must also have crossed at
-  most once over the last **9** periods; more than one crossover in
-  that window means the lines are chopping — consolidation — and the
-  breakout is not traded. Unreadable values block the entry
-  (conservative).
+  either way, no trade. The trade-direction DI must also **dominate**
+  the other DI (+DI > -DI for a buy, -DI > +DI for a sell) so the
+  cross-back exit is well defined. And the +DI/-DI lines must have
+  crossed **exactly once** over the last **9** periods: no crossover
+  = no setup (the lines haven't just turned), more than one =
+  consolidation — either way, no trade. Unreadable values block the
+  entry (conservative).
 - **Angled kijun:** the kijun must also be angled *in the breakout
   direction* — rising for a long, falling for a short — so the cross fires
   with the trend, not against it.
-- **Exit:** hold the trade until the trade-direction DI crosses over the
-  other DI line or the ADX line — whichever comes first. A long exits on
-  the closed bar where +DI crossed below -DI or below ADX; a short is
-  the mirror with -DI. The exit log says which cross fired. The ATR(M1)
-  stop loss is the only other way out.
+- **Exit:** close when the trade-direction DI crosses back over the
+  other DI line — a long exits on the closed bar where +DI crossed
+  below -DI, a short where -DI crossed below +DI. Because entry
+  requires the DI to dominate, the cross back is always still ahead of
+  the trade. The ATR(M1) stop loss is the only other way out.
 - **Risk:** one fixed position of `InpFixedLots` (default 0.10) by
   default — flip `InpUseFixedLots` off to get the H4-M1 VPS equity-tiered
   ladder sizing, `CapToRisk` and `CapToMargin`. Either way: ATR(M1) stop
@@ -1802,13 +1804,13 @@ entering when the kijun is angled in the trade direction raises the win
 rate enough to pay for the later, higher-risk entries it accepts.
 
 The ADX(51) filters add a second layer to that same concern: the
-directional index must be strong (above 17) and clean (no more than one
-+DI/-DI crossover in the last 9 periods) at the breakout — strength
-without chop — and not overextended (26 cap) so the breakout isn't
-chased at its end. The exit then lets the trade run for as long as the
-directional push itself lasts: the position is held until the trade's DI
-crosses over the other DI or the ADX line, whichever arrives first — the
-momentum that opened the trade is the momentum that closes it.
+directional index must be strong (above 17), not overextended (26 cap),
+dominant over the other DI, and the +DI/-DI lines must have crossed
+exactly once in the last 9 periods — a fresh, clean turn with strength
+but no chop. The exit then lets the trade run for as long as the
+directional push itself lasts: the position is held until the DI lines
+cross back over again — the momentum that opened the trade is the
+momentum that closes it.
 
 ### Crossover possibilities (three ADX lines, six directed events)
 
@@ -1817,19 +1819,18 @@ directions — six events total:
 
 | Event | Meaning | Used by this EA |
 |---|---|---|
-| +DI crosses **above** -DI | Buy momentum overtakes sell momentum | — (buy entry window; sell exit) |
-| +DI crosses **below** -DI | Buy momentum lost to sell momentum | **Long exit** |
+| +DI crosses **above** -DI | Buy momentum overtakes sell momentum | **Buy setup** (one such cross in the 9-period window) |
+| +DI crosses **below** -DI | Buy momentum lost to sell momentum | **Long exit** (cross back) |
 | +DI crosses **above** ADX | Buy momentum stronger than average | — |
-| +DI crosses **below** ADX | Buy momentum fading below average | **Long exit** |
+| +DI crosses **below** ADX | Buy momentum fading below average | — |
 | -DI crosses **above** ADX | Sell momentum stronger than average | — |
-| -DI crosses **below** ADX | Sell momentum fading below average | **Short exit** |
+| -DI crosses **below** ADX | Sell momentum fading below average | — |
 
-The mirror events for a short are -DI crossing **below** +DI (sell exit)
-and -DI crossing **below** ADX (sell exit). The reverse-direction events
-(+DI above -DI, +DI above ADX, -DI above ADX) are not exits — they are
-the surge side, relevant for opposite-direction entries. The exit takes
-whichever of its two fade events arrives first on a closed bar, or the
-ATR stop.
+The mirror events for a short are -DI crossing **above** +DI (sell
+setup) and -DI crossing **below** +DI (short exit, cross back). The
+ADX-line crosses are not used — ADX(51) is roughly the average of the
+DIs, so a DI crossing ADX is a lagged echo of the DI/DI cross. The
+trade exits on the cross back, or the ATR stop.
 
 ### Status & caveats
 
@@ -1845,3 +1846,54 @@ ATR stop.
 - Single-timeframe by design — the tradeoff being tested is the flat
   filter itself, not multi-TF agreement. `TF_M1` is a single constant at
   the top of the file if a higher timeframe is ever wanted.
+
+---
+
+## 18. H4-M1 Kijun-Start VPS EA (M15 kijun momentum entry filter)
+
+**File:** `experimental-h4-m1-kijun-start-vps-ea.mq5` (Magic `20260846`)
+
+A fork of the live **H4-M1 VPS build** (`ichimoku-h4-m1-vps-ea.mq5`) —
+entry, exit, BE30, trail and risk are byte-identical — with **one extra
+entry gate**: after the full H4→M1 alignment fires, the EA does a final
+check on the **last 3 values of the M15 kijun**:
+
+- **Flat kijun → no entry.** If all three values sit within
+  `InpKijunFlatPoints` (default 30 points) of each other, the kijun is
+  flat and the entry is skipped entirely.
+- **Starting to move + angle in the trade direction → entry.** The kijun
+  must have *broken out* of the flat tolerance with its newest value
+  angled with the trade: rising for a long (`kijun[1] > kijun[2] +
+  tolerance`), falling for a short. A kijun moving against the trade, or
+  one whose values are unavailable, also blocks the entry.
+
+The idea, mirroring the Kumo breakout build (section 17): alignment alone
+can fire while the M15 kijun is still flat from consolidation — the
+multi-hour structure says "long" but the short-term engine has not
+turned yet. This filter waits for the M15 kijun to actually start moving
+in the trade's direction before committing. Entries are gated; exits,
+trail, BE30 and risk are untouched.
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpKijunStartEnabled` | `true` | Master switch for the M15 kijun-start filter |
+| `InpKijunFlatPoints` | 30 | Flatness tolerance (points): 3 kijun values within this of each other = flat |
+
+On gold (`GOLDm#`, 1 point = 0.01), 30 points is a third of a dollar —
+small enough that a genuinely flat kijun is still caught, large enough to
+ignore rounding noise.
+
+### Status & caveats
+
+- **Not yet backtested.** Suggested first pass: run the same symbol/period
+  with `InpKijunStartEnabled = false` as the known H4-M1 VPS baseline,
+  then with it on — the delta is exactly the filter's effect.
+- The filter necessarily delays entries: the first M15 bar of a real
+  move can still have a flat kijun, and this build will sit those
+  signals out until the kijun angles.
+- Only the newest kijun leg (`shift 1` vs `shift 2`) is required to point
+  with the trade; the older leg may be flat or already moving — i.e. both
+  a *starting* move and a *continuing* one qualify, so long as the whole
+  three-value shape is not flat. Tighten to "older two flat, newest
+  breaking out" by editing `CheckM15KijunStart()` if backtests show
+  entries too late in the move.

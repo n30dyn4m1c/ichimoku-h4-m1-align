@@ -15,17 +15,14 @@
 //|        breakout direction too                                     |
 //| Momentum: ADX(51) with key levels 9, 17 and 26 — at the breakout |
 //|        the DI in the trade direction must sit in the window       |
-//|        (17, 26]: a buy needs 17 < +DI <= 26, a sell 17 < -DI <=   |
-//|        26 (below 17 = too weak, above 26 = overextended, no       |
-//|        trade), and the +DI/-DI lines must have crossed at most    |
-//|        once over the last 9 periods; more than one crossover =    |
-//|        consolidation, no trade                                    |
-//| Exit:  hold the trade until the trade-direction DI crosses over   |
-//|        the other DI line or the ADX line — whichever comes first  |
-//|        (all six pairwise crossover events among +DI, -DI, ADX     |
-//|        exist; a long exits on +DI crossing below -DI or below     |
-//|        ADX, a short on -DI crossing below +DI or below ADX);      |
-//|        ATR(M1) stop loss as the only other way out                |
+//|        (17, 26] (below 17 = too weak, above 26 = overextended,    |
+//|        no trade) and dominate the other DI (+DI > -DI for a buy,  |
+//|        -DI > +DI for a sell); the +DI/-DI lines must have crossed |
+//|        exactly once over the last 9 periods — no crossover = no   |
+//|        setup, more than one = consolidation, no trade             |
+//| Exit:  close when the trade-direction DI crosses back over the    |
+//|        other DI line (+DI/-DI cross back); ATR(M1) stop loss as   |
+//|        the only other way out                                     |
 //| Risk:  one fixed position (InpFixedLots, default 0.10) instead of |
 //|        the equity-tiered ladder by default — flip InpUseFixedLots |
 //|        for the VPS ladder sizing; ATR(M1) stop loss on every      |
@@ -309,21 +306,13 @@ bool KijunAngled(int s, int dir, double atrVal)
 
 //==============================================================
 // ADX (period 51) filters. Key levels: 9 (crossover-count window),
-// 17 (+DI/-DI strength gate), 26 (reserved). The trade is only
-// opened when, at the breakout, the DI in the trade direction
-// exceeds 17 and the +DI/-DI lines have crossed at most once over
-// the last 9 periods (more than one crossover = consolidation).
-// The exit holds until +DI and -DI cross over, or +DI and ADX
-// cross over, whichever comes first.
+// 17 (+DI/-DI strength gate), 26 (overextension cap). The trade is
+// only opened when, at the breakout, the DI in the trade direction
+// sits in (17, 26] and dominates the other DI, and the +DI/-DI
+// lines crossed exactly once over the last 9 periods (no cross =
+// no setup; more than one cross = consolidation). The exit closes
+// when the DI lines cross back over again.
 //==============================================================
-
-double GetADX(int s)
-{
-   if(adx[s] == INVALID_HANDLE) return 0.0;
-   double d[1];
-   if(CopyBuffer(adx[s], 0, 1, 1, d) <= 0 || d[0] <= 0) return 0.0;
-   return d[0];
-}
 
 // +DI (buy, buffer 1) or -DI (sell, buffer 2) on the last closed bar
 double GetDIDir(int s, int dir)
@@ -350,16 +339,14 @@ bool DIOverextended(int s, int dir)
    return GetDIDir(s, dir) > InpADXLevel26;
 }
 
-// Count +DI/-DI crossovers over the last InpADXWindow9 periods. More
-// than one crossover means the lines are chopping — consolidation —
-// and the breakout is not traded. 0 or 1 crossover is fine.
-// Unreadable values count as consolidated (block the entry).
-bool DIConsolidated(int s)
+// Count +DI/-DI crossovers over the last InpADXWindow9 periods.
+// Returns -1 when the values can't be read.
+int DICrossCount(int s)
 {
    int n = MathMax(InpADXWindow9, 2);
    double dPlus[], dMinus[];
-   if(CopyBuffer(adx[s], 1, 1, n, dPlus)  <= 0) return true;
-   if(CopyBuffer(adx[s], 2, 1, n, dMinus) <= 0) return true;
+   if(CopyBuffer(adx[s], 1, 1, n, dPlus)  <= 0) return -1;
+   if(CopyBuffer(adx[s], 2, 1, n, dMinus) <= 0) return -1;
    ArraySetAsSeries(dPlus, true);
    ArraySetAsSeries(dMinus, true);
 
@@ -370,29 +357,33 @@ bool DIConsolidated(int s)
       double prev = dPlus[i+1] - dMinus[i+1];
       if((now >= 0 && prev < 0) || (now < 0 && prev >= 0)) crosses++;
    }
-   return crosses > 1;
+   return crosses;
 }
 
-// Exit: hold the trade until +DI and -DI cross over, or +DI and ADX
-// cross over, whichever comes first. Returns 1 on a DI/DI cross,
-// 2 on a DI/ADX cross, 0 if neither happened on the last closed bar.
-// A long exits when +DI crossed below the other line; a short is the
-// mirror with -DI.
-int CheckADXCrossoverExit(int s, int dir)
+// The trade-direction DI must dominate the other DI at entry so the
+// cross-back exit is well defined — a buy needs +DI > -DI, a sell
+// needs -DI > +DI. Unreadable values block the entry (conservative).
+bool DIDominates(int s, int dir)
 {
-   double mine[2], other[2], adxL[2];
-   int bufMine = (dir == 1) ? 1 : 2;
-   int bufOther = (dir == 1) ? 2 : 1;
-   if(CopyBuffer(adx[s], bufMine,  1, 2, mine)  <= 0) return 0;
-   if(CopyBuffer(adx[s], bufOther, 1, 2, other) <= 0) return 0;
-   if(CopyBuffer(adx[s], 0,        1, 2, adxL)  <= 0) return 0;
-   // non-series copy: index 0 = previous closed bar, index 1 = last closed bar
+   double plus[1], minus[1];
+   if(CopyBuffer(adx[s], 1, 1, 1, plus)  <= 0) return false;
+   if(CopyBuffer(adx[s], 2, 1, 1, minus) <= 0) return false;
+   return (dir == 1) ? plus[0] > minus[0] : minus[0] > plus[0];
+}
 
-   // crossed below the other DI within the last closed bar
-   if(mine[1] < other[1] && mine[0] >= other[0]) return 1;
-   // crossed below the ADX line within the last closed bar
-   if(mine[1] < adxL[1] && mine[0] >= adxL[0])   return 2;
-   return 0;
+// Exit: close when the trade-direction DI crosses back below the other
+// DI line — a long exits on the closed bar where +DI crossed below -DI,
+// a short where -DI crossed below +DI. A trade entered with the DI
+// dominating is guaranteed to have this event still ahead of it.
+bool CheckDICrossExit(int s, int dir)
+{
+   int bufMine  = (dir == 1) ? 1 : 2;
+   int bufOther = (dir == 1) ? 2 : 1;
+   double mine[2], other[2];
+   if(CopyBuffer(adx[s], bufMine,  1, 2, mine)  <= 0) return false;
+   if(CopyBuffer(adx[s], bufOther, 1, 2, other) <= 0) return false;
+   // non-series copy: index 0 = previous closed bar, index 1 = last closed bar
+   return mine[1] < other[1] && mine[0] >= other[0];
 }
 
 //==============================================================
@@ -613,18 +604,16 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: hold until +DI and -DI cross over, or +DI and ADX
-      // cross over — whichever comes first (a long exits when +DI
-      // crossed below the other line; a short is the mirror with -DI)
+      // Exit check: close when the trade-direction DI crosses back
+      // below the other DI line (a long exits when +DI crossed below
+      // -DI; a short when -DI crossed below +DI)
       if(state[s] != 0)
       {
-         int cross = CheckADXCrossoverExit(s, state[s]);
-         if(cross != 0)
+         if(CheckDICrossExit(s, state[s]))
          {
             string side = (state[s] == 1) ? "Long" : "Short";
             string di   = (state[s] == 1) ? "+DI" : "-DI";
-            string why  = (cross == 1) ? di + "/DI crossover" : di + "/ADX crossover";
-            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (" + why + ")";
+            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (" + di + "/DI cross back)";
             Print(msg); SendNotification(msg);
 
             if(ClosePositions(syms[s]))
@@ -694,10 +683,33 @@ void OnTick()
                continue;
             }
 
-            if(DIConsolidated(s))
+            if(!DIDominates(s, dir))
             {
                if(InpLogSkips)
-                  Print(PCTime() + " | " + syms[s] + " kumo breakout but +DI/-DI crossed more than once in last " + IntegerToString(InpADXWindow9) + " periods (consolidation) — no trade");
+               {
+                  string di = (dir == 1) ? "+DI" : "-DI";
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but " + di + " not above the other DI — no trade");
+               }
+               continue;
+            }
+
+            int crosses = DICrossCount(s);
+            if(crosses < 0)
+            {
+               if(InpLogSkips)
+                  Print(PCTime() + " | " + syms[s] + " ADX values unreadable — entry skipped");
+               continue;
+            }
+            if(crosses == 0)
+            {
+               if(InpLogSkips)
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but no +DI/-DI crossover in last " + IntegerToString(InpADXWindow9) + " periods — no trade");
+               continue;
+            }
+            if(crosses > 1)
+            {
+               if(InpLogSkips)
+                  Print(PCTime() + " | " + syms[s] + " kumo breakout but +DI/-DI crossed " + IntegerToString(crosses) + " times in last " + IntegerToString(InpADXWindow9) + " periods (consolidation) — no trade");
                continue;
             }
 
