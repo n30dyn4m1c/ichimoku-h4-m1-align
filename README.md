@@ -138,10 +138,10 @@ always-on desktop or laptop; use the VPS builds on the VPS.
 
 ### Deploying the VPS builds (`utilities/deploy.sh`)
 
-`utilities/deploy.sh` downloads the two VPS EAs straight into the local MT5
-`MQL5/Experts` folder — no copy-paste or clipboard needed (handy over VNC
-where clipboard sync is flaky). Run it on the machine that runs MT5 (the
-VPS):
+`utilities/deploy.sh` downloads the VPS EA (`ichimoku-h4-m1-vps-ea.mq5`)
+straight into the local MT5 `MQL5/Experts` folder — no copy-paste or
+clipboard needed (handy over VNC where clipboard sync is flaky). Run it on
+the machine that runs MT5 (the VPS):
 
 ```bash
 # install once
@@ -161,8 +161,8 @@ chmod +x deploy.sh
 - Optional branch argument: `./deploy.sh <branch>` downloads from that
   branch instead of `master`.
 - After it finishes: in MetaEditor refresh the Navigator, press **F7** to
-  compile both files, then remove and re-attach (or restart MT5) so the
-  running EAs pick up the new `.ex5` builds.
+  compile the file, then remove and re-attach (or restart MT5) so the
+  running EA picks up the new `.ex5` build.
 
 #### Auto-deploy on push (`utilities/auto-deploy.sh`)
 

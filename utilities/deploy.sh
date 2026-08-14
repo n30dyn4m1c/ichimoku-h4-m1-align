@@ -8,7 +8,7 @@ set -euo pipefail
 
 BRANCH="${1:-master}"
 REPO_URL="https://raw.githubusercontent.com/n30dyn4m1c/ichimoku-h4-m1-align/${BRANCH}"
-EAS=(ichimoku-h4-m1-vps-ea.mq5 ichimoku-h1-m1-vps-ea.mq5)
+EAS=(ichimoku-h4-m1-vps-ea.mq5)
 
 # Locate the MT5 Experts folder (Wine data or install dir), unless overridden.
 if [[ -z "${MT5_DATA:-}" ]]; then
@@ -35,4 +35,4 @@ for ea in "${EAS[@]}"; do
 done
 
 echo
-echo "Done. In MetaEditor: refresh Navigator, compile both (F7), reload the EAs."
+echo "Done. In MetaEditor: refresh Navigator, compile the file (F7), reload the EA."
