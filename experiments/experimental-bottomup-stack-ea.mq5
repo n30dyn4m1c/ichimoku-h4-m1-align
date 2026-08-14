@@ -20,13 +20,18 @@
 //|        close, with profit protection once it turns green:         |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
 //|                         H1/H4 levels) -> SL to entry + cover      |
-//|          Spike lock   : profit >= InpSpikeLockATR x ATR -> ATR    |
-//|                         chandelier trail behind the peak, only    |
-//|                         ever tightens (VPS-style)                 |
+//|          Chandelier   : H1/H4 levels trail the stop behind the    |
+//|                         peak once profitable (InpTrailActivateATR);|
+//|                         M5/M15/M30 keep the spike-gated trail     |
+//|                         (InpSpikeLockATR), only ever tightening   |
 //|        ATR comes from each level's own TF.                        |
 //| Risk:  single position per level per symbol; levels run           |
 //|        concurrently (up to 5 per symbol); each level re-enters    |
-//|        independently whenever its chain re-aligns.                |
+//|        independently whenever its chain re-aligns. Lot sizing is  |
+//|        risk-based per level: M5/M15/M30 1%, H1 5%, H4 10% of      |
+//|        equity per trade, measured against ATR(level TF) x         |
+//|        InpRiskATRMult — so risk scales with equity automatically. |
+//|        No initial stop loss.                                      |
 //| Magic: 20260848 — fresh, distinct from the live VPS builds        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -41,20 +46,27 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-input group  "Position Sizing"
-input double InpLots = 0.10;        // Fixed lots per level position
+input group  "Risk Management (per level, % of equity)"
+input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
+input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
+input double InpRiskPctM5       = 1.0;    // M5   — smallest risk per trade
+input double InpRiskPctM15      = 1.0;    // M15  — smallest risk per trade
+input double InpRiskPctM30      = 1.0;    // M30  — smallest risk per trade
+input double InpRiskPctH1       = 5.0;    // H1   — medium risk per trade
+input double InpRiskPctH4       = 10.0;   // H4   — highest risk per trade
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group  "Profit Protection"
-input int    InpATRPeriod      = 14;    // ATR period (each level uses its own TF's ATR)
-input double InpBEProfitATR    = 1.0;   // BE arms once profit >= this x ATR (M5/M15/M30 levels)
-input double InpBEProfitH1H4   = 0.5;   // BE arms once profit >= this x ATR (H1/H4 levels — tighter)
-input int    InpBECoverPoints  = 15;    // Points beyond entry for the BE stop (covers spread)
-input double InpSpikeLockATR   = 2.0;   // Chandelier trail arms once profit >= this x ATR (spike lock)
-input double InpTrailATR       = 1.5;   // Trail distance behind the peak, x ATR (level TF)
+input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
+input double InpBEProfitATR       = 1.0;   // BE arms once profit >= this x ATR (M5/M15/M30 levels)
+input double InpBEProfitH1H4      = 0.5;   // BE arms once profit >= this x ATR (H1/H4 levels — tighter)
+input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE stop (covers spread)
+input double InpSpikeLockATR      = 2.0;   // Chandelier trail arms once profit >= this x ATR (M5/M15/M30 spike lock)
+input double InpTrailActivateATR  = 1.0;   // H1/H4 chandelier trail arms once profit >= this x ATR
+input double InpTrailATR          = 1.5;   // Trail distance behind the peak, x ATR (level TF)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -371,17 +383,88 @@ bool SpreadOK(string sym)
 }
 
 //==============================================================
+// Risk Management — per-level risk as a % of equity, scaling
+// automatically as equity grows. Each level risks its own
+// percentage of equity (M5 smallest -> H4 largest) against a
+// reference distance of ATR(level TF) x InpRiskATRMult, the same
+// ATR-based sizing philosophy as the H4 VPS build. More equity
+// -> more risk money -> bigger lots at the same ATR distance.
+// Falls back to InpFixedLots when the sizing data is unavailable,
+// and every order is capped to the free margin so it fills fully.
+//==============================================================
+
+double LevelRiskPct(int lvl)
+{
+   switch(lvl)
+   {
+      case 0:  return InpRiskPctM5;
+      case 1:  return InpRiskPctM15;
+      case 2:  return InpRiskPctM30;
+      case 3:  return InpRiskPctH1;
+      case 4:  return InpRiskPctH4;
+   }
+   return 0.0;
+}
+
+double RiskLots(int s, int lvl)
+{
+   double riskPct = LevelRiskPct(lvl);
+   if(riskPct <= 0) return InpFixedLots;
+
+   double a[1];
+   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
+   double stopDist = a[0] * InpRiskATRMult;
+
+   double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0 || tickSize <= 0) return InpFixedLots;
+
+   double moneyPerLot = (stopDist / tickSize) * tickValue;
+   if(moneyPerLot <= 0) return InpFixedLots;
+
+   double riskMoney = AccountInfoDouble(ACCOUNT_EQUITY) * (riskPct / 100.0);
+   double lots      = riskMoney / moneyPerLot;
+
+   double lotStep = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_STEP);
+   double lotMin  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN);
+   double lotMax  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MAX);
+   if(lotStep > 0) lots = MathFloor(lots / lotStep) * lotStep;
+   lots = MathMax(lotMin, MathMin(lotMax, lots));
+
+   return (lots > 0) ? lots : InpFixedLots;
+}
+
+// Scale a single order down to the free margin so it fills fully.
+// lots never drops below the broker minimum.
+void CapLotsToMargin(string sym, bool isBuy, double &lots)
+{
+   if(lots <= 0) return;
+   double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                        : SymbolInfoDouble(sym, SYMBOL_BID);
+   double marginOne = 0.0;
+   if(!OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, sym, lots, price, marginOne))
+      return;
+   if(marginOne <= 0) return;
+   double maxLots = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * lots / marginOne;
+   double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   double lotMin  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   if(lotStep > 0) maxLots = MathFloor(maxLots / lotStep) * lotStep;
+   maxLots = MathMax(lotMin, maxLots);
+   if(lots > maxLots) lots = maxLots;
+}
+
+//==============================================================
 // Trading Functions
 //==============================================================
 
-bool OpenLevel(int s, int lvl, int dir)
+bool OpenLevel(int s, int lvl, int dir, double lots)
 {
    string sym = syms[s];
    string comment = LevelComment(lvl, dir);
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
-   bool ok = (dir == 1) ? trade.Buy(InpLots, sym, price, 0, 0, comment)
-                        : trade.Sell(InpLots, sym, price, 0, 0, comment);
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, 0, 0, comment)
+                        : trade.Sell(lots, sym, price, 0, 0, comment);
    if(ok)
    {
       state[s][lvl] = dir;
@@ -391,7 +474,7 @@ bool OpenLevel(int s, int lvl, int dir)
       beMoved[s][lvl]    = false;
       string action = (dir == 1) ? "Buy" : "Sell";
       string msg = PCTime() + " | " + action + " " + sym + " " + tfName[lvl + 1] +
-                   " @ " + DoubleToString(InpLots, 2) + " (bottom-up)";
+                   " @ " + DoubleToString(lots, 2) + " (bottom-up)";
       Print(msg); SendNotification(msg);
    }
    return ok;
@@ -437,10 +520,12 @@ bool CloseLevelPositions(int s, int lvl)
 //     threshold (InpBEProfitATR x ATR for M5/M15/M30, the tighter
 //     InpBEProfitH1H4 x ATR for H1/H4), the stop moves to entry
 //     plus InpBECoverPoints. One-shot per trade (beMoved).
-//   * Spike lock — once profit >= InpSpikeLockATR x ATR, an ATR
-//     chandelier trails the stop behind the peak (highest high /
-//     lowest low of the level TF, including the bar still forming),
-//     only ever tightening and never inside the broker minimum.
+//   * Chandelier trail — H1/H4 levels trail the stop behind the
+//     peak once profitable by InpTrailActivateATR x ATR; the
+//     lower levels arm it only on a spike (InpSpikeLockATR x ATR).
+//     The reference is the highest high / lowest low of the level
+//     TF, including the bar still forming; it only ever tightens
+//     and never sits inside the broker minimum stop.
 // ATR comes from the level's own TF, so H4/H1 protection is sized
 // to those timeframes. There is still no initial stop loss.
 //==============================================================
@@ -520,15 +605,19 @@ void ManageLevelProtection(int s, int lvl)
       }
    }
 
-   // Spike lock: once the trade spiked into profit, chandelier the stop
-   // behind the peak. Only ever tightens, keeps out of the broker minimum
-   // stop distance, and skips microscopic improvements (0.3x ATR).
+   // Chandelier trail behind the peak. H1/H4 levels get the full
+   // chandelier: it arms once the trade is profitable by InpTrailActivateATR
+   // x ATR so long-running higher-TF trades are always protected. The lower
+   // levels keep the spike-gated trail (InpSpikeLockATR x ATR). Only ever
+   // tightens, keeps out of the broker minimum stop distance, and skips
+   // microscopic improvements (0.3x ATR).
    // Re-read the current stop first — the BE block above may have moved it.
    if(!LevelTicket(s, lvl, ticket)) return;
    slCur = PositionGetDouble(POSITION_SL);
 
-   bool armed = isLong ? (bid >= entryPrice[s][lvl] + InpSpikeLockATR * atrVal)
-                       : (ask <= entryPrice[s][lvl] - InpSpikeLockATR * atrVal);
+   double armATR = (lvl >= 3) ? InpTrailActivateATR : InpSpikeLockATR;
+   bool armed = isLong ? (bid >= entryPrice[s][lvl] + armATR * atrVal)
+                       : (ask <= entryPrice[s][lvl] - armATR * atrVal);
    if(armed)
    {
       double slNew = isLong ? peakHigh[s][lvl] - InpTrailATR * atrVal
@@ -606,7 +695,11 @@ void OnTick()
             {
                if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
 
-               if(!OpenLevel(s, l, st))
+               // Size: per-level risk % of equity vs ATR(level TF) x multiplier, capped to free margin
+               double lots = RiskLots(s, l);
+               CapLotsToMargin(syms[s], (st == 1), lots);
+
+               if(!OpenLevel(s, l, st, lots))
                   Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] +
                         " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
             }
