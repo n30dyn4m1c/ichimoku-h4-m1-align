@@ -16,8 +16,14 @@
 //| Exit:  the level's own TF bar closes back inside its cloud.       |
 //|        Long  -> close below the cloud's upper edge (inside/under) |
 //|        Short -> close above the cloud's lower edge (inside/over)  |
-//|        No initial stop loss, no trail, no break-even, no time     |
-//|        cap — the trade runs until the cloud close.                |
+//|        No initial stop loss — the trade runs until the cloud      |
+//|        close, with profit protection once it turns green:         |
+//|          Break-even   : profit >= ATR threshold (tighter for the  |
+//|                         H1/H4 levels) -> SL to entry + cover      |
+//|          Spike lock   : profit >= InpSpikeLockATR x ATR -> ATR    |
+//|                         chandelier trail behind the peak, only    |
+//|                         ever tightens (VPS-style)                 |
+//|        ATR comes from each level's own TF.                        |
 //| Risk:  single position per level per symbol; levels run           |
 //|        concurrently (up to 5 per symbol); each level re-enters    |
 //|        independently whenever its chain re-aligns.                |
@@ -42,6 +48,14 @@ input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
+input group  "Profit Protection"
+input int    InpATRPeriod      = 14;    // ATR period (each level uses its own TF's ATR)
+input double InpBEProfitATR    = 1.0;   // BE arms once profit >= this x ATR (M5/M15/M30 levels)
+input double InpBEProfitH1H4   = 0.5;   // BE arms once profit >= this x ATR (H1/H4 levels — tighter)
+input int    InpBECoverPoints  = 15;    // Points beyond entry for the BE stop (covers spread)
+input double InpSpikeLockATR   = 2.0;   // Chandelier trail arms once profit >= this x ATR (spike lock)
+input double InpTrailATR       = 1.5;   // Trail distance behind the peak, x ATR (level TF)
+
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
 #define LEVELS   5      // tradable levels: M5, M15, M30, H1, H4
@@ -51,11 +65,17 @@ ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIO
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 
 int      ich[MAX_SYMS][TFS];
+int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
-int      state[MAX_SYMS][LEVELS];   // per level: 0 = flat, 1 = long, -1 = short
+int      state[MAX_SYMS][LEVELS];     // per level: 0 = flat, 1 = long, -1 = short
 int      lastMinuteKey = -1;
+
+double   entryPrice[MAX_SYMS][LEVELS];   // reference entry price per level (BE + trail arming)
+double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chandelier reference)
+double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
+bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
 int MAGIC = 20260848;   // fresh — bottom-up stack experiment (20260846/47 are the live VPS builds)
 
@@ -93,12 +113,25 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       lastM1bar[s] = 0;
-      for(int l = 0; l < LEVELS; l++) state[s][l] = 0;
+      for(int l = 0; l < LEVELS; l++)
+      {
+         state[s][l] = 0;
+         entryPrice[s][l] = 0.0;
+         peakHigh[s][l]   = 0.0;
+         peakLow[s][l]    = 0.0;
+         beMoved[s][l]    = false;
+      }
 
       for(int t = 0; t < TFS; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+      }
+
+      for(int l = 0; l < LEVELS; l++)
+      {
+         atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
+         if(atr[s][l] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
@@ -111,8 +144,12 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
+   {
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
+      for(int l = 0; l < LEVELS; l++)
+         if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
+   }
 }
 
 //==============================================================
@@ -126,11 +163,19 @@ string LevelComment(int lvl, int dir)
 
 // Rebuild per-level state from the positions on the account so a restart
 // mid-trade resumes the correct levels. The position comment carries the
-// level (e.g. "Exp Buy M15").
+// level (e.g. "Exp Buy M15"). Entry/peak/BE memory is rebuilt from the
+// open price for a restart mid-trade and cleared when the level is flat.
 void SyncStateFromPositions()
 {
+   bool hasPos[MAX_SYMS][LEVELS];
    for(int s = 0; s < symsCount; s++)
-      for(int l = 0; l < LEVELS; l++) state[s][l] = 0;
+   {
+      for(int l = 0; l < LEVELS; l++)
+      {
+         state[s][l] = 0;
+         hasPos[s][l] = false;
+      }
+   }
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -152,7 +197,34 @@ void SyncStateFromPositions()
          for(int l = 0; l < LEVELS; l++)
          {
             if(comm == LevelComment(l, 1) || comm == LevelComment(l, -1))
+            {
                state[s][l] = dir;
+               hasPos[s][l] = true;
+               // EA (re)started mid-trade — rebuild the peak reference from
+               // the open price and let it accumulate fresh extremes from here
+               if(entryPrice[s][l] == 0.0)
+               {
+                  entryPrice[s][l] = PositionGetDouble(POSITION_PRICE_OPEN);
+                  peakHigh[s][l]   = entryPrice[s][l];
+                  peakLow[s][l]    = entryPrice[s][l];
+               }
+               break;
+            }
+         }
+      }
+   }
+
+   // Levels with no open position get their protection memory cleared
+   for(int s = 0; s < symsCount; s++)
+   {
+      for(int l = 0; l < LEVELS; l++)
+      {
+         if(!hasPos[s][l])
+         {
+            entryPrice[s][l] = 0.0;
+            peakHigh[s][l]   = 0.0;
+            peakLow[s][l]    = 0.0;
+            beMoved[s][l]    = false;
          }
       }
    }
@@ -306,11 +378,17 @@ bool OpenLevel(int s, int lvl, int dir)
 {
    string sym = syms[s];
    string comment = LevelComment(lvl, dir);
-   bool ok = (dir == 1) ? trade.Buy(InpLots, sym, SymbolInfoDouble(sym, SYMBOL_ASK), 0, 0, comment)
-                        : trade.Sell(InpLots, sym, SymbolInfoDouble(sym, SYMBOL_BID), 0, 0, comment);
+   double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                             : SymbolInfoDouble(sym, SYMBOL_BID);
+   bool ok = (dir == 1) ? trade.Buy(InpLots, sym, price, 0, 0, comment)
+                        : trade.Sell(InpLots, sym, price, 0, 0, comment);
    if(ok)
    {
       state[s][lvl] = dir;
+      entryPrice[s][lvl] = price;   // BE + spike-lock trail references
+      peakHigh[s][lvl]   = price;
+      peakLow[s][lvl]    = price;
+      beMoved[s][lvl]    = false;
       string action = (dir == 1) ? "Buy" : "Sell";
       string msg = PCTime() + " | " + action + " " + sym + " " + tfName[lvl + 1] +
                    " @ " + DoubleToString(InpLots, 2) + " (bottom-up)";
@@ -351,6 +429,123 @@ bool CloseLevelPositions(int s, int lvl)
           PositionGetString(POSITION_COMMENT) == LevelComment(lvl, -1))) return false;
    }
    return true;
+}
+
+//==============================================================
+// Profit Protection (VPS-style systems, per level):
+//   * Break-even — once the trade is in profit by >= the ATR
+//     threshold (InpBEProfitATR x ATR for M5/M15/M30, the tighter
+//     InpBEProfitH1H4 x ATR for H1/H4), the stop moves to entry
+//     plus InpBECoverPoints. One-shot per trade (beMoved).
+//   * Spike lock — once profit >= InpSpikeLockATR x ATR, an ATR
+//     chandelier trails the stop behind the peak (highest high /
+//     lowest low of the level TF, including the bar still forming),
+//     only ever tightening and never inside the broker minimum.
+// ATR comes from the level's own TF, so H4/H1 protection is sized
+// to those timeframes. There is still no initial stop loss.
+//==============================================================
+
+bool LevelTicket(int s, int lvl, ulong &ticket)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != syms[s]) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
+      string comm = PositionGetString(POSITION_COMMENT);
+      if(comm == LevelComment(lvl, 1) || comm == LevelComment(lvl, -1)) return true;
+   }
+   return false;
+}
+
+void ManageLevelProtection(int s, int lvl)
+{
+   int dir = state[s][lvl];
+   if(dir == 0) return;
+
+   double a[1];
+   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
+   double atrVal = a[0];
+
+   // The reference point is the extreme of the level-TF bar that is still
+   // forming, so a peak is locked in before it retraces
+   MqlRates tfx[];
+   if(CopyRates(syms[s], tfs[lvl + 1], 0, 1, tfx) <= 0) return;
+   ArraySetAsSeries(tfx, true);
+
+   bool isLong = (dir == 1);
+   if(isLong)
+   {
+      if(tfx[0].high > peakHigh[s][lvl]) peakHigh[s][lvl] = tfx[0].high;
+   }
+   else
+   {
+      if(tfx[0].low < peakLow[s][lvl]) peakLow[s][lvl] = tfx[0].low;
+   }
+
+   double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
+   int    digits  = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+
+   ulong ticket;
+   if(!LevelTicket(s, lvl, ticket)) return;
+   double slCur = PositionGetDouble(POSITION_SL);
+
+   double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
+   double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
+
+   // Break-even: tighter arming threshold on the long-running H1/H4 levels
+   double beATR = (lvl >= 3) ? InpBEProfitH1H4 : InpBEProfitATR;
+   if(!beMoved[s][lvl])
+   {
+      bool armed = isLong ? (bid >= entryPrice[s][lvl] + beATR * atrVal)
+                          : (ask <= entryPrice[s][lvl] - beATR * atrVal);
+      if(armed)
+      {
+         double slNew = isLong ? entryPrice[s][lvl] + InpBECoverPoints * point
+                               : entryPrice[s][lvl] - InpBECoverPoints * point;
+         slNew = NormalizeDouble(slNew, digits);
+
+         bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist)
+                          : (slNew < slCur - point && slNew > ask + minDist);
+         if(ok)
+         {
+            if(!trade.PositionModify(ticket, slNew, 0))
+               Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " BE SL modify failed, retcode " +
+                     IntegerToString(trade.ResultRetcode()));
+            else
+               beMoved[s][lvl] = true;
+         }
+      }
+   }
+
+   // Spike lock: once the trade spiked into profit, chandelier the stop
+   // behind the peak. Only ever tightens, keeps out of the broker minimum
+   // stop distance, and skips microscopic improvements (0.3x ATR).
+   // Re-read the current stop first — the BE block above may have moved it.
+   if(!LevelTicket(s, lvl, ticket)) return;
+   slCur = PositionGetDouble(POSITION_SL);
+
+   bool armed = isLong ? (bid >= entryPrice[s][lvl] + InpSpikeLockATR * atrVal)
+                       : (ask <= entryPrice[s][lvl] - InpSpikeLockATR * atrVal);
+   if(armed)
+   {
+      double slNew = isLong ? peakHigh[s][lvl] - InpTrailATR * atrVal
+                            : peakLow[s][lvl] + InpTrailATR * atrVal;
+      slNew = NormalizeDouble(slNew, digits);
+
+      bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist &&
+                          slNew - slCur >= 0.3 * atrVal)
+                       : (slNew < slCur - point && slNew > ask + minDist &&
+                          slCur - slNew >= 0.3 * atrVal);
+      if(ok)
+      {
+         if(!trade.PositionModify(ticket, slNew, 0))
+            Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " trail SL modify failed, retcode " +
+                  IntegerToString(trade.ResultRetcode()));
+      }
+   }
 }
 
 //==============================================================
@@ -398,6 +593,9 @@ void OnTick()
             else
                Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry");
          }
+
+         // Profit protection: BE + spike-lock chandelier trail
+         if(state[s][l] != 0) ManageLevelProtection(s, l);
 
          // Entry check: the level is flat and the full chain M1..level TF
          // aligns in one direction (plus spread and cloud bias gates)
