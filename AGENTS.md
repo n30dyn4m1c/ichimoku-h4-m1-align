@@ -15,3 +15,12 @@ VPS files (by name pattern):
 
 Unless the user explicitly states that a VPS file should be updated, leave
 them untouched — even when a change applies to all other EAs.
+
+## MT5 desktop EA file — editable
+
+- `ichimoku-h4-m1-mt5pc-ea.mq5` — the single desktop build, dual-mode
+  like the VPS file but with `Alert()` popups and the weekly equity alert
+  restored (magics `20260830` H4 / `20260831` H1). It replaced the two
+  former desktop files on 2026-08-14; the archived originals live in
+  `archives/`.
+

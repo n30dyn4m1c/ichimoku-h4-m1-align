@@ -16,24 +16,24 @@ terminal alerts restored):
 | EA | File | Timeframes | Exit signal | Magic |
 |----|------|------------|-------------|-------|
 | **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` (dual-mode via `InpTopTF`) | H4 → M1 (6 TFs) or H1 → M1 (5 TFs) | M15 Kijun cross / M5 Kijun cross | `20260846` / `20260847` |
-| **H4-M1 MT5 Desktop** | `ichimoku-h4-m1-mt5pc-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260830` |
-| **H1-M1 MT5 Desktop** | `ichimoku-h1-m1-mt5pc-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260831` |
+| **H4-M1 MT5 Desktop** | `ichimoku-h4-m1-mt5pc-ea.mq5` (dual-mode via `InpTopTF`) | H4 → M1 (6 TFs) or H1 → M1 (5 TFs) | M15 Kijun cross / M5 Kijun cross | `20260830` / `20260831` |
 
 All builds share the same entry rules, risk protection, and equity-sizing
 logic — they differ only in which timeframes must agree, which lower
 timeframe's Kijun triggers the exit, and whether they're tuned for unattended
-VPS use. Every build carries its own magic number, so all four can run on the
-same account, even on the same symbol, without interfering with each other.
+VPS use. Every build carries its own magic number, so all four stacks can run on
+the same account, even on the same symbol, without interfering with each other.
 The single VPS file covers both stacks — set `InpTopTF` to `TOP_H4` for the
-H4→M1 stack or `TOP_H1` for the H1→M1 stack. See
+H4→M1 stack or `TOP_H1` for the H1→M1 stack, and the single MT5 desktop file
+does the same with its own magics (`20260830` H4 / `20260831` H1). See
 [VPS Deployment Builds](#vps-deployment-builds) for what the VPS variants
 add on top.
 
 **Repository layout:**
 
 - `ichimoku-h4-m1-vps-ea.mq5` — the live VPS build (dual-mode H4-M1 / H1-M1; do not modify; see AGENTS.md)
-- `ichimoku-h4-m1-mt5pc-ea.mq5`, `ichimoku-h1-m1-mt5pc-ea.mq5` — MT5 desktop copies with alerts
-- `archives/` — older standard builds and archived versions (incl. the 2026-08-14 archived VPS originals)
+- `ichimoku-h4-m1-mt5pc-ea.mq5` — MT5 desktop build (dual-mode H4-M1 / H1-M1) with alerts
+- `archives/` — older standard builds and archived versions (incl. the 2026-08-14 archived VPS and desktop originals)
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `utilities/` — deployment scripts and the Python monitor
 
@@ -98,7 +98,7 @@ differs from the desktop builds in a few practical ways:
   `InpCheckDay`, `InpResetBaseline`) and the `InpSendPush` toggle are removed
   entirely. Every entry/exit sends a `SendNotification` push and a journal
   `Print`; the terminal `Alert()` popups are dropped to keep the VPS session
-  quiet. The `*-mt5pc-ea.mq5` desktop copies restore both the `Alert()`
+  quiet. The `*-mt5pc-ea.mq5` desktop build restores both the `Alert()`
   popups and the weekly equity alert.
 - **Re-entry cooldown.** `InpReentryCooldownSec` (default `0`) adds a minimum
   wait in seconds after an exit before the same symbol can be re-entered —
@@ -120,21 +120,22 @@ differs from the desktop builds in a few practical ways:
   trailing stop skips microscopic improvements (less than 0.3×ATR) to cut
   broker request volume.
 
-The VPS builds carry their own magic numbers (`20260815` for H4-M1,
-`20260814` for H1-M1), so they can run alongside the desktop builds and
-each other on the same account. The [kihon suchi time-theory filter](#time-theory-filter-kihon-suchi)
-code has been removed from the VPS builds entirely (no edge in A/B runs);
+The VPS build carries its own magic numbers (`20260846` for the H4 stack,
+`20260847` for the H1 stack), so it can run alongside the desktop build and
+they can share the same account. The [kihon suchi time-theory filter](#time-theory-filter-kihon-suchi)
+code has been removed from the VPS build entirely (no edge in A/B runs);
 it lives only in the standard/experimental builds for testing.
 
 ### MT5 desktop builds (`*-mt5pc-ea.mq5`)
 
-`ichimoku-h4-m1-mt5pc-ea.mq5` and `ichimoku-h1-m1-mt5pc-ea.mq5` are
-byte-for-byte copies of the VPS builds' logic (same gating, exits, trail,
-BE30, risk caps) with the desktop conveniences restored: `Alert()` popups on
+`ichimoku-h4-m1-mt5pc-ea.mq5` is the desktop counterpart of the dual-mode
+VPS build — a copy of its logic (same gating, exits, trail, BE30, risk
+caps, and `InpTopTF` mode switch, with desktop magics `20260830` H4 /
+`20260831` H1) with the desktop conveniences restored: `Alert()` popups on
 every entry/exit and the weekly equity-withdrawal alert with its
 `InpMinProfitTrigger` / `InpWithdrawProfitPct` / `InpCheckDay` /
-`InpResetBaseline` / `InpSendPush` inputs. Use these on a normal
-always-on desktop or laptop; use the VPS builds on the VPS.
+`InpResetBaseline` / `InpSendPush` inputs. Use this on a normal
+always-on desktop or laptop; use the VPS build on the VPS.
 
 ### Deploying the VPS builds (`utilities/deploy.sh`)
 
@@ -420,7 +421,7 @@ withdraw funds automatically.
 
 ### Installation
 
-1. Download the build you want from this repository. For hands-on desktop trading use `ichimoku-h4-m1-mt5pc-ea.mq5` and/or `ichimoku-h1-m1-mt5pc-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the single dual-mode `ichimoku-h4-m1-vps-ea.mq5` (`InpTopTF = TOP_H4` for the H4→M1 stack, `TOP_H1` for the H1→M1 stack) — it can share the account with the desktop builds — see [VPS Deployment Builds](#vps-deployment-builds).
+1. Download the build you want from this repository. For hands-on desktop trading use `ichimoku-h4-m1-mt5pc-ea.mq5` (`InpTopTF = TOP_H4` for the H4→M1 stack, `TOP_H1` for the H1→M1 stack). For unattended 24/7 deployment use the single dual-mode `ichimoku-h4-m1-vps-ea.mq5` — it can share the account with the desktop build — see [VPS Deployment Builds](#vps-deployment-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
@@ -513,11 +514,11 @@ standard counterparts.
 
 ## Technical Notes
 
-- **Magic numbers:** `20260815` (H4-M1 VPS), `20260814` (H1-M1 VPS),
+- **Magic numbers:** `20260846` (H4-M1 VPS), `20260847` (H1-M1 VPS),
   `20260830` (H4-M1 MT5 desktop), `20260831` (H1-M1 MT5 desktop) — each EA
   only identifies and manages its own positions by its magic
   number, so they won't interfere with other EAs, each other, or manual
-  trades on the same account. All four main builds can run together.
+  trades on the same account. All main builds can run together.
 - **State recovery:** on every tick, `SyncStateFromPositions()` rebuilds per-symbol direction state from currently open positions filtered by magic number. This means the EA recovers correctly after a terminal restart, VPS reboot, or a position closed manually/by stop loss — no stale state is left behind.
 - **Per-symbol M1 gating:** each symbol only re-evaluates entry/exit logic once per newly closed M1 bar for that symbol, avoiding redundant checks on every tick.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]` in price data rather than the Ichimoku buffer, avoiding an offset bug where reading Chikou from the indicator buffer silently degrades it into a lagged copy of the price check. See inline comments in `CheckAlign()` for the full offset derivation.
@@ -527,7 +528,7 @@ standard counterparts.
 ## Experimental EAs
 
 All experimental strategies live in [`experiments/`](experiments/), each
-prefixed `experimental-` to keep them clearly separate from the four main
+prefixed `experimental-` to keep them clearly separate from the main
 builds at the repo root. The set includes a PO3-enhanced
 variant of the H4-M1 alignment EA (`experimental-h4-m1-po3-ea.mq5`), an
 Ichimoku time-theory mean-reversion EA (`experimental-h1-m1-reversion-ea.mq5`),
