@@ -17,9 +17,14 @@
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
 //|        candle close inside the kumo). A long exits when the bid |
 //|        touches the cloud's upper edge; a short when the ask     |
-//|        touches the lower edge. No entry stop loss in this test  |
-//|        build — the trade runs until the touch, with the profit  |
-//|        protection layer taking over once it turns green:        |
+//|        touches the lower edge. A very strong REJECTION candle   |
+//|        against the trade also closes it (sweeps the recent      |
+//|        swing extreme of InpRejSwingBars bars, wick >=           |
+//|        InpRejWickPct of the range, close in the outer           |
+//|        InpRejClosePct — all four conditions must hold). No      |
+//|        entry stop loss in this test build — the trade runs      |
+//|        until an exit, with the profit protection layer taking   |
+//|        over once it turns green:                                |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
 //|                         H1/H4 levels) -> SL to entry + cover      |
 //|          Chandelier   : H1/H4 levels trail the stop behind the    |
@@ -73,6 +78,12 @@ input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE sto
 input double InpSpikeLockATR      = 2.0;   // Chandelier trail arms once profit >= this x ATR (M5/M15/M30 spike lock)
 input double InpTrailActivateATR  = 0.5;   // H1/H4 chandelier trail arms once profit >= this x ATR
 input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR (level TF)
+
+input group  "Rejection Exit (strong rejection candle)"
+input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
+input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the rejection candle must sweep
+input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
+input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -668,6 +679,85 @@ void ManageLevelProtection(int s, int lvl)
 }
 
 //==============================================================
+// Rejection Candle Exit: closes a trade when a VERY STRONG
+// rejection forms against it on the tier TF (last closed bar).
+// All four conditions must hold — a swing sweep plus a dominant
+// wick plus a strong close-back on a candle whose body opposes
+// the trade:
+//   Bearish rejection (kills a LONG):
+//     - bearish body (c1 < o1)
+//     - takes out the swing high of the previous
+//       InpRejSwingBars bars (h1 > highest high before it)
+//     - upper wick >= InpRejWickPct of the candle's total range
+//     - close in the bottom InpRejClosePct of the range
+//       (closed strongly back from the sweep high)
+//   Bullish rejection (kills a SHORT): mirrored.
+// Returns 1 (bullish), -1 (bearish), 0 (none).
+//==============================================================
+
+int RejectionCandle(int s, int tfIdx)
+{
+   int need = 2 + InpRejSwingBars;
+   MqlRates r[];
+   if(CopyRates(syms[s], tfs[tfIdx], 0, need, r) < need) return 0;
+   ArraySetAsSeries(r, true);
+
+   double o1 = r[1].open, c1 = r[1].close, h1 = r[1].high, l1 = r[1].low;
+
+   // Swing extreme of the InpRejSwingBars bars before the rejection candle
+   double swingHi = r[2].high, swingLo = r[2].low;
+   for(int i = 3; i < need; i++)
+   {
+      if(r[i].high > swingHi) swingHi = r[i].high;
+      if(r[i].low  < swingLo) swingLo = r[i].low;
+   }
+
+   double range = h1 - l1;
+   if(range <= 0) return 0;
+
+   // Bearish rejection: sweeps the swing high and closes strongly back
+   if(c1 < o1 && h1 > swingHi)
+   {
+      double upperWick = h1 - o1;               // bearish: high minus open
+      double closeBack = c1 - l1;               // distance closed back from the low
+      if(upperWick >= InpRejWickPct * range &&
+         closeBack <= InpRejClosePct * range)
+         return -1;
+   }
+
+   // Bullish rejection: sweeps the swing low and closes strongly back
+   if(c1 > o1 && l1 < swingLo)
+   {
+      double lowerWick = o1 - l1;               // bullish: open minus low
+      double closeBack = h1 - c1;               // distance closed back from the high
+      if(lowerWick >= InpRejWickPct * range &&
+         closeBack <= InpRejClosePct * range)
+         return 1;
+   }
+   return 0;
+}
+
+// Close a level's positions with a notification; returns true only
+// when nothing remains open, so a failed close is retried next bar.
+bool ExitLevel(int s, int l, string reason)
+{
+   string side = (state[s][l] == 1) ? "Long" : "Short";
+   string msg  = PCTime() + " | Close " + syms[s] + " " + side + " " +
+                 tfName[l + 1] + " (" + reason + ")";
+   Print(msg); SendNotification(msg);
+
+   if(CloseLevelPositions(s, l))
+   {
+      state[s][l] = 0;
+      msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " level closed";
+      Print(msg); SendNotification(msg);
+      return true;
+   }
+   Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry");
+   return false;
+}
+
+//==============================================================
 // Main Loop
 //==============================================================
 
@@ -698,20 +788,16 @@ void OnTick()
       {
          // Exit check: price touched the level TF's cloud edge
          if(state[s][l] != 0 && InCloudTouch(s, l + 1, state[s][l]))
-         {
-            string side = (state[s][l] == 1) ? "Long" : "Short";
-            string msg  = PCTime() + " | Close " + syms[s] + " " + side + " " +
-                          tfName[l + 1] + " (kumo touch)";
-            Print(msg); SendNotification(msg);
+            ExitLevel(s, l, "kumo touch");
 
-            if(CloseLevelPositions(s, l))
-            {
-               state[s][l] = 0;
-               msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " level closed";
-               Print(msg); SendNotification(msg);
-            }
-            else
-               Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry");
+         // Rejection exit: a very strong rejection candle formed on
+         // the tier TF against the trade (bearish kills a long,
+         // bullish kills a short)
+         if(InpRejectionExit && state[s][l] != 0)
+         {
+            int rj = RejectionCandle(s, l + 1);
+            if(rj != 0 && rj == -state[s][l])
+               ExitLevel(s, l, "rejection");
          }
 
          // Profit protection: BE + spike-lock chandelier trail
