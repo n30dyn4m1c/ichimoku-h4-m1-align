@@ -1,18 +1,17 @@
 //+------------------------------------------------------------------+
 //| Ichimoku Bottom-Up Stack EA (EXPERIMENT)                          |
 //| Entry: same per-TF alignment as the H4 VPS build (price + chikou  |
-//|        above/below tenkan, kijun and cloud), but checked BOTTOM-UP|
-//|        instead of top-down:                                       |
-//|          Level M5 : M1 + M5 aligned              -> open trade    |
-//|          Level M15: M1 + M5 + M15 aligned        -> open trade    |
-//|          Level M30: M1 + M5 + M15 + M30 aligned  -> open trade    |
-//|          Level H1 : M1 ... H1 aligned            -> open trade    |
-//|          Level H4 : M1 ... H4 aligned            -> open trade    |
+//|        above/below tenkan, kijun and cloud), checked BOTTOM-UP:   |
+//|        a tier opens only when the full stack M1..tier TF is       |
+//|        aligned in one direction:                                  |
+//|          Tier M5 : M1 + M5 aligned              -> open trade     |
+//|          Tier M15: M1 + M5 + M15 aligned        -> open trade     |
+//|          Tier M30: M1 + M5 + M15 + M30 aligned  -> open trade     |
+//|          Tier H1 : M1 ... H1 aligned            -> open trade     |
+//|          Tier H4 : M1 ... H4 aligned            -> open trade     |
 //|        M1 alone never trades — it is only the start of the stack. |
-//|        A level can only open when every lower TF still holds the  |
-//|        trade's direction (full chain M1->level). The cloud bias   |
-//|        gate (Span A vs Span B) applies to the level TF and the TF |
-//|        directly below it.                                         |
+//|        The cloud bias gate (Span A vs Span B) applies to the tier |
+//|        TF and the TF directly below it.                           |
 //| Exit:  the level's own TF bar closes back inside its cloud.       |
 //|        Long  -> close below the cloud's upper edge (inside/under) |
 //|        Short -> close above the cloud's lower edge (inside/over)  |
@@ -27,11 +26,11 @@
 //|        ATR comes from each level's own TF.                        |
 //| Risk:  single position per level per symbol; levels run           |
 //|        concurrently (up to 5 per symbol); each level re-enters    |
-//|        independently whenever its chain re-aligns. Lot sizing is  |
-//|        risk-based per level: M5/M15/M30 1%, H1 5%, H4 10% of      |
-//|        equity per trade, measured against ATR(level TF) x         |
-//|        InpRiskATRMult — so risk scales with equity automatically. |
-//|        No initial stop loss.                                      |
+//|        independently whenever its pair re-agrees. Lot sizing is   |
+//|        a fixed % of the ACTUAL equity at entry per tier:          |
+//|        M5 5%, M15 7%, M30 10%, H1 15%, H4 20%, measured against   |
+//|        ATR(level TF) x InpRiskATRMult. No multipliers, no         |
+//|        streak compounding. No initial stop loss.                  |
 //| Magic: 20260848 — fresh, distinct from the live VPS builds        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -46,14 +45,14 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-input group  "Risk Management (per level, % of equity)"
+input group  "Risk Management (per level, % of equity at entry)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
 input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
-input double InpRiskPctM5       = 1.0;    // M5   — smallest risk per trade
-input double InpRiskPctM15      = 1.0;    // M15  — smallest risk per trade
-input double InpRiskPctM30      = 1.0;    // M30  — smallest risk per trade
-input double InpRiskPctH1       = 5.0;    // H1   — medium risk per trade
-input double InpRiskPctH4       = 10.0;   // H4   — highest risk per trade
+input double InpRiskPctM5       = 5.0;    // M5   — % of equity risked per trade
+input double InpRiskPctM15      = 7.0;    // M15  — % of equity risked per trade
+input double InpRiskPctM30      = 10.0;   // M30  — % of equity risked per trade
+input double InpRiskPctH1       = 15.0;   // H1   — % of equity risked per trade
+input double InpRiskPctH4       = 20.0;   // H4   — % of equity risked per trade
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
@@ -342,8 +341,8 @@ bool LevelCloudBiasOK(int s, int lvl, int dir)
 //==============================================================
 // Exit Check: the level TF's last closed bar closes back inside
 // its cloud (or beyond it — a long that closes below the cloud,
-// a short that closes above it). This is the only exit: no SL,
-// no trail, no break-even.
+// a short that closes above it). This is the trade's main exit;
+// the BE/chandelier stop is the profit-protection layer on top.
 //==============================================================
 
 bool InCloudClose(int s, int tfIdx, int dir)
@@ -383,14 +382,15 @@ bool SpreadOK(string sym)
 }
 
 //==============================================================
-// Risk Management — per-level risk as a % of equity, scaling
-// automatically as equity grows. Each level risks its own
-// percentage of equity (M5 smallest -> H4 largest) against a
-// reference distance of ATR(level TF) x InpRiskATRMult, the same
-// ATR-based sizing philosophy as the H4 VPS build. More equity
-// -> more risk money -> bigger lots at the same ATR distance.
-// Falls back to InpFixedLots when the sizing data is unavailable,
-// and every order is capped to the free margin so it fills fully.
+// Risk Management — per-level risk as a fixed % of the ACTUAL
+// equity at entry (M5 5%, M15 7%, M30 10%, H1 15%, H4 20%),
+// measured against a reference distance of ATR(level TF) x
+// InpRiskATRMult, the same ATR-based sizing philosophy as the
+// H4 VPS build. More equity -> more risk money -> bigger lots at
+// the same ATR distance; no floating-P/L compounding and no
+// multipliers on top. Falls back to InpFixedLots when the sizing
+// data is unavailable, and every order is capped to the free
+// margin so it fills fully.
 //==============================================================
 
 double LevelRiskPct(int lvl)
