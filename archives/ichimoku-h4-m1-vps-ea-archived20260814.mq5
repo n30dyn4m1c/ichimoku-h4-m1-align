@@ -1,26 +1,9 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Alignment EA (BE30) — VPS build (merged dual-mode)      |
-//| Entry: InpTopTF = H4 -> H4→M1 price+chikou all above/below        |
-//|        tenkan,kijun,cloud (was the live H4 VPS build)             |
-//|        InpTopTF = H1 -> H1→M1 price+chikou all above/below        |
-//|        tenkan,kijun,cloud (was the live H1 VPS build)             |
-//| This single file replaces BOTH former VPS builds:                |
-//|        ichimoku-h4-m1-vps-ea.mq5 and ichimoku-h1-m1-vps-ea.mq5   |
-//|        (the archived 2026-08-14 originals live in archives/)      |
-//| Entry filters (experimental additions to the VPS logic):         |
-//|        kijun-start filter — if the last 3 values of the kijun on  |
-//|        the filter TF are flat (within the flatness tolerance),    |
-//|        NO entry. Entry only when that kijun is starting to move   |
-//|        with its angle in the direction of the trade (rising for   |
-//|        long, falling for short). Filter TF: M15 kijun in H4 mode, |
-//|        M5 kijun in H1 mode. Plus a cloud bias gate: the top-TF    |
-//|        cloud and the filter-TF cloud must carry the trade's bias  |
-//|        (Span A above Span B for a long, below for a short).       |
-//|        H4 mode: H4 + M15; H1 mode: H1 + M5                        |
-//| Exit:  ATR chandelier trailing stop once profitable (locks in     |
-//|        the peak), kijun cross on the exit TF (M15 kijun in H4     |
-//|        mode, M5 kijun in H1 mode) as final fallback, or ATR-based |
-//|        protective stop loss                                       |
+//| Ichimoku H4-M1 Alignment EA (BE30) — VPS build                   |
+//| Entry: H4→M1 price+chikou all above/below tenkan,kijun,cloud    |
+//| Exit:  ATR chandelier trailing stop once profitable (locks in    |
+//|        the peak), M15 close crosses M15 kijun as final fallback, |
+//|        or ATR-based protective stop loss                         |
 //| Experiment: if price reaches a profitable position within        |
 //|        InpBE30Minutes of entry, the stop loss moves up to        |
 //|        break even + a few points to cover the spread (BE30)      |
@@ -41,12 +24,6 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-//--- Mode: which VPS build this instance runs (top timeframe of the stack)
-enum ENUM_TOP_TF { TOP_H4 = 0, TOP_H1 = 1 };
-
-input group  "Mode"
-input ENUM_TOP_TF InpTopTF = TOP_H4;   // 0 = H4 stack (H4->M1, M15 exit/filter), 1 = H1 stack (H1->M1, M5 exit/filter)
-
 input group  "Risk Protection"
 input bool   InpUseStopLoss       = true;   // Attach ATR-based stop loss to every entry
 input int    InpATRPeriod         = 14;     // ATR period (M15)
@@ -61,9 +38,9 @@ enum ENUM_TRAIL_MODE { TRAIL_OFF = 0, TRAIL_ALWAYS = 1, TRAIL_CHOPPY = 2 };
 
 input group  "Exit Management"
 input ENUM_TRAIL_MODE InpTrailMode        = TRAIL_CHOPPY;  // 0=off, 1=always, 2=choppy-only (ADX)
-input double          InpTrailATR         = 2.0;   // Trail distance = ATR(exit TF) * multiplier (M15 in H4 mode, M5 in H1 mode)
-input double          InpTrailActivateATR = 1.0;   // Arm the trail once profit >= ATR(exit TF) * multiplier
-input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (exit TF)
+input double          InpTrailATR         = 2.0;   // Trail distance = ATR(M15) * multiplier
+input double          InpTrailActivateATR = 1.0;   // Arm the trail once profit >= ATR(M15) * multiplier
+input int             InpADXPeriod        = 14;    // ADX period for choppy-market detection (M15)
 input double          InpChopADXLevel     = 22.0;  // ADX below this = choppy -> trail on in auto mode
 
 input group  "Break-Even (BE30) Management"
@@ -72,27 +49,18 @@ input int    InpBE30Minutes        = 30;     // Profit window after entry (minut
 input double InpBE30ActivateATR    = 0.5;    // Min profit to arm BE (x ATR M15)
 input int    InpBE30CoverPoints    = 15;     // Points beyond break even (covers spread)
 
-input group  "Kijun Start Filter (EXPERIMENT)"
-input bool   InpKijunStartEnabled  = true;   // Require kijun starting to move in trade direction
-input int    InpKijunFlatPoints    = 30;     // H4 mode: flatness tolerance (points) for the M15 kijun (3 values within this = flat)
-input int    InpM5KijunFlatPoints  = 10;     // H1 mode: flatness tolerance (points) for the M5 kijun (3 values within this = flat)
-
-input group  "Cloud Bias Filter (EXPERIMENT)"
-input bool   InpCloudBiasEnabled  = true;   // Require cloud bias with the trade (Span A vs Span B) on the top TF and the filter TF
-
 //--- Constants and Global Variables ---
 #define MAX_SYMS  60
-#define MAX_TFS   6
+#define TF_COUNT  6
+#define IDX_M15   3   // index of M15 in tfs[] — used for exit check
 
-ENUM_TIMEFRAMES tfs[MAX_TFS];   // filled by SetupTimeframes() per InpTopTF
-int             tfCount  = 0;   // number of timeframes in the active stack
-int             idxKjTF  = 3;   // index of the kijun-start filter TF in tfs[]
-int             idxExitTF = 3;  // index of the exit kijun TF in tfs[] (also trail/ADX TF)
+ENUM_TIMEFRAMES tfs[TF_COUNT] = {
+   PERIOD_H4, PERIOD_H1, PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1
+};
 
-int      ich[MAX_SYMS][MAX_TFS];
-int      atr[MAX_SYMS];          // ATR(M15) — SL distance and BE30 activation (both modes)
-int      atrExit[MAX_SYMS];      // ATR(exit TF) handle for the chandelier trail
-int      adx[MAX_SYMS];          // ADX(exit TF) handle for choppy-market regime detection
+int      ich[MAX_SYMS][TF_COUNT];
+int      atr[MAX_SYMS];
+int      adx[MAX_SYMS];   // ADX(M15) handle for choppy-market regime detection
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -107,7 +75,7 @@ double   trailLow[MAX_SYMS];    // lowest low since entry (short chandelier refe
 datetime entryTime[MAX_SYMS];   // entry time per symbol (BE30 profit window)
 bool     beMoved[MAX_SYMS];     // BE30 stop already moved to break even (one-shot)
 
-int MAGIC = 20260846;   // per mode: 20260846 = H4 stack, 20260847 = H1 stack
+int MAGIC = 20260815;   // fresh number — 20260812 was already used by the BE15 build
 
 CTrade trade;
 
@@ -135,33 +103,8 @@ int ParseSymbols(string list)
    return cnt;
 }
 
-// Build the timeframe stack for the selected mode. The exit/filter TF
-// (index 3) is M15 in H4 mode and M5 in H1 mode.
-void SetupTimeframes()
-{
-   if(InpTopTF == TOP_H4)
-   {
-      tfCount = 6;
-      tfs[0] = PERIOD_H4;  tfs[1] = PERIOD_H1;  tfs[2] = PERIOD_M30;
-      tfs[3] = PERIOD_M15; tfs[4] = PERIOD_M5;  tfs[5] = PERIOD_M1;
-      idxKjTF   = 3;   // M15
-      idxExitTF = 3;   // M15
-   }
-   else
-   {
-      tfCount = 5;
-      tfs[0] = PERIOD_H1;  tfs[1] = PERIOD_M30; tfs[2] = PERIOD_M15;
-      tfs[3] = PERIOD_M5;  tfs[4] = PERIOD_M1;
-      idxKjTF   = 3;   // M5
-      idxExitTF = 3;   // M5
-   }
-}
-
 int OnInit()
 {
-   SetupTimeframes();
-   MAGIC = (InpTopTF == TOP_H4) ? 20260846 : 20260847;
-
    symsCount = ParseSymbols(Symbols);
    if(symsCount <= 0) return(INIT_FAILED);
 
@@ -172,7 +115,7 @@ int OnInit()
       noReentryUntil[s] = 0;
       entryTime[s] = 0;
       beMoved[s] = false;
-      for(int t = 0; t < tfCount; t++)
+      for(int t = 0; t < TF_COUNT; t++)
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
@@ -185,17 +128,10 @@ int OnInit()
          if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
-      atrExit[s] = INVALID_HANDLE;
-      if(InpTrailMode != TRAIL_OFF)
-      {
-         atrExit[s] = iATR(syms[s], tfs[idxExitTF], InpATRPeriod);
-         if(atrExit[s] == INVALID_HANDLE) return(INIT_FAILED);
-      }
-
       adx[s] = INVALID_HANDLE;
       if(InpTrailMode == TRAIL_CHOPPY)
       {
-         adx[s] = iADX(syms[s], tfs[idxExitTF], InpADXPeriod);
+         adx[s] = iADX(syms[s], PERIOD_M15, InpADXPeriod);
          if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
@@ -210,10 +146,9 @@ void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
    {
-      for(int t = 0; t < tfCount; t++)
+      for(int t = 0; t < TF_COUNT; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
-      if(atrExit[s] != INVALID_HANDLE) IndicatorRelease(atrExit[s]);
       if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
    }
 }
@@ -360,7 +295,7 @@ int CheckAllAlign(int s)
    int dir = CheckAlign(s, 0);
    if(dir == 0) return 0;
 
-   for(int t = 1; t < tfCount; t++)
+   for(int t = 1; t < TF_COUNT; t++)
    {
       if(CheckAlign(s, t) != dir) return 0;
    }
@@ -368,89 +303,21 @@ int CheckAllAlign(int s)
 }
 
 //==============================================================
-// Exit Check: close crosses the exit-TF kijun against the trade
-// (M15 kijun in H4 mode, M5 kijun in H1 mode)
+// Exit Check: M15 price closed on wrong side of M15 kijun
 //==============================================================
 
-bool CheckKijunExit(int s, int dir)
+bool CheckM15Exit(int s, int dir)
 {
    double kij[1];
-   if(CopyBuffer(ich[s][idxExitTF], 1, 1, 1, kij) <= 0) return false;
+   if(CopyBuffer(ich[s][IDX_M15], 1, 1, 1, kij) <= 0) return false;
 
    MqlRates rt[];
-   if(CopyRates(syms[s], tfs[idxExitTF], 1, 1, rt) <= 0) return false;
+   if(CopyRates(syms[s], PERIOD_M15, 1, 1, rt) <= 0) return false;
    double closeP = rt[0].close;
 
    if(dir ==  1 && closeP < kij[0]) return true;
    if(dir == -1 && closeP > kij[0]) return true;
    return false;
-}
-
-//==============================================================
-// EXPERIMENT — Kijun Start Filter: after full alignment, the
-// last 3 values of the kijun on the filter TF (M15 in H4 mode,
-// M5 in H1 mode) decide whether the entry is valid.
-//   * All 3 values flat (each step within the flatness tolerance)
-//     -> no entry
-//   * Kijun starting to move (newest value breaks out of the flat
-//     tolerance) with its angle in the trade direction -> entry
-// Kijun rising (newest > prior beyond tolerance) for a long,
-// falling for a short. Any other shape (moving against the trade,
-// or kijun data unavailable) also blocks the entry.
-//==============================================================
-
-bool CheckKijunStart(int s, int dir)
-{
-   double k[3];
-   // CopyBuffer fills chronological order: oldest first, newest last.
-   // k[0] = kijun at shift 3 — oldest of the three
-   // k[1] = kijun at shift 2
-   // k[2] = kijun at shift 1 (last closed bar) — newest
-   if(CopyBuffer(ich[s][idxKjTF], 1, 1, 3, k) <= 0) return false;
-
-   int tolPoints = (InpTopTF == TOP_H4) ? InpKijunFlatPoints : InpM5KijunFlatPoints;
-   double tol = tolPoints * SymbolInfoDouble(syms[s], SYMBOL_POINT);
-   if(tol <= 0) tol = 1e-10;
-
-   // All three kijun values within the flatness tolerance = flat, no entry
-   if(MathAbs(k[2] - k[1]) <= tol && MathAbs(k[1] - k[0]) <= tol) return false;
-
-   // Kijun must be starting to move with its angle in the trade direction
-   if(dir ==  1) return (k[2] > k[1] + tol);
-   if(dir == -1) return (k[2] < k[1] - tol);
-   return false;
-}
-
-//==============================================================
-// EXPERIMENT — Cloud Bias Filter: before entry, the cloud must
-// carry the trade's bias on both the top timeframe and the
-// filter timeframe (H4 + M15 in H4 mode, H1 + M5 in H1 mode):
-//   * Bias — Span A above Span B (bullish cloud) for a long, Span A
-//     below Span B (bearish cloud) for a short — at both the last
-//     closed bar and the far end of the future-cloud window (shift
-//     1 - Kijun). A buy never opens under a bearish cloud.
-// Unreadable values count as blocking (conservative).
-//==============================================================
-
-bool CloudBiasOK(int s, int tfIdx, int dir)
-{
-   double aNow[1], bNow[1], aFar[1], bFar[1];
-   if(CopyBuffer(ich[s][tfIdx], 2, 1,         1, aNow) <= 0) return false;
-   if(CopyBuffer(ich[s][tfIdx], 3, 1,         1, bNow) <= 0) return false;
-   if(CopyBuffer(ich[s][tfIdx], 2, 1 - Kijun, 1, aFar) <= 0) return false;
-   if(CopyBuffer(ich[s][tfIdx], 3, 1 - Kijun, 1, bFar) <= 0) return false;
-
-   if(dir == 1) return aNow[0] > bNow[0] && aFar[0] > bFar[0];
-   return aNow[0] < bNow[0] && aFar[0] < bFar[0];
-}
-
-// The cloud bias must hold on the top TF and the filter TF; anything
-// unreadable blocks.
-bool CloudFiltersOK(int s, int dir)
-{
-   if(!CloudBiasOK(s, 0, dir))       return false;
-   if(!CloudBiasOK(s, idxKjTF, dir)) return false;
-   return true;
 }
 
 //==============================================================
@@ -468,11 +335,10 @@ bool IsChoppy(int s)
 
 //==============================================================
 // Exit Trail: ATR chandelier stop once the trade is in profit.
-// The reference point is the extreme (high/low) of the exit-TF bar
-// (M15 in H4 mode, M5 in H1 mode) that is still forming, so a peak
-// is locked in before it retraces. Re-evaluated on every new M1
-// bar; only ever tightens and never sits inside the broker minimum
-// stop.
+// The reference point is the extreme (high/low) of the M15 bar
+// that is still forming, so a peak is locked in before it
+// retraces. Re-evaluated on every new M1 bar; only ever
+// tightens and never sits inside the broker minimum stop.
 //==============================================================
 
 void ManageTrail(int s)
@@ -481,23 +347,23 @@ void ManageTrail(int s)
    if(InpTrailMode == TRAIL_CHOPPY && !IsChoppy(s)) return;
 
    double atrVal;
-   if(atrExit[s] == INVALID_HANDLE) return;
+   if(atr[s] == INVALID_HANDLE) return;
    double a[1];
-   if(CopyBuffer(atrExit[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
+   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
    atrVal = a[0];
 
-   MqlRates tfx[];
-   if(CopyRates(syms[s], tfs[idxExitTF], 0, 1, tfx) <= 0) return;
-   ArraySetAsSeries(tfx, true);
+   MqlRates m15[];
+   if(CopyRates(syms[s], PERIOD_M15, 0, 1, m15) <= 0) return;
+   ArraySetAsSeries(m15, true);
 
    bool isLong = (state[s] == 1);
    if(isLong)
    {
-      if(tfx[0].high > trailHigh[s]) trailHigh[s] = tfx[0].high;
+      if(m15[0].high > trailHigh[s]) trailHigh[s] = m15[0].high;
    }
    else
    {
-      if(tfx[0].low < trailLow[s]) trailLow[s] = tfx[0].low;
+      if(m15[0].low < trailLow[s]) trailLow[s] = m15[0].low;
    }
 
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
@@ -675,48 +541,23 @@ double RiskBasedLots(string sym, double eq, double stopDist, int count)
 void GetEquityRisk(string sym, double stopDist, int &count, double &lots)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(InpTopTF == TOP_H4)
-   {
-      // H4 VPS ladder
-      if(eq <= 30)        { count = 4;  lots = 0.10; }
-      else if(eq <= 50)   { count = 4;  lots = 0.10; }
-      else if(eq <= 70)   { count = 8;  lots = 0.10; }
-      else if(eq <= 100)  { count = 8;  lots = 0.10; }
-      else if(eq <= 130)  { count = 12;  lots = 0.10; }
-      else if(eq <= 150)  { count = 16;  lots = 0.10; }
-      else if(eq <= 170)  { count = 20; lots = 0.10; }
-      else if(eq <= 200)  { count = 12;  lots = 0.20; }
-      else if(eq <= 300)  { count = 8;  lots = 0.30; }
-      else if(eq <= 400)  { count = 12;  lots = 0.30; }
-      else if(eq <= 500)  { count = 12;  lots = 0.30; }
-      else if(eq <= 600)  { count = 16;  lots = 0.30; }
-      else if(eq <= 1000) { count = 8;  lots = 0.50; }
-      else if(eq <= 3000) { count = 8;  lots = 0.30; }
-      else if(eq <= 5000) { count = 8;  lots = 0.20; }
-      else if(eq <= 8000) { count = 8;  lots = 0.10; }
-      else                { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count); }
-   }
-   else
-   {
-      // H1 VPS ladder
-      if(eq <= 30)        { count = 2;  lots = 0.10; }
-      else if(eq <= 50)   { count = 2;  lots = 0.10; }
-      else if(eq <= 70)   { count = 4;  lots = 0.10; }
-      else if(eq <= 100)  { count = 4;  lots = 0.10; }
-      else if(eq <= 130)  { count = 6;  lots = 0.10; }
-      else if(eq <= 150)  { count = 8;  lots = 0.10; }
-      else if(eq <= 170)  { count = 10; lots = 0.10; }
-      else if(eq <= 200)  { count = 6;  lots = 0.20; }
-      else if(eq <= 300)  { count = 4;  lots = 0.30; }
-      else if(eq <= 400)  { count = 6;  lots = 0.30; }
-      else if(eq <= 500)  { count = 6;  lots = 0.30; }
-      else if(eq <= 600)  { count = 8;  lots = 0.30; }
-      else if(eq <= 1000) { count = 4;  lots = 0.50; }
-      else if(eq <= 3000) { count = 4;  lots = 0.30; }
-      else if(eq <= 5000) { count = 4;  lots = 0.20; }
-      else if(eq <= 8000) { count = 4;  lots = 0.10; }
-      else                { count = 2;  lots = RiskBasedLots(sym, eq, stopDist, count); }
-   }
+   if(eq <= 30)        { count = 4;  lots = 0.10; }
+   else if(eq <= 50)   { count = 4;  lots = 0.10; }
+   else if(eq <= 70)   { count = 8;  lots = 0.10; }
+   else if(eq <= 100)  { count = 8;  lots = 0.10; }
+   else if(eq <= 130)  { count = 12;  lots = 0.10; }
+   else if(eq <= 150)  { count = 16;  lots = 0.10; }
+   else if(eq <= 170)  { count = 20; lots = 0.10; }
+   else if(eq <= 200)  { count = 12;  lots = 0.20; }
+   else if(eq <= 300)  { count = 8;  lots = 0.30; }
+   else if(eq <= 400)  { count = 12;  lots = 0.30; }
+   else if(eq <= 500)  { count = 12;  lots = 0.30; }
+   else if(eq <= 600)  { count = 16;  lots = 0.30; }
+   else if(eq <= 1000) { count = 8;  lots = 0.50; }
+   else if(eq <= 3000) { count = 8;  lots = 0.30; }
+   else if(eq <= 5000) { count = 8;  lots = 0.20; }
+   else if(eq <= 8000) { count = 8;  lots = 0.10; }
+   else                { count = 4;  lots = RiskBasedLots(sym, eq, stopDist, count); }
 }
 
 // Scale the ladder down so the initial stop on all orders risks at most
@@ -791,16 +632,14 @@ int OpenPositions(int s, bool isBuy, double dist, int count, double lots, double
 
    int filled = 0;
    firstFill = 0.0;
-   string tag = (InpTopTF == TOP_H4) ? "Buy H4-M1" : "Buy H1-M1";
-   string tags = (InpTopTF == TOP_H4) ? "Sell H4-M1" : "Sell H1-M1";
    for(int i = 0; i < count; i++)
    {
       double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_ASK)
                            : SymbolInfoDouble(sym, SYMBOL_BID);
       double sl = InpUseStopLoss ? BuildStopLoss(s, isBuy, price, dist) : 0.0;
 
-      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, tag)
-                      : trade.Sell(lots, sym, price, sl, 0, tags);
+      bool ok = isBuy ? trade.Buy(lots,  sym, price, sl, 0, "Buy H4-M1")
+                      : trade.Sell(lots, sym, price, sl, 0, "Sell H4-M1");
       if(!ok) break;   // out of margin or rejected — don't hammer the server
       if(firstFill == 0.0) firstFill = price;
       filled++;
@@ -862,12 +701,11 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exit check: close all when the exit-TF close crosses against direction
-      string exitTfName = (InpTopTF == TOP_H4) ? "M15" : "M5";
-      if(state[s] != 0 && CheckKijunExit(s, state[s]))
+      // Exit check: close all when M15 closes against direction across M15 kijun
+      if(state[s] != 0 && CheckM15Exit(s, state[s]))
       {
          string side = (state[s] == 1) ? "Long" : "Short";
-         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (" + exitTfName + " kijun crossed)";
+         string msg  = PCTime() + " | Close " + syms[s] + " " + side + " (M15 kijun crossed)";
          Print(msg); SendNotification(msg);
 
          if(ClosePositions(syms[s]))
@@ -885,21 +723,12 @@ void OnTick()
       // BE30: move the stop to break even + cover if profitable in time
       if(state[s] != 0) ManageBE(s);
 
-      // Entry check: all timeframes in the active stack must align, spread must be sane
+      // Entry check: all timeframes H4→M1 must align, spread must be sane
       if(state[s] == 0 && TimeCurrent() >= noReentryUntil[s] && SpreadOK(syms[s]))
       {
          int st = CheckAllAlign(s);
          if(st != 0)
          {
-            // EXPERIMENT: final filter — the filter-TF kijun (M15 in H4 mode,
-            // M5 in H1 mode) must be starting to move in the trade direction,
-            // not flat, or the entry is skipped
-            if(InpKijunStartEnabled && !CheckKijunStart(s, st)) continue;
-
-            // EXPERIMENT: the top-TF and filter-TF clouds must carry the
-            // trade's bias (Span A above Span B for a long, below for a short)
-            if(InpCloudBiasEnabled && !CloudFiltersOK(s, st)) continue;
-
             bool   isBuy = (st == 1);
             double dist  = 0.0;
             if(InpUseStopLoss && !GetStopDistance(s, dist)) continue;   // ATR unavailable — skip entry
@@ -923,10 +752,9 @@ void OnTick()
                entryTime[s]  = TimeCurrent();   // start the BE30 profit window
                beMoved[s]    = false;
                string action = isBuy ? "Buy" : "Sell";
-               string mode = (InpTopTF == TOP_H4) ? "H4-M1" : "H1-M1";
                string msg = PCTime() + " | " + action + " " + syms[s] +
                             " x" + IntegerToString(filled) +
-                            " @ " + DoubleToString(lots, 2) + " (" + mode + ")";
+                            " @ " + DoubleToString(lots, 2) + " (H4-M1)";
                Print(msg); SendNotification(msg);
             }
             else

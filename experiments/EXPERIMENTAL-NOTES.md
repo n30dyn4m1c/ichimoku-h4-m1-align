@@ -1851,8 +1851,12 @@ trade exits on the cross back, or the ATR stop.
 
 ## 18. Dual-Mode H4/H1 Kijun-Start EA (VPS merge experiment)
 
-**File:** `experimental-h4-m1-kijun-start-vps-ea.mq5` (Magic `20260846` = H4
-mode, `20260847` = H1 mode)
+**Files:** `experiments/experimental-h4-m1-kijun-start-vps-ea.mq5` (the
+experiment), promoted to **`ichimoku-h4-m1-vps-ea.mq5`** — the single
+production VPS file replacing both former VPS builds (originals archived
+2026-08-14 as `archives/ichimoku-h4-m1-vps-ea-archived20260814.mq5` and
+`archives/ichimoku-h1-m1-vps-ea-archived20260814.mq5`).
+Magic `20260846` = H4 mode, `20260847` = H1 mode.
 
 A single file that merges **both live VPS builds** — `ichimoku-h4-m1-vps-ea.mq5`
 and `ichimoku-h1-m1-vps-ea.mq5` — selected with `InpTopTF`:
@@ -1910,9 +1914,10 @@ faster-moving M5 kijun.
   is exactly the known VPS baseline for that mode.
 - The two modes use distinct magic numbers (`20260846` / `20260847`), so
   an H4-mode and an H1-mode instance can run on the same account/symbol
-  without colliding. The live VPS EAs use `20260815` (H4) and `20260814`
-  (H1) — when replacing a live EA, either close its open positions first
-  or point this build's magic at the live values so it adopts them.
+  without colliding. Note: the archived live VPS EAs used `20260815` (H4)
+  and `20260814` (H1) — when replacing a live EA, either close its open
+  positions first or point this build's magic at the live values so it
+  adopts them.
 - The filters necessarily delay entries: the first bar of a real move can
   still have a flat kijun, and this build will sit those signals out until
   the kijun angles and the clouds carry the right bias.

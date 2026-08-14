@@ -15,8 +15,7 @@ terminal alerts restored):
 
 | EA | File | Timeframes | Exit signal | Magic |
 |----|------|------------|-------------|-------|
-| **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260815` |
-| **H1-M1 VPS Deployment** | `ichimoku-h1-m1-vps-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260814` |
+| **H4-M1 VPS Deployment** | `ichimoku-h4-m1-vps-ea.mq5` (dual-mode via `InpTopTF`) | H4 → M1 (6 TFs) or H1 → M1 (5 TFs) | M15 Kijun cross / M5 Kijun cross | `20260846` / `20260847` |
 | **H4-M1 MT5 Desktop** | `ichimoku-h4-m1-mt5pc-ea.mq5` | H4 → M1 (6 TFs) | M15 Kijun cross | `20260830` |
 | **H1-M1 MT5 Desktop** | `ichimoku-h1-m1-mt5pc-ea.mq5` | H1 → M1 (5 TFs) | M5 Kijun cross | `20260831` |
 
@@ -25,14 +24,16 @@ logic — they differ only in which timeframes must agree, which lower
 timeframe's Kijun triggers the exit, and whether they're tuned for unattended
 VPS use. Every build carries its own magic number, so all four can run on the
 same account, even on the same symbol, without interfering with each other.
-See [VPS Deployment Builds](#vps-deployment-builds) for what the VPS variants
+The single VPS file covers both stacks — set `InpTopTF` to `TOP_H4` for the
+H4→M1 stack or `TOP_H1` for the H1→M1 stack. See
+[VPS Deployment Builds](#vps-deployment-builds) for what the VPS variants
 add on top.
 
 **Repository layout:**
 
-- `ichimoku-h4-m1-vps-ea.mq5`, `ichimoku-h1-m1-vps-ea.mq5` — the live VPS builds (do not modify; see AGENTS.md)
+- `ichimoku-h4-m1-vps-ea.mq5` — the live VPS build (dual-mode H4-M1 / H1-M1; do not modify; see AGENTS.md)
 - `ichimoku-h4-m1-mt5pc-ea.mq5`, `ichimoku-h1-m1-mt5pc-ea.mq5` — MT5 desktop copies with alerts
-- `archives/` — older standard builds and archived versions
+- `archives/` — older standard builds and archived versions (incl. the 2026-08-14 archived VPS originals)
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `utilities/` — deployment scripts and the Python monitor
 
@@ -75,11 +76,17 @@ scale automatically with account equity.
 
 ## VPS Deployment Builds
 
-The `ichimoku-h4-m1-vps-ea.mq5` and `ichimoku-h1-m1-vps-ea.mq5` files are
-deployment-oriented variants tuned for running unattended on a cheap VPS.
-Their trading logic is identical to the desktop builds — same entry/exit
-rules and risk protection — but they add several layers of hardening and
-differ from the desktop builds in a few practical ways:
+A single `ichimoku-h4-m1-vps-ea.mq5` file covers both former VPS
+deployments (H4-M1 and H1-M1 — merged 2026-08-14; the archived originals
+live in `archives/`). `InpTopTF` selects the stack: `TOP_H4` runs the
+H4→M1 6-TF alignment with the M15 Kijun exit; `TOP_H1` runs the H1→M1
+5-TF alignment with the M5 Kijun exit. Each mode keeps the VPS builds'
+own equity ladder and magic number (`20260846` H4 / `20260847` H1). The
+build is a deployment-oriented variant tuned for running unattended on a
+cheap VPS.
+Its trading logic is identical to the desktop builds — same entry/exit
+rules and risk protection — but it adds several layers of hardening and
+differs from the desktop builds in a few practical ways:
 
 - **Once-per-minute gating.** `OnTick()` returns immediately unless a new
   closed M1 bar has appeared (`lastMinuteKey = TimeCurrent() / 60`), so the
@@ -413,7 +420,7 @@ withdraw funds automatically.
 
 ### Installation
 
-1. Download the build you want from this repository. For hands-on desktop trading use `ichimoku-h4-m1-mt5pc-ea.mq5` and/or `ichimoku-h1-m1-mt5pc-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the corresponding `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h1-m1-vps-ea.mq5` variants instead or alongside them — all four builds can share one account — see [VPS Deployment Builds](#vps-deployment-builds).
+1. Download the build you want from this repository. For hands-on desktop trading use `ichimoku-h4-m1-mt5pc-ea.mq5` and/or `ichimoku-h1-m1-mt5pc-ea.mq5` (distinct magic numbers — you can run both). For unattended 24/7 deployment use the single dual-mode `ichimoku-h4-m1-vps-ea.mq5` (`InpTopTF = TOP_H4` for the H4→M1 stack, `TOP_H1` for the H1→M1 stack) — it can share the account with the desktop builds — see [VPS Deployment Builds](#vps-deployment-builds).
 2. Open MetaTrader 5 → **File → Open Data Folder**.
 3. Copy the file into `MQL5/Experts/`.
 4. In MT5, open **Navigator → Expert Advisors**, right-click and **Refresh**, or restart MT5.
