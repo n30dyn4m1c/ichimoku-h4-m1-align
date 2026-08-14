@@ -26,11 +26,11 @@
 //|        ATR comes from each level's own TF.                        |
 //| Risk:  single position per level per symbol; levels run           |
 //|        concurrently (up to 5 per symbol); each level re-enters    |
-//|        independently whenever its pair re-agrees. Lot sizing is   |
-//|        a fixed % of the ACTUAL equity at entry per tier:          |
-//|        M5 5%, M15 7%, M30 10%, H1 15%, H4 20%, measured against   |
-//|        ATR(level TF) x InpRiskATRMult. No multipliers, no         |
-//|        streak compounding. No initial stop loss.                  |
+//|        independently whenever its chain re-aligns. Every trade    |
+//|        risks the same InpRiskPct % of the ACTUAL equity at entry, |
+//|        on every timeframe, measured against ATR(level TF) x       |
+//|        InpRiskATRMult. No multipliers, no streak compounding.     |
+//|        No initial stop loss.                                      |
 //| Magic: 20260848 — fresh, distinct from the live VPS builds        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -45,14 +45,10 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-input group  "Risk Management (per level, % of equity at entry)"
-input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
-input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
-input double InpRiskPctM5       = 5.0;    // M5   — % of equity risked per trade
-input double InpRiskPctM15      = 7.0;    // M15  — % of equity risked per trade
-input double InpRiskPctM30      = 10.0;   // M30  — % of equity risked per trade
-input double InpRiskPctH1       = 15.0;   // H1   — % of equity risked per trade
-input double InpRiskPctH4       = 20.0;   // H4   — % of equity risked per trade
+input group  "Risk Management (% of equity)"
+input double InpFixedLots   = 0.10;   // Fixed lots fallback (sizing data unavailable)
+input double InpRiskATRMult = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
+input double InpRiskPct     = 5.0;    // % of equity risked per trade (all timeframes, same risk)
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
@@ -382,34 +378,19 @@ bool SpreadOK(string sym)
 }
 
 //==============================================================
-// Risk Management — per-level risk as a fixed % of the ACTUAL
-// equity at entry (M5 5%, M15 7%, M30 10%, H1 15%, H4 20%),
+// Risk Management — every trade risks the same fixed % of the
+// ACTUAL equity at entry (InpRiskPct), on every timeframe,
 // measured against a reference distance of ATR(level TF) x
 // InpRiskATRMult, the same ATR-based sizing philosophy as the
 // H4 VPS build. More equity -> more risk money -> bigger lots at
-// the same ATR distance; no floating-P/L compounding and no
-// multipliers on top. Falls back to InpFixedLots when the sizing
-// data is unavailable, and every order is capped to the free
-// margin so it fills fully.
+// the same ATR distance; no per-tier differences, no multipliers.
+// Falls back to InpFixedLots when the sizing data is unavailable,
+// and every order is capped to the free margin so it fills fully.
 //==============================================================
-
-double LevelRiskPct(int lvl)
-{
-   switch(lvl)
-   {
-      case 0:  return InpRiskPctM5;
-      case 1:  return InpRiskPctM15;
-      case 2:  return InpRiskPctM30;
-      case 3:  return InpRiskPctH1;
-      case 4:  return InpRiskPctH4;
-   }
-   return 0.0;
-}
 
 double RiskLots(int s, int lvl)
 {
-   double riskPct = LevelRiskPct(lvl);
-   if(riskPct <= 0) return InpFixedLots;
+   if(InpRiskPct <= 0) return InpFixedLots;
 
    double a[1];
    if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
@@ -422,7 +403,7 @@ double RiskLots(int s, int lvl)
    double moneyPerLot = (stopDist / tickSize) * tickValue;
    if(moneyPerLot <= 0) return InpFixedLots;
 
-   double riskMoney = AccountInfoDouble(ACCOUNT_EQUITY) * (riskPct / 100.0);
+   double riskMoney = AccountInfoDouble(ACCOUNT_EQUITY) * (InpRiskPct / 100.0);
    double lots      = riskMoney / moneyPerLot;
 
    double lotStep = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_STEP);
