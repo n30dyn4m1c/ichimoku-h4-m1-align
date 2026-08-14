@@ -15,8 +15,10 @@
 //| Exit:  the level's own TF bar closes back inside its cloud.       |
 //|        Long  -> close below the cloud's upper edge (inside/under) |
 //|        Short -> close above the cloud's lower edge (inside/over)  |
-//|        No initial stop loss — the trade runs until the cloud      |
-//|        close, with profit protection once it turns green:         |
+//|        A protective stop loss is attached at entry (ATR(level TF) |
+//|        x InpRiskATRMult — the same distance the risk sizing uses, |
+//|        so the % risk is real), then the profit protection layer   |
+//|        takes over once the trade turns green:                     |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
 //|                         H1/H4 levels) -> SL to entry + cover      |
 //|          Chandelier   : H1/H4 levels trail the stop behind the    |
@@ -28,9 +30,9 @@
 //|        concurrently (up to 5 per symbol); each level re-enters    |
 //|        independently whenever its chain re-aligns. Every trade    |
 //|        risks a fixed % of the ACTUAL equity at entry (M5/M15 1%,  |
-//|        M30 5%, H1 10%, H4 20%), measured against ATR(level TF) x  |
-//|        InpRiskATRMult. No multipliers, no streak compounding.     |
-//|        No initial stop loss.                                      |
+//|        M30 5%, H1 10%, H4 20%) against the entry stop distance    |
+//|        ATR(level TF) x InpRiskATRMult — the stop is attached, so  |
+//|        the % risk is real. No multipliers, no streak compounding. |
 //| Magic: 20260848 — fresh, distinct from the live VPS builds        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -64,8 +66,8 @@ input double InpBEProfitATR       = 1.0;   // BE arms once profit >= this x ATR 
 input double InpBEProfitH1H4      = 0.5;   // BE arms once profit >= this x ATR (H1/H4 levels — tighter)
 input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE stop (covers spread)
 input double InpSpikeLockATR      = 2.0;   // Chandelier trail arms once profit >= this x ATR (M5/M15/M30 spike lock)
-input double InpTrailActivateATR  = 1.0;   // H1/H4 chandelier trail arms once profit >= this x ATR
-input double InpTrailATR          = 1.5;   // Trail distance behind the peak, x ATR (level TF)
+input double InpTrailActivateATR  = 0.5;   // H1/H4 chandelier trail arms once profit >= this x ATR
+input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR (level TF)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -462,8 +464,25 @@ bool OpenLevel(int s, int lvl, int dir, double lots)
    string comment = LevelComment(lvl, dir);
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, 0, 0, comment)
-                        : trade.Sell(lots, sym, price, 0, 0, comment);
+
+   // Protective stop at entry: ATR(level TF) x InpRiskATRMult — the same
+   // distance the risk sizing assumes, so the % risk is real. Skip the
+   // entry if the ATR is unavailable so no trade opens unprotected.
+   double a[1];
+   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0)
+   {
+      Print(PCTime() + " | " + sym + " " + tfName[lvl + 1] + " entry skipped — ATR unavailable");
+      return false;
+   }
+   double dist = a[0] * InpRiskATRMult;
+   double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   if(dist < minDist) dist = minDist;
+   int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double sl      = NormalizeDouble((dir == 1) ? price - dist : price + dist, digits);
+
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, 0, comment)
+                        : trade.Sell(lots, sym, price, sl, 0, comment);
    if(ok)
    {
       state[s][lvl] = dir;
@@ -526,7 +545,7 @@ bool CloseLevelPositions(int s, int lvl)
 //     TF, including the bar still forming; it only ever tightens
 //     and never sits inside the broker minimum stop.
 // ATR comes from the level's own TF, so H4/H1 protection is sized
-// to those timeframes. There is still no initial stop loss.
+// to those timeframes. The entry stop is ATR x InpRiskATRMult.
 //==============================================================
 
 bool LevelTicket(int s, int lvl, ulong &ticket)
