@@ -390,6 +390,9 @@ bool CheckM15KijunStart(int s, int dir)
 // both be healthy for a breakout:
 //   * Thick — |Span A - Span B| >= InpMinCloudATR * ATR(tf); a
 //     thin, narrowing cloud is consolidation, so it blocks the entry
+//   * Bias — Span A above Span B (bullish cloud) for a long, Span A
+//     below Span B (bearish cloud) for a short, at both ends of the
+//     future-cloud window
 //   * Future cloud angled with the trade — the cloud drawn Kijun
 //     bars ahead (negative shifts) must rise (long) or fall (short)
 //     by at least InpCloudAngleATR * ATR(tf) on BOTH spans
@@ -409,9 +412,12 @@ bool CloudThin(int s, int tfIdx, double atrVal)
 }
 
 // The future cloud (the Senkou spans drawn Kijun bars ahead of price)
-// must be angled in the trade direction: from the last closed bar out
-// to the far end of the drawn cloud (shift 1 - Kijun), both spans must
-// move by more than InpCloudAngleATR * ATR(tf) in the trade direction.
+// must be BOTH biased with the trade AND angled with the trade:
+//   * bias: Span A above Span B at both ends of the window (bullish
+//     cloud for a long), Span A below Span B (bearish) for a short
+//   * angle: from the last closed bar out to the far end of the drawn
+//     cloud (shift 1 - Kijun), both spans must move by more than
+//     InpCloudAngleATR * ATR(tf) in the trade direction
 bool FutureCloudAngled(int s, int tfIdx, int dir, double atrVal)
 {
    double aNow[1], bNow[1], aFar[1], bFar[1];
@@ -422,8 +428,10 @@ bool FutureCloudAngled(int s, int tfIdx, int dir, double atrVal)
 
    double minMove = InpCloudAngleATR * atrVal;
    if(dir == 1)
-      return aFar[0] - aNow[0] > minMove && bFar[0] - bNow[0] > minMove;
-   return aNow[0] - aFar[0] > minMove && bNow[0] - bFar[0] > minMove;
+      return aNow[0] > bNow[0] && aFar[0] > bFar[0] &&
+             aFar[0] - aNow[0] > minMove && bFar[0] - bNow[0] > minMove;
+   return aNow[0] < bNow[0] && aFar[0] < bFar[0] &&
+          aNow[0] - aFar[0] > minMove && bNow[0] - bFar[0] > minMove;
 }
 
 // Both clouds must pass both conditions; anything unreadable blocks.

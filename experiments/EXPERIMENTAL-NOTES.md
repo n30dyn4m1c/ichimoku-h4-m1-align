@@ -1869,10 +1869,13 @@ entry gates** applied after the full H4→M1 alignment fires:
 2. **H4 cloud thick** — `|Span A − Span B|` at the last closed H4 bar must
    be ≥ `InpMinCloudATR × ATR(H4)`. A thin, narrowing cloud is
    consolidation, so a breakout through it is skipped and waited out.
-3. **H4 future-cloud angle** — the H4 cloud *drawn Kijun bars ahead* of
-   price (negative shifts) must be angled with the trade: both spans must
+3. **H4 future-cloud angle + bias** — the H4 cloud *drawn Kijun bars ahead*
+   of price (negative shifts) must be angled with the trade: both spans must
    rise (long) or fall (short) by at least `InpCloudAngleATR × ATR(H4)`
-   from the last closed bar out to the far end of the drawn cloud.
+   from the last closed bar out to the far end of the drawn cloud — and the
+   cloud must carry the matching bias: **Span A above Span B** (bullish
+   cloud) for a long, Span A below Span B (bearish) for a short, at both
+   ends of the future-cloud window. A buy never opens under a red cloud.
 4. **M15 cloud thick + future-cloud angle** — the exact same two cloud
    checks on **M15** with ATR(M15) normalization, so the entry-timing
    timeframe's cloud is healthy too.
