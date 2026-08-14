@@ -11,9 +11,11 @@
 //|          Tier H4 : M1 ... H4 aligned            -> open trade     |
 //|        M1 alone never trades — it is only the start of the stack. |
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
-//|        TF and the TF directly below it, and H4 is the bias for    |
-//|        the whole stack: H4 bullish -> only buys on all tiers,     |
-//|        H4 bearish -> only sells, H4 flat -> no trades.            |
+//|        TF and the TF directly below it, H4 is the bias for the    |
+//|        whole stack (H4 bullish -> buys only, bearish -> sells     |
+//|        only, flat -> no trades), and the H4 tier itself is also   |
+//|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
+//|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
 //|        candle close inside the kumo). A long exits when the bid |
 //|        touches the cloud's upper edge; a short when the ask     |
@@ -68,6 +70,7 @@ input double InpRiskPctH4       = 20.0;   // H4   — % of equity risked per tra
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
 input bool   InpH4Bias           = true;   // H4 is the bias — all tiers only trade in H4's direction (H4 flat = no trades)
+input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group  "Profit Protection"
@@ -94,6 +97,7 @@ ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIO
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 
 int      ich[MAX_SYMS][TFS];
+int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
 int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
 string   syms[MAX_SYMS];
 int      symsCount = 0;
@@ -157,6 +161,9 @@ int OnInit()
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
+      ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
+      if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
+
       for(int l = 0; l < LEVELS; l++)
       {
          atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
@@ -176,6 +183,7 @@ void OnDeinit(const int reason)
    {
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
+      if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
       for(int l = 0; l < LEVELS; l++)
          if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
    }
@@ -326,6 +334,59 @@ int ChainAligned(int s, int topIdx)
       if(CheckAlign(s, t) != dir) return 0;
    }
    return dir;
+}
+
+//==============================================================
+// Daily Bias Filter (H4 tier): D1 is the bias for H4 trades.
+// Same alignment semantics as CheckAlign but on D1 — D1 bullish
+// (price + chikou above tenkan, kijun and cloud) allows only H4
+// buys, D1 bearish only H4 sells. A D1 close INSIDE the cloud
+// (or unreadable) returns 0 — no new H4 trades then.
+//==============================================================
+
+int DailyAlign(int s)
+{
+   ENUM_TIMEFRAMES tf = PERIOD_D1;
+
+   int sh      = 1;
+   int chShift = sh + Kijun;
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], tf, 0, chShift + 1, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+   if(ArraySize(rt) <= chShift) return 0;
+
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   if(CopyBuffer(ichD1[s], 0, sh, 1, tenkan) <= 0) return 0;
+   if(CopyBuffer(ichD1[s], 1, sh, 1, kijun)  <= 0) return 0;
+   if(CopyBuffer(ichD1[s], 2, sh, 1, senA)   <= 0) return 0;
+   if(CopyBuffer(ichD1[s], 3, sh, 1, senB)   <= 0) return 0;
+
+   double closeP = rt[sh].close;
+   double cHi    = MathMax(senA[0], senB[0]);
+   double cLo    = MathMin(senA[0], senB[0]);
+
+   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
+   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
+   if(!above && !below) return 0;   // D1 close inside the cloud — no H4 trades
+
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
+   if(CopyBuffer(ichD1[s], 0, chShift, 1, tenkan_ch) <= 0) return 0;
+   if(CopyBuffer(ichD1[s], 1, chShift, 1, kijun_ch)  <= 0) return 0;
+   if(CopyBuffer(ichD1[s], 2, chShift, 1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(ichD1[s], 3, chShift, 1, senB_ch)   <= 0) return 0;
+
+   double chik = closeP;
+   double cHiC = MathMax(senA_ch[0], senB_ch[0]);
+   double cLoC = MathMin(senA_ch[0], senB_ch[0]);
+
+   if(above && chik > rt[chShift].high &&
+      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
+
+   if(below && chik < rt[chShift].low &&
+      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
+
+   return 0;
 }
 
 //==============================================================
@@ -819,6 +880,10 @@ void OnTick()
             if(st == 0) continue;
             if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
             if(InpH4Bias && !H4BiasOK(s, st)) continue;
+
+            // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
+            if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
+
             topTier = l;
             topDir  = st;
             break;
