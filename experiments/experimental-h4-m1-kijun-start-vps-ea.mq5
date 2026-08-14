@@ -344,20 +344,21 @@ bool CheckM15Exit(int s, int dir)
 bool CheckM15KijunStart(int s, int dir)
 {
    double k[3];
-   // k[0] = kijun at shift 1 (last closed M15 bar) — newest
-   // k[1] = shift 2, k[2] = shift 3 — oldest of the three
+   // CopyBuffer fills chronological order: oldest first, newest last.
+   // k[0] = kijun at shift 3 — oldest of the three
+   // k[1] = kijun at shift 2
+   // k[2] = kijun at shift 1 (last closed M15 bar) — newest
    if(CopyBuffer(ich[s][IDX_M15], 1, 1, 3, k) <= 0) return false;
-   ArraySetAsSeries(k, true);
 
    double tol = InpKijunFlatPoints * SymbolInfoDouble(syms[s], SYMBOL_POINT);
    if(tol <= 0) tol = 1e-10;
 
    // All three kijun values within the flatness tolerance = flat, no entry
-   if(MathAbs(k[0] - k[1]) <= tol && MathAbs(k[1] - k[2]) <= tol) return false;
+   if(MathAbs(k[2] - k[1]) <= tol && MathAbs(k[1] - k[0]) <= tol) return false;
 
    // Kijun must be starting to move with its angle in the trade direction
-   if(dir ==  1) return (k[0] > k[1] + tol);
-   if(dir == -1) return (k[0] < k[1] - tol);
+   if(dir ==  1) return (k[2] > k[1] + tol);
+   if(dir == -1) return (k[2] < k[1] - tol);
    return false;
 }
 
