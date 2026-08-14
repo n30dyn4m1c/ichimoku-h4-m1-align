@@ -11,14 +11,15 @@
 //|          Tier H4 : M1 ... H4 aligned            -> open trade     |
 //|        M1 alone never trades — it is only the start of the stack. |
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
-//|        TF and the TF directly below it.                           |
-//| Exit:  the level's own TF bar closes back inside its cloud.       |
-//|        Long  -> close below the cloud's upper edge (inside/under) |
-//|        Short -> close above the cloud's lower edge (inside/over)  |
-//|        A protective stop loss is attached at entry (ATR(level TF) |
-//|        x InpRiskATRMult — the same distance the risk sizing uses, |
-//|        so the % risk is real), then the profit protection layer   |
-//|        takes over once the trade turns green:                     |
+//|        TF and the TF directly below it, and H4 is the bias for    |
+//|        the whole stack: H4 bullish -> only buys on all tiers,     |
+//|        H4 bearish -> only sells, H4 flat -> no trades.            |
+//| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
+//|        candle close inside the kumo). A long exits when the bid |
+//|        touches the cloud's upper edge; a short when the ask     |
+//|        touches the lower edge. No entry stop loss in this test  |
+//|        build — the trade runs until the touch, with the profit  |
+//|        protection layer taking over once it turns green:        |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
 //|                         H1/H4 levels) -> SL to entry + cover      |
 //|          Chandelier   : H1/H4 levels trail the stop behind the    |
@@ -28,11 +29,13 @@
 //|        ATR comes from each level's own TF.                        |
 //| Risk:  single position per level per symbol; levels run           |
 //|        concurrently (up to 5 per symbol); each level re-enters    |
-//|        independently whenever its chain re-aligns. Every trade    |
-//|        risks a fixed % of the ACTUAL equity at entry (M5/M15 1%,  |
-//|        M30 5%, H1 10%, H4 20%) against the entry stop distance    |
-//|        ATR(level TF) x InpRiskATRMult — the stop is attached, so  |
-//|        the % risk is real. No multipliers, no streak compounding. |
+//|        independently whenever its chain re-aligns. The M5 and M15 |
+//|        tiers are DISABLED for this test — only M30, H1 and H4     |
+//|        open new trades. Every trade risks a fixed % of the ACTUAL |
+//|        equity at entry (M5/M15 1%, M30 5%, H1 10%, H4 20%)        |
+//|        against the reference distance ATR(level TF) x             |
+//|        InpRiskATRMult (sizing basis only — no entry stop is       |
+//|        attached). No multipliers, no streak compounding.          |
 //| Magic: 20260848 — fresh, distinct from the live VPS builds        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -58,6 +61,7 @@ input double InpRiskPctH4       = 20.0;   // H4   — % of equity risked per tra
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
+input bool   InpH4Bias           = true;   // H4 is the bias — all tiers only trade in H4's direction (H4 flat = no trades)
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group  "Profit Protection"
@@ -341,24 +345,45 @@ bool LevelCloudBiasOK(int s, int lvl, int dir)
 }
 
 //==============================================================
-// Exit Check: the level TF's last closed bar closes back inside
-// its cloud (or beyond it — a long that closes below the cloud,
-// a short that closes above it). This is the trade's main exit;
-// the BE/chandelier stop is the profit-protection layer on top.
+// H4 Bias Filter: H4 is the bias for the whole stack. Every tier
+// only trades in H4's direction — H4 bullish means only buys on
+// all timeframes (a lower-TF sell is just a pullback), H4 bearish
+// means only sells. If H4 has no alignment, no trades open.
 //==============================================================
 
-bool InCloudClose(int s, int tfIdx, int dir)
+bool H4BiasOK(int s, int dir)
+{
+   int h4 = CheckAlign(s, TFS - 1);
+   if(h4 == 0) return false;        // H4 not aligned — no trades
+   return h4 == dir;
+}
+
+//==============================================================
+// Exit Check: price TOUCHES the level TF's cloud edge — no wait
+// for a candle to close inside it. A long (entered above the
+// cloud) exits when the bid touches the cloud's upper edge; a
+// short (entered below) exits when the ask touches the lower
+// edge. Evaluated once per closed M1 bar, so a touch triggers
+// the exit within a minute. This is the trade's main exit; the
+// BE/chandelier stop is the profit-protection layer on top.
+//==============================================================
+
+bool InCloudTouch(int s, int tfIdx, int dir)
 {
    double senA[1], senB[1];
    if(CopyBuffer(ich[s][tfIdx], 2, 1, 1, senA) <= 0) return false;
    if(CopyBuffer(ich[s][tfIdx], 3, 1, 1, senB) <= 0) return false;
 
-   MqlRates rt[];
-   if(CopyRates(syms[s], tfs[tfIdx], 1, 1, rt) <= 0) return false;
-   double closeP = rt[0].close;
-
-   if(dir ==  1) return closeP < MathMax(senA[0], senB[0]);
-   if(dir == -1) return closeP > MathMin(senA[0], senB[0]);
+   if(dir ==  1)
+   {
+      double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
+      return bid <= MathMax(senA[0], senB[0]);
+   }
+   if(dir == -1)
+   {
+      double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
+      return ask >= MathMin(senA[0], senB[0]);
+   }
    return false;
 }
 
@@ -465,24 +490,10 @@ bool OpenLevel(int s, int lvl, int dir, double lots)
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
 
-   // Protective stop at entry: ATR(level TF) x InpRiskATRMult — the same
-   // distance the risk sizing assumes, so the % risk is real. Skip the
-   // entry if the ATR is unavailable so no trade opens unprotected.
-   double a[1];
-   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0)
-   {
-      Print(PCTime() + " | " + sym + " " + tfName[lvl + 1] + " entry skipped — ATR unavailable");
-      return false;
-   }
-   double dist = a[0] * InpRiskATRMult;
-   double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
-   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
-   if(dist < minDist) dist = minDist;
-   int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   double sl      = NormalizeDouble((dir == 1) ? price - dist : price + dist, digits);
-
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, 0, comment)
-                        : trade.Sell(lots, sym, price, sl, 0, comment);
+   // No entry stop loss in this test build — the trade runs until the
+   // cloud close; the BE/chandelier layer protects it once in profit.
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, 0, 0, comment)
+                        : trade.Sell(lots, sym, price, 0, 0, comment);
    if(ok)
    {
       state[s][lvl] = dir;
@@ -545,7 +556,7 @@ bool CloseLevelPositions(int s, int lvl)
 //     TF, including the bar still forming; it only ever tightens
 //     and never sits inside the broker minimum stop.
 // ATR comes from the level's own TF, so H4/H1 protection is sized
-// to those timeframes. The entry stop is ATR x InpRiskATRMult.
+// to those timeframes. No entry stop loss in this test build.
 //==============================================================
 
 bool LevelTicket(int s, int lvl, ulong &ticket)
@@ -683,12 +694,12 @@ void OnTick()
 
       for(int l = 0; l < LEVELS; l++)
       {
-         // Exit check: the level's own TF closed a bar back inside its cloud
-         if(state[s][l] != 0 && InCloudClose(s, l + 1, state[s][l]))
+         // Exit check: price touched the level TF's cloud edge
+         if(state[s][l] != 0 && InCloudTouch(s, l + 1, state[s][l]))
          {
             string side = (state[s][l] == 1) ? "Long" : "Short";
             string msg  = PCTime() + " | Close " + syms[s] + " " + side + " " +
-                          tfName[l + 1] + " (cloud close)";
+                          tfName[l + 1] + " (kumo touch)";
             Print(msg); SendNotification(msg);
 
             if(CloseLevelPositions(s, l))
@@ -705,13 +716,20 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
 
          // Entry check: the level is flat and the full chain M1..level TF
-         // aligns in one direction (plus spread and cloud bias gates)
-         if(state[s][l] == 0 && SpreadOK(syms[s]))
+         // aligns in one direction (plus spread and cloud bias gates).
+         // M5 (lvl 0) and M15 (lvl 1) tiers DISABLED for this test — only
+         // M30 (lvl 2), H1 (lvl 3) and H4 (lvl 4) open NEW trades; any
+         // existing M5/M15 positions are still managed above. Remove the
+         // "l >= 2" to re-enable the lower tiers.
+         if(state[s][l] == 0 && l >= 2 && SpreadOK(syms[s]))
          {
             int st = ChainAligned(s, l + 1);
             if(st != 0)
             {
                if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
+
+               // H4 bias: all tiers trade only in H4's direction
+               if(InpH4Bias && !H4BiasOK(s, st)) continue;
 
                // Size: per-level risk % of equity vs ATR(level TF) x multiplier, capped to free margin
                double lots = RiskLots(s, l);
