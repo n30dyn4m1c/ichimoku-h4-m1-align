@@ -29,13 +29,12 @@
 //|        ATR comes from each level's own TF.                        |
 //| Risk:  single position per level per symbol; levels run           |
 //|        concurrently (up to 5 per symbol); each level re-enters    |
-//|        independently whenever its chain re-aligns. The M5 and M15 |
-//|        tiers are DISABLED for this test — only M30, H1 and H4     |
-//|        open new trades. Every trade risks a fixed % of the ACTUAL |
-//|        equity at entry (M5/M15 1%, M30 5%, H1 10%, H4 20%)        |
-//|        against the reference distance ATR(level TF) x             |
-//|        InpRiskATRMult (sizing basis only — no entry stop is       |
-//|        attached). No multipliers, no streak compounding.          |
+//|        independently whenever its chain re-aligns. Every trade    |
+//|        risks a fixed % of the ACTUAL equity at entry (M5/M15 1%,  |
+//|        M30 5%, H1 10%, H4 20%) against the reference distance     |
+//|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
+//|        entry stop is attached). No multipliers, no streak         |
+//|        compounding.                                               |
 //| Magic: 20260848 — fresh, distinct from the live VPS builds        |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -716,12 +715,8 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
 
          // Entry check: the level is flat and the full chain M1..level TF
-         // aligns in one direction (plus spread and cloud bias gates).
-         // M5 (lvl 0) and M15 (lvl 1) tiers DISABLED for this test — only
-         // M30 (lvl 2), H1 (lvl 3) and H4 (lvl 4) open NEW trades; any
-         // existing M5/M15 positions are still managed above. Remove the
-         // "l >= 2" to re-enable the lower tiers.
-         if(state[s][l] == 0 && l >= 2 && SpreadOK(syms[s]))
+         // aligns in one direction (plus spread and cloud bias gates)
+         if(state[s][l] == 0 && SpreadOK(syms[s]))
          {
             int st = ChainAligned(s, l + 1);
             if(st != 0)
