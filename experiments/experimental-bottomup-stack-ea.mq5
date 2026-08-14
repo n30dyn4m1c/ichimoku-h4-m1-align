@@ -27,10 +27,12 @@
 //|                         M5/M15/M30 keep the spike-gated trail     |
 //|                         (InpSpikeLockATR), only ever tightening   |
 //|        ATR comes from each level's own TF.                        |
-//| Risk:  single position per level per symbol; levels run           |
-//|        concurrently (up to 5 per symbol); each level re-enters    |
-//|        independently whenever its chain re-aligns. Every trade    |
-//|        risks a fixed % of the ACTUAL equity at entry (M5/M15 1%,  |
+//| Risk:  single position per level per symbol, but consolidation:   |
+//|        when several tiers align at once only the LARGEST opens,   |
+//|        and any smaller tier already running on the symbol is      |
+//|        closed first — so at most one position per symbol runs at  |
+//|        a time (the highest aligned tier). Every trade risks a     |
+//|        fixed % of the ACTUAL equity at entry (M5/M15 1%,          |
 //|        M30 5%, H1 10%, H4 20%) against the reference distance     |
 //|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
 //|        entry stop is attached). No multipliers, no streak         |
@@ -691,6 +693,7 @@ void OnTick()
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
+      // Exits and profit protection per level
       for(int l = 0; l < LEVELS; l++)
       {
          // Exit check: price touched the level TF's cloud edge
@@ -713,28 +716,54 @@ void OnTick()
 
          // Profit protection: BE + spike-lock chandelier trail
          if(state[s][l] != 0) ManageLevelProtection(s, l);
+      }
 
-         // Entry check: the level is flat and the full chain M1..level TF
-         // aligns in one direction (plus spread and cloud bias gates)
-         if(state[s][l] == 0 && SpreadOK(syms[s]))
+      // Entry consolidation: when several tiers align at once, only the
+      // LARGEST one opens (highest TF wins). Any smaller tier already
+      // running on the symbol is closed first — e.g. M15 and M30 align
+      // together: the running M15 trade closes and only M30 opens.
+      int topTier = -1;
+      int topDir  = 0;
+      if(SpreadOK(syms[s]))
+      {
+         for(int l = LEVELS - 1; l >= 0; l--)
          {
+            if(state[s][l] != 0) continue;
             int st = ChainAligned(s, l + 1);
-            if(st != 0)
+            if(st == 0) continue;
+            if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
+            if(InpH4Bias && !H4BiasOK(s, st)) continue;
+            topTier = l;
+            topDir  = st;
+            break;
+         }
+      }
+
+      if(topTier >= 0)
+      {
+         // Close any smaller (lower-tier) trades still running
+         for(int l = 0; l < topTier; l++)
+         {
+            if(state[s][l] != 0)
             {
-               if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
+               string msg = PCTime() + " | Close " + syms[s] + " " + tfName[l + 1] +
+                            " (superseded by " + tfName[topTier + 1] + ")";
+               Print(msg); SendNotification(msg);
 
-               // H4 bias: all tiers trade only in H4's direction
-               if(InpH4Bias && !H4BiasOK(s, st)) continue;
-
-               // Size: per-level risk % of equity vs ATR(level TF) x multiplier, capped to free margin
-               double lots = RiskLots(s, l);
-               CapLotsToMargin(syms[s], (st == 1), lots);
-
-               if(!OpenLevel(s, l, st, lots))
-                  Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] +
-                        " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
+               if(CloseLevelPositions(s, l))
+                  state[s][l] = 0;
+               else
+                  Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " superseded but positions still open — will retry");
             }
          }
+
+         // Open only the largest tier
+         double lots = RiskLots(s, topTier);
+         CapLotsToMargin(syms[s], (topDir == 1), lots);
+
+         if(!OpenLevel(s, topTier, topDir, lots))
+            Print(PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
+                  " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
       }
    }
 }
