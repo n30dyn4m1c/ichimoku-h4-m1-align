@@ -1,28 +1,32 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA — OFFICE-PC (Adaptive Risk)          |
+//| Ichimoku Bottom-Up Stack EA — OFFICE-PC (Safer Runner Version)    |
 //|                                                                  |
-//| Goal: Scale small capital quickly on strong trends, then         |
-//| maintain steady growth once equity reaches a few thousand.       |
+//| Based on experimental-bottomup-stack-ea-very-profitable.mq5      |
+//| with the safety & runner recommendations implemented:            |
 //|                                                                  |
-//| Adaptive risk logic:                                             |
-//|  • Weekly (W1) used as top bias + strength check                 |
-//|  • When W1 + H4 show strong intending trend → higher risk        |
-//|    allowed so small accounts can compound fast                   |
-//|  • When market is choppy / weak → risk is reduced (not zeroed)   |
-//|  • Risk is NOT cut in all situations — only when higher TFs      |
-//|    signal a poor environment                                     |
-//|  • Capital stages: aggressive while small + strong trend,        |
-//|    then automatic shift toward steady/maintain mode              |
+//| SAFETY CHANGES (vs original "very-profitable"):                  |
+//|  • Real initial Stop-Loss attached on every entry                |
+//|    (distance = ATR × InpRiskATRMult — same as sizing basis)      |
+//|  • Hard per-trade risk ceiling (InpMaxRiskPct, default 2.0%)     |
+//|  • Much safer default risk % (H4 max ~1.8% instead of 20%)       |
+//|  • Relative equity tiers based on starting equity                |
+//|    (Tier2 = 1.8× start, Tier3 = 3.0× start)                      |
+//|  • Drawdown-aware risk multiplier (reduces size in DD)           |
+//|  • Daily loss circuit-breaker (freeze new entries after -X%)     |
+//|  • Rejection-candle exit enabled by default                      |
 //|                                                                  |
-//| Safety retained: real initial SL, hard risk ceiling, daily       |
-//| loss freeze, rejection exit, BE + chandelier runners.            |
+//| RUNNER PRESERVATION:                                             |
+//|  • Cloud-edge exit + BE + Chandelier trail retained              |
+//|  • Initial SL is replaced by BE/trail once profitable            |
+//|  • Highest-tier consolidation logic kept (quality over quantity) |
 //|                                                                  |
+//| Entry / Alignment / Filters: identical to the original stack.    |
 //| Magic: 20260849                                                  |
-//| Author: Neo Malesa — office-pc adaptive                          |
+//| Author: Neo Malesa + safety layer (office-pc)                    |
 //+------------------------------------------------------------------+
 #property strict
-#property copyright "Neo Malesa — Office-PC adaptive risk"
-#property version   "1.50"
+#property copyright "Neo Malesa — Office-PC safer runner build"
+#property version   "1.01"
 
 #include <Trade/Trade.mqh>
 
@@ -33,46 +37,46 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-input group  "Risk Management — Adaptive (scale fast then maintain)"
-input double InpFixedLots       = 0.10;   // Fixed lots fallback
-input double InpRiskATRMult     = 2.0;    // ATR multiple used for sizing + initial SL
-input double InpMaxRiskPct      = 3.5;    // Absolute hard ceiling (even in strongest trend)
-input double InpDailyLossLimitPct = 3.0;  // Freeze new entries for the day after this % drop
-input bool   InpUseInitialSL    = true;   // Real initial SL on every entry
+input group  "Risk Management — Safer defaults + hard caps"
+input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
+input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) × this (sizing + initial SL)
+input double InpMaxRiskPct      = 2.0;    // HARD CAP: never risk more than this % of equity on any trade
+input double InpRiskTier2Mult   = 1.8;    // Tier 2 starts at StartingEquity × this
+input double InpRiskTier3Mult   = 3.0;    // Tier 3 starts at StartingEquity × this
+input double InpDailyLossLimitPct = 3.0;  // Freeze new entries for the day if equity drops this % from day-start
+input bool   InpUseInitialSL    = true;   // Attach a real initial SL on entry (strongly recommended)
 
-// Base risk % by level (used as the "normal" regime)
-input double InpRiskPctM5       = 0.50;
-input double InpRiskPctM15      = 0.70;
-input double InpRiskPctM30      = 1.00;
-input double InpRiskPctH1       = 1.50;
-input double InpRiskPctH4       = 2.20;
+// Tier-1 (normal) risk % — deliberately conservative vs original 10/20 %
+input double InpRiskPctM5       = 0.40;   // M5
+input double InpRiskPctM15      = 0.50;   // M15
+input double InpRiskPctM30      = 0.80;   // M30
+input double InpRiskPctH1       = 1.20;   // H1
+input double InpRiskPctH4       = 1.80;   // H4
 
-// Capital stages (equity thresholds for scaling behaviour)
-input double InpScaleFastUntil  = 2500.0; // While equity < this AND trend is strong → allow higher risk
-input double InpMaintainFrom    = 6000.0; // Above this → shift toward steady / lower risk
+// Tier-2 (half regime) after equity growth
+input double InpRiskPctM5_T2    = 0.25;
+input double InpRiskPctM15_T2   = 0.30;
+input double InpRiskPctM30_T2   = 0.50;
+input double InpRiskPctH1_T2    = 0.80;
+input double InpRiskPctH4_T2    = 1.20;
 
-// Trend-strength risk multipliers (applied on top of base risk %)
-input double InpRiskMultStrong  = 1.60;   // Strong W1+H4 trend (scale-up factor)
-input double InpRiskMultNormal  = 1.00;   // Normal conditions
-input double InpRiskMultWeak    = 0.40;   // Choppy / weak higher-TF environment
+// Tier-3 (tiny regime) after further growth
+input double InpRiskPctM5_T3    = 0.10;
+input double InpRiskPctM15_T3   = 0.10;
+input double InpRiskPctM30_T3   = 0.20;
+input double InpRiskPctH1_T3    = 0.40;
+input double InpRiskPctH4_T3    = 0.60;
 
-// Drawdown de-risk (still active)
-input double InpDDReduceStart   = 0.07;
-input double InpDDReduceFull    = 0.16;
-input double InpDDMinMult       = 0.30;
+// Drawdown de-risk
+input double InpDDReduceStart   = 0.06;   // Start reducing risk when DD from peak reaches this (6%)
+input double InpDDReduceFull    = 0.15;   // At this DD, risk multiplier reaches InpDDMinMult
+input double InpDDMinMult       = 0.35;   // Minimum risk multiplier under deep drawdown
 
-input group  "Entry Filters + Weekly bias"
-input bool   InpCloudBiasEnabled = true;
-input bool   InpH4Bias           = true;   // H4 direction bias for the whole stack
-input bool   InpD1Filter         = true;   // D1 filter for H4 tier
-input bool   InpW1Bias           = true;   // Weekly bias: only trade in W1 direction when W1 is aligned
-input bool   InpW1RequiredStrong = false;  // If true, require strong W1 (not just aligned) for any entry
-input int    InpMaxSpreadPoints  = 60;
-
-input group  "Trend Strength (W1 + H4 ADX)"
-input int    InpADXPeriod        = 14;
-input double InpADXStrong        = 25.0;   // ADX >= this on W1 or H4 counts as strong
-input double InpADXWeak          = 18.0;   // ADX below this counts as weak/choppy
+input group  "Entry Filters"
+input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
+input bool   InpH4Bias           = true;   // H4 is the bias — all tiers only trade in H4's direction (H4 flat = no trades)
+input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
+input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group  "Profit Protection (runners)"
 input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
@@ -99,29 +103,26 @@ string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
-int      ichW1[MAX_SYMS];           // Weekly ichimoku — top bias + strength
-int      atr[MAX_SYMS][LEVELS];       // ATR(level TF)
-int      adxH4[MAX_SYMS];            // H4 ADX for trend strength
-int      adxW1[MAX_SYMS];            // W1 ADX for trend strength
+int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 int      state[MAX_SYMS][LEVELS];     // per level: 0 = flat, 1 = long, -1 = short
 int      lastMinuteKey = -1;
 
-double   entryPrice[MAX_SYMS][LEVELS];
-double   peakHigh[MAX_SYMS][LEVELS];
-double   peakLow[MAX_SYMS][LEVELS];
-bool     beMoved[MAX_SYMS][LEVELS];
+double   entryPrice[MAX_SYMS][LEVELS];   // reference entry price per level (BE + trail arming)
+double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chandelier reference)
+double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
+bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-// --- Adaptive risk state ---
-double   startingEquity   = 0.0;
-double   peakEquity       = 0.0;
-double   dayStartEquity   = 0.0;
-datetime lastDayStamp     = 0;
+// --- Office-PC risk regime state ---
+double   startingEquity   = 0.0;   // captured once on first tick / OnInit
+double   peakEquity       = 0.0;   // high-water mark for drawdown calculation
+double   dayStartEquity   = 0.0;   // equity at the start of the current trading day
+datetime lastDayStamp     = 0;     // date of the last dayStartEquity capture
 bool     tradingFrozenToday = false;
 
-int MAGIC = 20260849;   // Office-PC adaptive
+int MAGIC = 20260849;   // Office-PC safer runner build (distinct from 20260848)
 
 CTrade trade;
 
@@ -175,15 +176,6 @@ int OnInit()
       ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
       if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
 
-      ichW1[s] = iIchimoku(syms[s], PERIOD_W1, Tenkan, Kijun, SenkouB);
-      if(ichW1[s] == INVALID_HANDLE) return(INIT_FAILED);
-
-      adxH4[s] = iADX(syms[s], PERIOD_H4, InpADXPeriod);
-      if(adxH4[s] == INVALID_HANDLE) return(INIT_FAILED);
-
-      adxW1[s] = iADX(syms[s], PERIOD_W1, InpADXPeriod);
-      if(adxW1[s] == INVALID_HANDLE) return(INIT_FAILED);
-
       for(int l = 0; l < LEVELS; l++)
       {
          atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
@@ -195,6 +187,7 @@ int OnInit()
    trade.SetExpertMagicNumber(MAGIC);
    SyncStateFromPositions();
 
+   // Capture starting equity for relative risk tiers (office-pc)
    startingEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(startingEquity <= 0) startingEquity = AccountInfoDouble(ACCOUNT_BALANCE);
    peakEquity     = startingEquity;
@@ -202,8 +195,8 @@ int OnInit()
    lastDayStamp   = 0;
    tradingFrozenToday = false;
 
-   Print("Office-PC adaptive init | StartingEquity=", DoubleToString(startingEquity, 2),
-         " | Magic=", MAGIC, " | ScaleFastUntil=", DoubleToString(InpScaleFastUntil, 0));
+   Print("Office-PC EA init | StartingEquity=", DoubleToString(startingEquity, 2),
+         " | Magic=", MAGIC);
    return(INIT_SUCCEEDED);
 }
 
@@ -214,9 +207,6 @@ void OnDeinit(const int reason)
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
-      if(ichW1[s] != INVALID_HANDLE) IndicatorRelease(ichW1[s]);
-      if(adxH4[s] != INVALID_HANDLE) IndicatorRelease(adxH4[s]);
-      if(adxW1[s] != INVALID_HANDLE) IndicatorRelease(adxW1[s]);
       for(int l = 0; l < LEVELS; l++)
          if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
    }
@@ -515,79 +505,13 @@ bool SpreadOK(string sym)
 }
 
 //==============================================================
-// Weekly alignment (same semantics as CheckAlign but on W1)
+// Risk Management — OFFICE-PC version
+//  • Relative equity tiers (based on StartingEquity × multipliers)
+//  • Hard per-trade risk ceiling (InpMaxRiskPct)
+//  • Drawdown-aware risk multiplier (reduces size while in DD)
+//  • Same ATR × InpRiskATRMult reference distance for lot sizing
+//  • Initial SL will be attached in OpenLevel (same distance)
 //==============================================================
-
-int WeeklyAlign(int s)
-{
-   int sh = 1;
-   int chShift = sh + Kijun;
-
-   MqlRates rt[];
-   if(CopyRates(syms[s], PERIOD_W1, 0, chShift + 1, rt) <= 0) return 0;
-   ArraySetAsSeries(rt, true);
-   if(ArraySize(rt) <= chShift) return 0;
-
-   double tenkan[1], kijun[1], senA[1], senB[1];
-   if(CopyBuffer(ichW1[s], 0, sh, 1, tenkan) <= 0) return 0;
-   if(CopyBuffer(ichW1[s], 1, sh, 1, kijun)  <= 0) return 0;
-   if(CopyBuffer(ichW1[s], 2, sh, 1, senA)   <= 0) return 0;
-   if(CopyBuffer(ichW1[s], 3, sh, 1, senB)   <= 0) return 0;
-
-   double closeP = rt[sh].close;
-   double cHi = MathMax(senA[0], senB[0]);
-   double cLo = MathMin(senA[0], senB[0]);
-
-   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
-   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
-   if(!above && !below) return 0;
-
-   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
-   if(CopyBuffer(ichW1[s], 0, chShift, 1, tenkan_ch) <= 0) return 0;
-   if(CopyBuffer(ichW1[s], 1, chShift, 1, kijun_ch)  <= 0) return 0;
-   if(CopyBuffer(ichW1[s], 2, chShift, 1, senA_ch)   <= 0) return 0;
-   if(CopyBuffer(ichW1[s], 3, chShift, 1, senB_ch)   <= 0) return 0;
-
-   double chik = closeP;
-   double cHiC = MathMax(senA_ch[0], senB_ch[0]);
-   double cLoC = MathMin(senA_ch[0], senB_ch[0]);
-
-   if(above && chik > rt[chShift].high &&
-      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
-   if(below && chik < rt[chShift].low &&
-      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
-   return 0;
-}
-
-//==============================================================
-// Adaptive Risk — scale fast on strong trends, careful in chop
-//==============================================================
-
-double GetADX(int handle)
-{
-   double buf[1];
-   if(handle == INVALID_HANDLE) return 0.0;
-   if(CopyBuffer(handle, 0, 1, 1, buf) <= 0) return 0.0;
-   return buf[0];
-}
-
-// Returns trend strength score for a symbol:
-//  2 = strong (W1 aligned + high ADX on W1 or H4)
-//  1 = normal
-//  0 = weak / choppy
-int TrendStrength(int s)
-{
-   int w1 = WeeklyAlign(s);
-   double adxW = GetADX(adxW1[s]);
-   double adxH = GetADX(adxH4[s]);
-
-   bool strongAdx = (adxW >= InpADXStrong || adxH >= InpADXStrong);
-   bool weakAdx   = (adxW < InpADXWeak && adxH < InpADXWeak);
-
-   if(w1 != 0 && strongAdx) return 2;   // clear intending trend
-   if(weakAdx || w1 == 0)   return 0;   // choppy or no weekly direction
-   return 1;                            // normal
-}
 
 double DrawdownRiskMult()
 {
@@ -596,66 +520,45 @@ double DrawdownRiskMult()
    double dd = (peakEquity - eq) / peakEquity;
    if(dd <= InpDDReduceStart) return 1.0;
    if(dd >= InpDDReduceFull)  return InpDDMinMult;
+   // Linear interpolate between start and full
    double t = (dd - InpDDReduceStart) / (InpDDReduceFull - InpDDReduceStart);
    return 1.0 - t * (1.0 - InpDDMinMult);
 }
 
-// Core adaptive risk % for a level
-double LevelRiskPct(int s, int lvl)
+double LevelRiskPct(int lvl)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(startingEquity <= 0) startingEquity = eq;
+   if(startingEquity <= 0) startingEquity = eq;   // safety
 
-   // Base risk by level
-   double base = 0.0;
+   double tier2At = startingEquity * InpRiskTier2Mult;
+   double tier3At = startingEquity * InpRiskTier3Mult;
+
+   bool t3 = (eq >= tier3At);
+   bool t2 = (eq >= tier2At);
+
+   double pct = 0.0;
    switch(lvl)
    {
-      case 0: base = InpRiskPctM5;  break;
-      case 1: base = InpRiskPctM15; break;
-      case 2: base = InpRiskPctM30; break;
-      case 3: base = InpRiskPctH1;  break;
-      case 4: base = InpRiskPctH4;  break;
+      case 0:  pct = t3 ? InpRiskPctM5_T3  : t2 ? InpRiskPctM5_T2  : InpRiskPctM5;  break;
+      case 1:  pct = t3 ? InpRiskPctM15_T3 : t2 ? InpRiskPctM15_T2 : InpRiskPctM15; break;
+      case 2:  pct = t3 ? InpRiskPctM30_T3 : t2 ? InpRiskPctM30_T2 : InpRiskPctM30; break;
+      case 3:  pct = t3 ? InpRiskPctH1_T3  : t2 ? InpRiskPctH1_T2  : InpRiskPctH1;  break;
+      case 4:  pct = t3 ? InpRiskPctH4_T3  : t2 ? InpRiskPctH4_T2  : InpRiskPctH4;  break;
       default: return 0.0;
    }
 
-   int strength = TrendStrength(s);
-
-   // Trend-strength multiplier
-   double trendMult = InpRiskMultNormal;
-   if(strength == 2) trendMult = InpRiskMultStrong;
-   else if(strength == 0) trendMult = InpRiskMultWeak;
-
-   // Capital stage adjustment
-   // While small AND strong trend → keep the strong multiplier (scale fast)
-   // Once equity is past MaintainFrom → pull risk down toward steady mode
-   double capitalMult = 1.0;
-   if(eq >= InpMaintainFrom)
-   {
-      // Steady / maintain phase — dampen even strong-trend risk
-      capitalMult = 0.55;
-   }
-   else if(eq >= InpScaleFastUntil)
-   {
-      // Transition zone
-      capitalMult = 0.80;
-   }
-   // else still in scale-fast zone → capitalMult stays 1.0
-
-   double pct = base * trendMult * capitalMult;
-
-   // Drawdown de-risk always applies
+   // Apply drawdown de-risk
    pct *= DrawdownRiskMult();
 
-   // Absolute hard ceiling
+   // HARD CAP — never exceed InpMaxRiskPct
    if(pct > InpMaxRiskPct) pct = InpMaxRiskPct;
-   if(pct < 0.05) pct = 0.05;   // tiny floor so we don't go to zero lots accidentally
 
    return pct;
 }
 
 double RiskLots(int s, int lvl)
 {
-   double riskPct = LevelRiskPct(s, lvl);
+   double riskPct = LevelRiskPct(lvl);
    if(riskPct <= 0) return InpFixedLots;
 
    double a[1];
@@ -1096,14 +999,6 @@ void OnTick()
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
 
-            // Weekly bias: only trade in the direction of W1 when W1 is aligned
-            if(InpW1Bias)
-            {
-               int w1 = WeeklyAlign(s);
-               if(w1 != 0 && w1 != st) continue;          // opposing W1 direction
-               if(InpW1RequiredStrong && w1 == 0) continue; // require W1 aligned
-            }
-
             topTier = l;
             topDir  = st;
             break;
@@ -1139,4 +1034,4 @@ void OnTick()
    }
 }
 //This work is my worship unto GOD
-// Office-PC adaptive — Weekly bias + trend-strength risk scaling 2026-08-15
+// Office-PC safer runner build — recommendations implemented 2026-08-15
