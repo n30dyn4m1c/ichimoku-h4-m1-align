@@ -39,8 +39,11 @@
 //|        and any smaller tier already running on the symbol is      |
 //|        closed first — so at most one position per symbol runs at  |
 //|        a time (the highest aligned tier). Every trade risks a     |
-//|        fixed % of the ACTUAL equity at entry (M5/M15 1%,          |
-//|        M30 5%, H1 10%, H4 20%) against the reference distance     |
+//|        fixed % of the ACTUAL equity at entry, de-risking as the   |
+//|        account grows: tier 1 below $7000 (M5/M15 1%, M30 5%, H1   |
+//|        10%, H4 20%), tier 2 half regime $7000-$13000              |
+//|        (0.5/0.5/2.5/5/10), tier 3 tiny regime $13000+             |
+//|        (0.1/0.1/0.2/1/2), against the reference distance           |
 //|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
 //|        entry stop is attached). No multipliers, no streak         |
 //|        compounding.                                               |
@@ -61,11 +64,23 @@ input int    Slippage = 30;
 input group  "Risk Management (per level, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
 input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
-input double InpRiskPctM5       = 1.0;    // M5   — % of equity risked per trade
-input double InpRiskPctM15      = 1.0;    // M15  — % of equity risked per trade
-input double InpRiskPctM30      = 5.0;    // M30  — % of equity risked per trade
-input double InpRiskPctH1       = 10.0;   // H1   — % of equity risked per trade
-input double InpRiskPctH4       = 20.0;   // H4   — % of equity risked per trade
+input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
+input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
+input double InpRiskPctM5       = 1.0;    // M5   — tier 1 (equity < Tier2At)
+input double InpRiskPctM15      = 1.0;    // M15  — tier 1
+input double InpRiskPctM30      = 5.0;    // M30  — tier 1
+input double InpRiskPctH1       = 10.0;   // H1   — tier 1
+input double InpRiskPctH4       = 20.0;   // H4   — tier 1
+input double InpRiskPctM5_T2    = 0.5;    // M5   — tier 2 (half regime)
+input double InpRiskPctM15_T2   = 0.5;    // M15  — tier 2
+input double InpRiskPctM30_T2   = 2.5;    // M30  — tier 2
+input double InpRiskPctH1_T2    = 5.0;    // H1   — tier 2
+input double InpRiskPctH4_T2    = 10.0;   // H4   — tier 2
+input double InpRiskPctM5_T3    = 0.1;    // M5   — tier 3 (equity >= Tier3At)
+input double InpRiskPctM15_T3   = 0.1;    // M15  — tier 3
+input double InpRiskPctM30_T3   = 0.2;    // M30  — tier 3
+input double InpRiskPctH1_T3    = 1.0;    // H1   — tier 3
+input double InpRiskPctH4_T3    = 2.0;    // H4   — tier 3
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
@@ -483,24 +498,31 @@ bool SpreadOK(string sym)
 
 //==============================================================
 // Risk Management — per-level risk as a fixed % of the ACTUAL
-// equity at entry (M5/M15 1%, M30 5%, H1 10%, H4 20%), measured
-// against a reference distance of ATR(level TF) x InpRiskATRMult,
-// the same ATR-based sizing philosophy as the H4 VPS build. More
-// equity -> more risk money -> bigger lots at the same ATR
-// distance; no multipliers on top. Falls back to InpFixedLots
-// when the sizing data is unavailable, and every order is capped
-// to the free margin so it fills fully.
+// equity at entry, in three equity tiers that DE-RISK as the
+// account grows: full regime below InpRiskTier2At (M5/M15 1%,
+// M30 5%, H1 10%, H4 20%), half regime between the tiers
+// (0.5/0.5/2.5/5/10), and the tiny regime at InpRiskTier3At and
+// above (0.1/0.1/0.2/1/2). Sizing measures the % against a
+// reference distance of ATR(level TF) x InpRiskATRMult, the same
+// ATR-based sizing philosophy as the H4 VPS build. More equity
+// -> more risk money -> bigger lots at the same ATR distance;
+// no multipliers on top. Falls back to InpFixedLots when the
+// sizing data is unavailable, and every order is capped to the
+// free margin so it fills fully.
 //==============================================================
 
 double LevelRiskPct(int lvl)
 {
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   bool t3 = (eq >= InpRiskTier3At);
+   bool t2 = (eq >= InpRiskTier2At);
    switch(lvl)
    {
-      case 0:  return InpRiskPctM5;
-      case 1:  return InpRiskPctM15;
-      case 2:  return InpRiskPctM30;
-      case 3:  return InpRiskPctH1;
-      case 4:  return InpRiskPctH4;
+      case 0:  return t3 ? InpRiskPctM5_T3  : t2 ? InpRiskPctM5_T2  : InpRiskPctM5;
+      case 1:  return t3 ? InpRiskPctM15_T3 : t2 ? InpRiskPctM15_T2 : InpRiskPctM15;
+      case 2:  return t3 ? InpRiskPctM30_T3 : t2 ? InpRiskPctM30_T2 : InpRiskPctM30;
+      case 3:  return t3 ? InpRiskPctH1_T3  : t2 ? InpRiskPctH1_T2  : InpRiskPctH1;
+      case 4:  return t3 ? InpRiskPctH4_T3  : t2 ? InpRiskPctH4_T2  : InpRiskPctH4;
    }
    return 0.0;
 }
