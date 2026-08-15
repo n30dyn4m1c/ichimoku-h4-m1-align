@@ -1927,3 +1927,135 @@ faster-moving M5 kijun.
   three-value shape is not flat. Tighten to "older two flat, newest
   breaking out" by editing `CheckKijunStart()` if backtests show entries
   too late in the move.
+
+---
+
+## 19. Bottom-Up Stack EA (per-level chain alignment, five tiers)
+
+**File:** `experimental-bottomup-stack-ea.mq5`
+**Snapshot:** `experimental-bottomup-stack-ea-very-profitable.mq5` — a saved
+checkpoint (touch-only kumo exit, no H4 overextension filter, no ADX trend
+filter; see below)
+**Magic number:** `20260848` — fresh, distinct from every other build
+
+A structural departure from the single-alignment-gate EAs: instead of one
+boolean "all TFs aligned" check that opens one trade, this build treats the
+6-TF stack (M1→H4) as five nested tiers and opens a trade at **whichever
+tier the alignment currently reaches**, bottom-up:
+
+| Tier | Requires aligned | Opens on |
+|------|-------------------|----------|
+| M5  | M1 + M5 | M5 |
+| M15 | M1 + M5 + M15 | M15 |
+| M30 | M1 + M5 + M15 + M30 | M30 |
+| H1  | M1 … H1 | H1 |
+| H4  | M1 … H4 | H4 |
+
+M1 alone never trades — it's only the base of the chain. `ChainAligned()`
+walks the stack from M1 upward and returns the common direction only if
+every timeframe up to the tier agrees; a single mismatched TF breaks the
+chain for that tier (and every tier above it, since they include it).
+
+### Entry filters (checked before a tier is allowed to open)
+
+- **Cloud bias** (`InpCloudBiasEnabled`, default on) — Span A vs Span B must
+  carry the trade's bias, checked at the last closed bar and the far end of
+  the future-cloud window, on the tier TF **and** the TF directly below it.
+- **H4 bias** (`InpH4Bias`, default on) — H4 is the bias for the *entire*
+  stack: H4 bullish allows buys only (a lower-TF sell is just a pullback),
+  H4 bearish allows sells only, H4 unaligned blocks every tier, including M5.
+- **D1 filter, H4 tier only** (`InpD1Filter`, default on) — the H4 tier also
+  needs D1 to carry the same bias; D1 closed inside its own cloud blocks new
+  H4 trades (lower tiers are unaffected).
+- **H4 overextension filter, H1/H4 tiers only** (`H4Overextended()`) — three
+  independent H4-only measures, any one of which blocks new H1/H4 entries
+  (M5/M15/M30 may still trade):
+  1. **Distance** (`InpOverextDistATR`, default 3.0): last closed H4 close is
+     ≥ this × ATR(H4) from tenkan, kijun, *or* the cloud edge (worst-case of
+     the three).
+  2. **Huge candles** (`InpOverextCandleATR`, default 2.5): the max range of
+     the last 3 closed H4 bars is ≥ this × ATR(H4) — the trending candles
+     have gotten enormous.
+  3. **No touch** (`InpOverextNoTouch`, default 26 bars): no H4 candle in the
+     lookback window has touched tenkan, kijun, or the cloud — price has run
+     away from every pullback reference.
+  Any sub-check set to `0` is disabled; unreadable data is treated as "not
+  overextended" (allows entry).
+- **Trend strength** (`InpTrendADX`, default on) — H4 ADX must be ≥
+  `InpTrendADXLevel` (default 25) for *any* tier to open; a flat/choppy H4
+  blocks the whole stack, not just H1/H4.
+
+### Entry consolidation (one position per symbol)
+
+When several tiers align at the same moment, only the **largest** (highest
+TF) tier opens — any smaller tier already running on the symbol is closed
+first (`superseded by <TF>`). So at most one position runs per symbol at a
+time, always the highest tier the chain currently reaches.
+
+### Exit logic
+
+Two independently-configurable layers:
+
+- **Cloud exit** (`InpKumoExit`) — the trade's main exit, evaluated once per
+  closed M1 bar:
+  - `KUMO_TOUCH` (0, default): exits the instant price **touches** the tier
+    TF's cloud edge intra-bar — fast, but a normal trend pullback that
+    grazes the cloud cuts the trade short.
+  - `KUMO_CLOSE` (1): waits for the tier TF bar to **close** inside (or
+    beyond) the cloud — rides trends further, added after the touch-only
+    snapshot below.
+- **Rejection candle exit** (`InpRejectionExit`, default **off**) — closes a
+  trade when a very strong rejection candle forms against it on the tier TF:
+  all four conditions must hold — opposing body, sweeps the swing extreme of
+  the last `InpRejSwingBars` bars, wick ≥ `InpRejWickPct` of the range, close
+  in the outer `InpRejClosePct` of the range.
+- **Profit protection** (always on, once a trade is green): break-even once
+  profit ≥ `InpBEProfitATR` × ATR (or the tighter `InpBEProfitH1H4` for the
+  H1/H4 tiers), then an ATR chandelier trail behind the peak — H1/H4 arm at
+  `InpTrailActivateATR` × ATR, M5/M15/M30 only arm on a spike
+  (`InpSpikeLockATR` × ATR). Both are tighten-only and use each level's own
+  TF for ATR.
+- **No entry stop loss.** The trade runs naked until an exit fires; the BE/
+  trail layer is the only protection until then.
+
+### Risk sizing — three equity tiers, de-risking as the account grows
+
+Every trade risks a fixed % of **actual equity at entry** against a
+reference distance of `ATR(level TF) × InpRiskATRMult` (sizing basis only —
+no stop is attached at that distance). The % drops as equity grows:
+
+| Regime | Equity | M5 | M15 | M30 | H1 | H4 |
+|--------|--------|----|-----|-----|----|----|
+| Tier 1 (full) | < `InpRiskTier2At` ($7000) | 1% | 1% | 5% | 10% | 20% |
+| Tier 2 (half) | $7000–$13000 | 0.5% | 0.5% | 2.5% | 5% | 10% |
+| Tier 3 (tiny) | ≥ `InpRiskTier3At` ($13000) | 0.1% | 0.1% | 0.2% | 1% | 2% |
+
+Falls back to `InpFixedLots` when ATR/tick sizing data is unavailable; every
+order is capped to free margin so it fills fully.
+
+### The "very-profitable" snapshot
+
+`experimental-bottomup-stack-ea-very-profitable.mq5` was saved (commit
+`5fdd401`) as a checkpoint of a run described as very profitable, before the
+H4 overextension filter, ADX trend-strength filter, and `KUMO_CLOSE` exit
+mode were added — it has `InpKumoExit` hard-coded to touch-only, the D1
+filter and 3-tier risk regime already in place, and no
+`H4Overextended()`/`H4TrendOK()` gates at all. Useful as an A/B baseline
+against the current file to see what those three additions changed.
+
+### Status & caveats
+
+- **Not yet backtested.** No F7 compile/Strategy Tester run recorded in this
+  repo — the "very-profitable" label describes a prior manual/demo run, not
+  a reproduced backtest artifact.
+- **No entry stop loss** — every position is naked until BE arms; a fast
+  adverse move right after entry has nothing to catch it before the cloud
+  exit or a manual close.
+- **Overextension and ADX filters are new and unvalidated** — compare
+  against the `-very-profitable` snapshot (which lacks both) to see whether
+  they help or just reduce trade count.
+- **`KUMO_TOUCH` is the default** even though `KUMO_CLOSE` was added to let
+  trends run further — hasn't been A/B'd yet; flip `InpKumoExit` to compare.
+- Five tiers × per-symbol state means CPU/array usage scales with
+  `symsCount × LEVELS` — trivial for a handful of symbols, worth checking
+  before scaling `Symbols` up toward `MAX_SYMS` (60).
