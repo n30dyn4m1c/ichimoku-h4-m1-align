@@ -777,6 +777,14 @@ void ManageLevelProtection(int s, int lvl)
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
 
+   // A position with no stop attached reports SL = 0, and the tighten-only
+   // comparisons below are written against a real price. For a SHORT that
+   // makes "slNew < slCur - point" read as "slNew < -point", which is never
+   // true — so with no stop attached a short could never arm break-even or
+   // the trail, and ran to the kumo completely unprotected while longs were
+   // fine. Treat "no stop yet" as "any valid stop is tighter".
+   bool hasSL = (slCur > 0);
+
    // Break-even: tighter arming threshold on the long-running H1/H4 levels
    double beATR = (lvl >= 3) ? InpBEProfitH1H4 : InpBEProfitATR;
    if(!beMoved[s][lvl])
@@ -789,8 +797,8 @@ void ManageLevelProtection(int s, int lvl)
                                : entryPrice[s][lvl] - InpBECoverPoints * point;
          slNew = NormalizeDouble(slNew, digits);
 
-         bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist)
-                          : (slNew < slCur - point && slNew > ask + minDist);
+         bool ok = isLong ? ((!hasSL || slNew > slCur + point) && slNew < bid - minDist)
+                          : ((!hasSL || slNew < slCur - point) && slNew > ask + minDist);
          if(ok)
          {
             if(!trade.PositionModify(ticket, slNew, 0))
@@ -811,6 +819,7 @@ void ManageLevelProtection(int s, int lvl)
    // Re-read the current stop first — the BE block above may have moved it.
    if(!LevelTicket(s, lvl, ticket)) return;
    slCur = PositionGetDouble(POSITION_SL);
+   hasSL = (slCur > 0);
 
    double armATR = (lvl >= 3) ? InpTrailActivateATR : InpSpikeLockATR;
    bool armed = isLong ? (bid >= entryPrice[s][lvl] + armATR * atrVal)
@@ -821,10 +830,12 @@ void ManageLevelProtection(int s, int lvl)
                             : peakLow[s][lvl] + InpTrailATR * atrVal;
       slNew = NormalizeDouble(slNew, digits);
 
-      bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist &&
-                          slNew - slCur >= 0.3 * atrVal)
-                       : (slNew < slCur - point && slNew > ask + minDist &&
-                          slCur - slNew >= 0.3 * atrVal);
+      // The 0.3 x ATR "worth moving" filter compares against an existing
+      // stop; with none attached any valid stop is an improvement.
+      bool ok = isLong ? ((!hasSL || (slNew > slCur + point && slNew - slCur >= 0.3 * atrVal)) &&
+                          slNew < bid - minDist)
+                       : ((!hasSL || (slNew < slCur - point && slCur - slNew >= 0.3 * atrVal)) &&
+                          slNew > ask + minDist);
       if(ok)
       {
          if(!trade.PositionModify(ticket, slNew, 0))
