@@ -13,20 +13,28 @@
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
 //|        TF and the TF directly below it, H4 is the bias for the    |
 //|        whole stack (H4 bullish -> buys only, bearish -> sells     |
-//|        only, flat -> no trades), and the H4 tier itself is also   |
-//|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
-//|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
-//| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
-//|        candle close inside the kumo). A long exits when the bid |
-//|        touches the cloud's upper edge; a short when the ask     |
-//|        touches the lower edge. A very strong REJECTION candle   |
-//|        against the trade also closes it (sweeps the recent      |
-//|        swing extreme of InpRejSwingBars bars, wick >=           |
-//|        InpRejWickPct of the range, close in the outer           |
-//|        InpRejClosePct — all four conditions must hold). No      |
-//|        entry stop loss in this test build — the trade runs      |
-//|        until an exit, with the profit protection layer taking   |
-//|        over once it turns green:                                |
+//|        only, flat -> no trades), the H4 tier itself is also       |
+//|        gated by the D1 bias (D1 in the cloud -> no H4 trades),    |
+//|        and an H4 OVEREXTENSION filter blocks H1 and H4 tier     |
+//|        entries (H4-only, three measures): close >=              |
+//|        InpOverextDistATR x ATR from tenkan/kijun/cloud, huge H4  |
+//|        candle range >= InpOverextCandleATR x ATR, or no H4       |
+//|        candle touching tenkan/kijun/cloud for InpOverextNoTouch+ |
+//|        bars — no positions opened at the peak of a stretched     |
+//|        move; the lower tiers (M5/M15/M30) may still trade. A     |
+//|        TREND STRENGTH filter requires H4 ADX >= InpTrendADXLevel |
+//|        so entries happen only in good trends, not every          |
+//|        alignment.                                                 |
+//| Exit:  the cloud exit runs in two modes: KUMO_TOUCH closes the  |
+//|        moment price touches the level TF's cloud edge (fast, but |
+//|        trend pullbacks cut trades short); KUMO_CLOSE waits for   |
+//|        the tier TF bar to CLOSE inside the cloud — the mode that |
+//|        rides good trends. A very strong REJECTION candle against |
+//|        the trade also closes it when enabled (sweeps the recent  |
+//|        swing extreme, wick >= InpRejWickPct of the range, close  |
+//|        in the outer InpRejClosePct). No entry stop loss in this  |
+//|        test build — the trade runs until an exit, with the       |
+//|        profit protection layer taking over once it turns green:  |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
 //|                         H1/H4 levels) -> SL to entry + cover      |
 //|          Chandelier   : H1/H4 levels trail the stop behind the    |
@@ -86,7 +94,21 @@ input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
 input bool   InpH4Bias           = true;   // H4 is the bias — all tiers only trade in H4's direction (H4 flat = no trades)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
+input double InpOverextDistATR   = 3.0;   // H4 overextended when the close is >= this x ATR(H4) from tenkan, kijun or the cloud (0 = off)
+input double InpOverextCandleATR = 2.5;   // H4 overextended when a recent H4 candle range is >= this x ATR(H4) (huge trending candles; 0 = off)
+input int    InpOverextNoTouch   = 26;    // H4 overextended when NO H4 candle touched tenkan/kijun/cloud for this many bars (0 = off)
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
+
+input group  "Trend Strength Filter"
+input bool   InpTrendADX       = true;    // Only enter on good trend conditions: H4 ADX must show a real trend
+input int    InpADXPeriod      = 14;      // ADX period (H4)
+input double InpTrendADXLevel  = 25.0;    // ADX(H4) must be >= this to enter (flat/choppy H4 = no entries)
+
+//--- Kumo exit mode: touch (aggressive) or tier-TF bar close (rides trends)
+enum ENUM_KUMO_EXIT { KUMO_TOUCH = 0, KUMO_CLOSE = 1 };
+
+input group  "Exit Management"
+input ENUM_KUMO_EXIT InpKumoExit = KUMO_TOUCH;   // 0 = exit when price touches the cloud edge, 1 = exit when the tier TF bar closes inside the cloud
 
 input group  "Profit Protection"
 input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
@@ -114,6 +136,7 @@ string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
 int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
+int      adx[MAX_SYMS];               // ADX(H4) — trend strength filter (good trend conditions)
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -179,6 +202,9 @@ int OnInit()
       ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
       if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
 
+      adx[s] = iADX(syms[s], PERIOD_H4, InpADXPeriod);
+      if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
+
       for(int l = 0; l < LEVELS; l++)
       {
          atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
@@ -199,6 +225,7 @@ void OnDeinit(const int reason)
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
+      if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
       for(int l = 0; l < LEVELS; l++)
          if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
    }
@@ -447,13 +474,18 @@ bool H4BiasOK(int s, int dir)
 }
 
 //==============================================================
-// Exit Check: price TOUCHES the level TF's cloud edge — no wait
-// for a candle to close inside it. A long (entered above the
-// cloud) exits when the bid touches the cloud's upper edge; a
-// short (entered below) exits when the ask touches the lower
-// edge. Evaluated once per closed M1 bar, so a touch triggers
-// the exit within a minute. This is the trade's main exit; the
-// BE/chandelier stop is the profit-protection layer on top.
+// Exit Check: cloud exit with two modes.
+//   KUMO_TOUCH (aggressive): price TOUCHES the level TF's cloud
+//     edge — a long exits when the bid touches the cloud's upper
+//     edge, a short when the ask touches the lower edge. Fires
+//     fast, but a trend pullback touching the cloud intra-bar
+//     cuts the trade short.
+//   KUMO_CLOSE (rides trends): the level TF bar must CLOSE inside
+//     the cloud (or beyond it) — a pullback has to actually close
+//     back into the kumo before the trade exits, letting good
+//     trends run.
+// Evaluated once per closed M1 bar. This is the trade's main
+// exit; the BE/chandelier stop is the profit-protection layer.
 //==============================================================
 
 bool InCloudTouch(int s, int tfIdx, int dir)
@@ -462,6 +494,19 @@ bool InCloudTouch(int s, int tfIdx, int dir)
    if(CopyBuffer(ich[s][tfIdx], 2, 1, 1, senA) <= 0) return false;
    if(CopyBuffer(ich[s][tfIdx], 3, 1, 1, senB) <= 0) return false;
 
+   if(InpKumoExit == KUMO_CLOSE)
+   {
+      // Ride mode: the tier TF's last closed bar must close inside
+      // (or beyond) the cloud
+      MqlRates rt[];
+      if(CopyRates(syms[s], tfs[tfIdx], 1, 1, rt) <= 0) return false;
+      double closeP = rt[0].close;
+      if(dir ==  1) return closeP < MathMax(senA[0], senB[0]);
+      if(dir == -1) return closeP > MathMin(senA[0], senB[0]);
+      return false;
+   }
+
+   // Touch mode: current price touches the cloud edge
    if(dir ==  1)
    {
       double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
@@ -473,6 +518,122 @@ bool InCloudTouch(int s, int tfIdx, int dir)
       return ask >= MathMin(senA[0], senB[0]);
    }
    return false;
+}
+
+//==============================================================
+// H4 Overextension Filter — three H4-only measures. Any of them
+// triggering blocks NEW H1 and H4 tier entries (no positions
+// opened at the peak of a stretched move); the lower tiers
+// (M5/M15/M30) may still trade:
+//   1. DISTANCE: the last closed H4 close sits >=
+//      InpOverextDistATR x ATR(H4) from tenkan, kijun or the
+//      cloud edge — price far from every reference.
+//   2. HUGE CANDLES: a recent H4 candle range is >=
+//      InpOverextCandleATR x ATR(H4) — the trending candles are
+//      enormous, the move is exhausting.
+//   3. NO TOUCH: no H4 candle has touched tenkan, kijun or the
+//      cloud within the last InpOverextNoTouch bars (>= 26) —
+//      price has run away from all pullback references.
+// Any sub-check with unreadable data is skipped (allows entry).
+//==============================================================
+
+bool H4Overextended(int s)
+{
+   double a1[1], a2[1];
+
+   // 1) Distance from tenkan, kijun and the cloud
+   if(InpOverextDistATR > 0)
+   {
+      double tenkan[1], kijun[1], senA[1], senB[1];
+      if(CopyBuffer(ich[s][TFS - 1], 0, 1, 1, tenkan) > 0 &&
+         CopyBuffer(ich[s][TFS - 1], 1, 1, 1, kijun)  > 0 &&
+         CopyBuffer(ich[s][TFS - 1], 2, 1, 1, senA)   > 0 &&
+         CopyBuffer(ich[s][TFS - 1], 3, 1, 1, senB)   > 0 &&
+         CopyBuffer(atr[s][LEVELS - 1], 0, 1, 1, a1) > 0 && a1[0] > 0)
+      {
+         MqlRates rt[];
+         if(CopyRates(syms[s], tfs[TFS - 1], 1, 1, rt) > 0)
+         {
+            double closeP = rt[0].close;
+            double cHi = MathMax(senA[0], senB[0]);
+            double cLo = MathMin(senA[0], senB[0]);
+            double dCloud = (closeP > cHi) ? (closeP - cHi)
+                          : (closeP < cLo ? (cLo - closeP) : 0.0);
+            double worst = MathMax(MathAbs(closeP - tenkan[0]),
+                          MathMax(MathAbs(closeP - kijun[0]), dCloud));
+            if(worst >= InpOverextDistATR * a1[0]) return true;
+         }
+      }
+   }
+
+   // 2) Huge trending candles: max range of the last 3 closed H4 bars
+   if(InpOverextCandleATR > 0)
+   {
+      if(CopyBuffer(atr[s][LEVELS - 1], 0, 1, 1, a2) > 0 && a2[0] > 0)
+      {
+         MqlRates rc[];
+         if(CopyRates(syms[s], tfs[TFS - 1], 1, 3, rc) == 3)
+         {
+            double maxRange = 0.0;
+            for(int i = 0; i < 3; i++)
+            {
+               double rg = rc[i].high - rc[i].low;
+               if(rg > maxRange) maxRange = rg;
+            }
+            if(maxRange >= InpOverextCandleATR * a2[0]) return true;
+         }
+      }
+   }
+
+   // 3) No touch of tenkan / kijun / cloud within InpOverextNoTouch bars
+   if(InpOverextNoTouch > 0)
+   {
+      int win = 60;
+      double tk[60], kj[60], sa[60], sb[60];
+      if(CopyBuffer(ich[s][TFS - 1], 0, 1, win, tk) == win &&
+         CopyBuffer(ich[s][TFS - 1], 1, 1, win, kj) == win &&
+         CopyBuffer(ich[s][TFS - 1], 2, 1, win, sa) == win &&
+         CopyBuffer(ich[s][TFS - 1], 3, 1, win, sb) == win)
+      {
+         MqlRates rt2[];
+         if(CopyRates(syms[s], tfs[TFS - 1], 1, win, rt2) == win)
+         {
+            int sinceTen = win, sinceKj = win, sinceCloud = win;
+            for(int i = 0; i < win; i++)
+            {
+               bool touchTen = rt2[i].low <= tk[i] && rt2[i].high >= tk[i];
+               bool touchKj  = rt2[i].low <= kj[i] && rt2[i].high >= kj[i];
+               double lo = MathMin(sa[i], sb[i]);
+               double hi = MathMax(sa[i], sb[i]);
+               bool touchCloud = rt2[i].low <= hi && rt2[i].high >= lo;
+               if(sinceTen == win && touchTen)  sinceTen  = i + 1;
+               if(sinceKj  == win && touchKj)   sinceKj   = i + 1;
+               if(sinceCloud == win && touchCloud) sinceCloud = i + 1;
+            }
+            if(sinceTen  >= InpOverextNoTouch ||
+               sinceKj   >= InpOverextNoTouch ||
+               sinceCloud >= InpOverextNoTouch) return true;
+         }
+      }
+   }
+
+   return false;
+}
+
+//==============================================================
+// Trend Strength Filter: only enter on good trend conditions.
+// H4 ADX must show a genuine trend (>= InpTrendADXLevel) — a
+// flat or choppy H4 means no entries, so the EA waits for the
+// trend instead of trading every alignment. Unreadable ADX
+// counts as blocking (conservative).
+//==============================================================
+
+bool H4TrendOK(int s)
+{
+   if(!InpTrendADX) return true;
+   double d[1];
+   if(CopyBuffer(adx[s], 0, 1, 1, d) <= 0 || d[0] <= 0) return false;
+   return d[0] >= InpTrendADXLevel;
 }
 
 //==============================================================
@@ -893,7 +1054,9 @@ void OnTick()
       // together: the running M15 trade closes and only M30 opens.
       int topTier = -1;
       int topDir  = 0;
-      if(SpreadOK(syms[s]))
+      // H4 overextension gate and trend strength apply before the scan
+      // (H4Overextended is applied per-tier below: H1/H4 only)
+      if(SpreadOK(syms[s]) && H4TrendOK(s))
       {
          for(int l = LEVELS - 1; l >= 0; l--)
          {
@@ -905,6 +1068,10 @@ void OnTick()
 
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
+
+            // H1/H4 tiers: no entries while H4 is overextended — the
+            // lower tiers (M5/M15/M30) may still trade
+            if(l >= 3 && H4Overextended(s)) continue;
 
             topTier = l;
             topDir  = st;
