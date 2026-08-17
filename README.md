@@ -566,7 +566,13 @@ next obstacle, and the reward:risk all work out. It ships in two flavours:
 the H4-anchored build above and a **D1-anchored fork**
 (`experimental-structure-map-d1-ea.mq5`) that bounces off daily structures
 while still timing entries on M15 — same engine, different scale, its own
-magic number so both can run at once. They're newer and less battle-tested
+magic number so both can run at once. There is also an **H1-bias fork of the
+bottom-up stack EA** (`experimental-bottomup-stack-h1-bias-ea.mq5`), a
+single-change variant of the "very profitable" snapshot: the H4 bias and the
+D1 filter stay exactly as they are, but the lower tiers (M5/M15/M30 by
+default) gain a second, smaller bias to fall back on, so a flat H4 no longer
+freezes the whole stack — set `InpH1BiasMode = H1BIAS_OFF` to get the
+snapshot's behaviour back for an A/B. They're newer and less battle-tested
 than the main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
 for the full catalog.
