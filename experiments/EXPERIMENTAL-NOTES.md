@@ -2618,3 +2618,93 @@ desktop) or any other fork.
   for a tier-TF close, so an M30 trade can ride a pullback up to the M30
   bar close. Expect fewer, larger exits on the upper tiers; A/B against
   `KUMO_CLOSE_OFF` on both the 2026 trend window and a range window.
+
+---
+
+## 25. Bottom-Up Stack EA — new kumo-breakout definition (M1..D1), M30 bias, tenkan-close exits
+
+**File:** `experimental-bottomup-stack-m30-bias-ea.mq5`
+**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
+`20260850`), which is left untouched
+**Magic number:** `20260855` — fresh, so this experiment never adopts or
+manages positions belonging to the live builds (`20260850` VPS, `20260852`
+desktop) or any other fork
+
+Two changes to the promoted build; everything else is byte-for-byte the
+parent's.
+
+1. **New kumo-breakout definition, all timeframes M1..D1 (fundamental).**
+   The per-TF test behind the entry chains (`CheckAlign`, on M1/M5/M15/
+   M30/H1/H4), the H4 and H1 biases (they call the same test), the D1
+   filter (`DailyAlign`) and the M30 gate now defines a valid kumo
+   breakout as exactly:
+   - **price** beyond the kumo — the last closed bar's close above the
+     cloud's upper edge (bullish) / below the lower edge (bearish),
+   - **chikou** beyond the kumo — the chikou span (that same close
+     plotted Kijun bars back) beyond the cloud at its own position,
+   - **the twist** — tenkan > kijun (bullish) / tenkan < kijun
+     (bearish) on the last closed bar.
+   The old per-line conditions are gone: price no longer has to sit above
+   tenkan and kijun individually, and the chikou no longer has to clear
+   the prior high/low or the tenkan/kijun at its shift. One definition
+   everywhere, from the M1 foot of the chain to the D1 filter.
+
+2. **The M30 bias — a last-resort stand-in.** The parent's bias stack is
+   untouched: H4 is the primary bias for every tier, and the H1 stand-in
+   covers the tiers at or below `InpH1BiasMaxTier` when H4 is flat. The
+   M30 bias adds a third rung below H1: when there is **no H4 bias and no
+   H1 bias** (H4 flat and H1 flat), the **M5 and M15 tiers only** may
+   still open provided M30 shows the valid kumo breakout of change 1
+   (`M30BreakoutOK` is now just `CheckAlign(IDX_M30) == dir` — the M30
+   gate inherited the new definition, twist included). The M30 bias never
+   stands in against an aligned H4 or an aligned H1, and never opens the
+   M30/H1/H4 tiers — only the m1-m5 and m1-m5-15 chains.
+
+3. **Tenkan-close exits for M30-authorised trades.** A trade opened under
+   the M30 bias closes when a **candle CLOSES BEYOND** the highest
+   timeframe's **tenkan sen** — not on a mere touch: the M5 tier exits on
+   the last closed M5 candle closing below the M5 tenkan (long) or above
+   it (short), the M15 tier on the M15 candle doing the same. Strict
+   inequalities, no wait beyond the tier-TF candle close, checked every
+   closed M1 bar so the exit fires within a minute of the close.
+   Parent-authorised trades (H4/H1) keep the parent's kumo-touch exit
+   unchanged. The position comment carries the exit mode so it survives a
+   restart: M30-bias trades get a "T" suffix ("Exp Buy M5T"), parent
+   trades keep the plain comment ("Exp Buy M5"), and
+   `SyncStateFromPositions` restores the mode on restart.
+
+### New inputs
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `InpM30Bias` | `true` | When H4 and H1 are both flat, the M5/M15 tiers may open on M30's valid kumo breakout (price + chikou beyond kumo + tenkan > kijun); these trades exit on the highest-TF tenkan sen instead of the cloud |
+
+All other inputs are the parent's, unchanged — **`.set` files from the
+parent load cleanly**; only `InpM30Bias` is added (defaults to true, so a
+parent `.set` behaves as the new build with the M30 fallback enabled).
+
+### Status & caveats
+
+- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
+  run is recorded in this repo. Compile and demo-test before it touches
+  money.
+- **The new breakout definition changes EVERYTHING, not just M30.** Entry
+  chains and the H4/H1 biases are stricter on the twist (a flat or
+  counter-twisted tenkan/kijun blocks a breakout even with price and
+  chikou beyond the kumo) but looser on the lines (price/chikou no longer
+  need to clear tenkan and kijun individually). The net effect on trade
+  count is unknown until backtested — that is the experiment.
+- **The M30 bias only fires when the higher biases are silent** — H4 flat
+  and H1 flat. That is the point: it is a last-resort directional gate
+  for the two smallest chains, not an override. An aligned H4 (or H1)
+  always takes precedence and the M30 path is skipped.
+- **Tenkan-close exits are still faster than cloud exits.** Entry
+  requires price clear of the kumo on the tier TF, but the tenkan is a
+  fast line — an M30-bias trade can be closed by a pullback that closes
+  beyond the tenkan while the cloud exit would have ridden it through.
+  That is the experiment: tighter exits against the M30 breakout
+  direction, requiring a full tier-TF candle close (not just a touch) so
+  brief wicks through the tenkan do not stop the trade.
+- **Only M30-authorised trades exit on the tenkan.** H4/H1-authorised
+  trades on the same levels keep the parent's kumo exit — the exit mode
+  is fixed at entry and carried in the position comment ("T" suffix).
