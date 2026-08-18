@@ -1,19 +1,15 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA — M1 TIER / M1 CLOUD EXIT (EXPERIMENT)|
+//| Ichimoku Bottom-Up Stack EA — M1 TIER VARIANT (EXPERIMENT)        |
 //| Fork of experimental-bottomup-stack-h1-bias-ea.mq5 (the H1-bias   |
-//| build now shipping as the VPS/desktop EAs). Two changes, both     |
-//| about the fastest timeframe in the stack:                         |
-//|   1. M1 TRADES. In the parent, M1 was only the foot of the chain  |
-//|      and never opened anything. Here it is a sixth tier in its    |
-//|      own right — when M1 is aligned and nothing above it is, the  |
-//|      M1 tier opens, with its own risk row (half of M5) and its    |
-//|      own ATR-based protection.                                    |
-//|   2. M1 CLOUD EXIT. Every tier, M1 through H4, is closed on a     |
-//|      TOUCH of the M1 kumo instead of its own timeframe's kumo.    |
-//|      An H4 trade no longer waits for the H4 cloud to be reached;  |
-//|      the first M1-cloud touch takes it off. Set                   |
-//|      InpExitOnM1Cloud = false to restore the parent's per-tier    |
-//|      cloud exit and A/B the two.                                  |
+//| build now shipping as the VPS/desktop EAs). ONE change: M1 TRADES.|
+//| In the parent, M1 was only the foot of the chain and never opened |
+//| anything. Here it is a sixth tier in its own right — when M1 is   |
+//| aligned and nothing above it is, the M1 tier opens, with its own  |
+//| risk row (half of M5), its own ATR-based protection, and its own  |
+//| cloud exit. Everything else is the parent's, the per-tier kumo    |
+//| exit included: each tier is closed on a touch of ITS OWN          |
+//| timeframe's cloud — M1 on the M1 cloud, M5 on the M5 cloud, M15   |
+//| on M15, and so on up to H4 on the H4 cloud.                       |
 //| Entry: same per-TF alignment as the parent (price + chikou        |
 //|        above/below tenkan, kijun and cloud), checked BOTTOM-UP:   |
 //|        a tier opens only when the full stack M1..tier TF is       |
@@ -39,14 +35,13 @@
 //|        default still stops at M30. H4 aligned AGAINST the trade   |
 //|        stays blocked unless InpH1BiasMode = H1BIAS_ALWAYS, and    |
 //|        the H4 tier never uses the stand-in.                       |
-//| Exit:  price TOUCHES the M1 cloud's edge (no wait for a candle    |
-//|        close inside the kumo). A long exits when the bid touches  |
-//|        the M1 cloud's upper edge, a short when the ask touches    |
-//|        the lower edge — checked every closed M1 bar for every     |
-//|        tier. Because an entry needs M1 aligned (price clear of    |
-//|        the M1 cloud), a trade can never open already touching     |
-//|        its exit, and a tier that has just exited cannot re-open   |
-//|        until price clears the M1 cloud again.                     |
+//| Exit:  price TOUCHES the tier TF's own cloud edge (no wait for a  |
+//|        candle close inside the kumo). A long exits when the bid   |
+//|        touches that cloud's upper edge, a short when the ask      |
+//|        touches the lower edge — checked every closed M1 bar. The  |
+//|        new M1 tier therefore exits on the M1 cloud, the fastest   |
+//|        exit in the stack, while every tier above it keeps the     |
+//|        parent's exit unchanged.                                   |
 //|        A very strong REJECTION candle against the trade also      |
 //|        closes it (sweeps the recent swing extreme of              |
 //|        InpRejSwingBars bars, wick >= InpRejWickPct of the range,  |
@@ -127,9 +122,6 @@ enum ENUM_H1_BIAS_MODE { H1BIAS_OFF = 0, H1BIAS_FLAT_H4 = 1, H1BIAS_ALWAYS = 2 }
 // absent — it always needs H4 (and D1) itself.
 enum ENUM_H1_BIAS_TIER { H1TIER_M1 = 0, H1TIER_M5 = 1, H1TIER_M15 = 2, H1TIER_M30 = 3, H1TIER_H1 = 4 };
 
-input group  "Exit"
-input bool   InpExitOnM1Cloud = true;   // Close on a touch of the M1 cloud whatever the tier (false = the tier TF's own cloud, as in the parent build)
-
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below (M1 tier: its own cloud only)
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
@@ -160,7 +152,6 @@ input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this 
 #define MAX_SYMS 60
 #define LEVELS   6      // tradable levels: M1, M5, M15, M30, H1, H4 — M1 now trades
 #define TFS      6      // stack: M1, M5, M15, M30, H1, H4
-#define IDX_M1   0      // index of M1 in tfs[] — the tier-0 TF and the exit cloud
 #define IDX_H1   4      // index of H1 in tfs[] — the stand-in bias TF
 #define IDX_H4   5      // index of H4 in tfs[] — the primary bias TF
 
@@ -181,7 +172,7 @@ double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chand
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-int MAGIC = 20260856;   // fresh — M1-tier / M1-cloud-exit variant (20260850 is the H1-bias parent)
+int MAGIC = 20260856;   // fresh — M1-tier variant (20260850 is the H1-bias parent it forks)
 
 CTrade trade;
 
@@ -576,15 +567,15 @@ bool EntryBiasOK(int s, int lvl, int dir, string &via)
 }
 
 //==============================================================
-// Exit Check: price TOUCHES the exit cloud's edge — no wait for
-// a candle to close inside it. A long (entered above the cloud)
+// Exit Check: price TOUCHES the tier TF's own cloud edge — no
+// wait for a candle to close inside it. Each tier reads its own
+// timeframe's kumo: the M1 tier exits on the M1 cloud, M5 on the
+// M5 cloud, and so on up to H4. A long (entered above the cloud)
 // exits when the bid touches the cloud's upper edge; a short
 // (entered below) exits when the ask touches the lower edge.
-// The cloud is chosen by ExitCloudTF(): M1's for every tier by
-// default in this variant, the tier's own TF when
-// InpExitOnM1Cloud is off. Evaluated once per closed M1 bar, so
-// a touch triggers the exit within a minute. This is the trade's
-// main exit; the BE/chandelier stop is the protection layer.
+// Evaluated once per closed M1 bar, so a touch triggers the exit
+// within a minute. This is the trade's main exit; the
+// BE/chandelier stop is the profit-protection layer on top.
 //==============================================================
 
 bool InCloudTouch(int s, int tfIdx, int dir)
@@ -604,16 +595,6 @@ bool InCloudTouch(int s, int tfIdx, int dir)
       return ask >= MathMin(senA[0], senB[0]);
    }
    return false;
-}
-
-// Which timeframe's cloud closes a trade. With InpExitOnM1Cloud the
-// answer is M1 for every tier — the fastest kumo in the stack, so the
-// highest tiers are cut as soon as the lowest timeframe loses its edge.
-// Switched off, each tier falls back on its own TF's cloud (the parent
-// build's exit) and this variant differs from it only by the M1 tier.
-int ExitCloudTF(int lvl)
-{
-   return InpExitOnM1Cloud ? IDX_M1 : lvl;
 }
 
 //==============================================================
@@ -1015,10 +996,10 @@ void OnTick()
       // Exits and profit protection per level
       for(int l = 0; l < LEVELS; l++)
       {
-         // Exit check: price touched the exit cloud — M1's by default,
-         // whatever the tier, so every trade is cut on the fastest kumo
-         if(state[s][l] != 0 && InCloudTouch(s, ExitCloudTF(l), state[s][l]))
-            ExitLevel(s, l, InpExitOnM1Cloud ? "M1 kumo touch" : "kumo touch");
+         // Exit check: price touched the tier TF's own cloud edge —
+         // the M1 tier on the M1 cloud, M5 on the M5 cloud, and so on
+         if(state[s][l] != 0 && InCloudTouch(s, l, state[s][l]))
+            ExitLevel(s, l, "kumo touch");
 
          // Rejection exit: a very strong rejection candle formed on
          // the tier TF against the trade (bearish kills a long,

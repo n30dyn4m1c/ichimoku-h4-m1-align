@@ -2442,7 +2442,7 @@ Two things follow, and neither is a bug:
 
 ---
 
-## 23. Bottom-Up Stack EA — M1 tier and M1 cloud exit
+## 23. Bottom-Up Stack EA — M1 as a tradable tier
 
 **File:** `experimental-bottomup-stack-m1-tier-ea.mq5`
 **Forked from:** `experimental-bottomup-stack-h1-bias-ea.mq5` (section 20 —
@@ -2452,26 +2452,26 @@ positions belonging to the VPS build (`20260850`), the desktop build
 (`20260852`), the D1-ladder fork (`20260851`) or the standard-account build
 (`20260854`)
 
-Two changes to the promoted build, both about the fastest timeframe in the
-stack. Everything else — the per-TF alignment test, the H4 bias with its H1
+One change to the promoted build: **M1 trades**. Everything else — the
+per-TF alignment test, the per-tier kumo-touch exit, the H4 bias with its H1
 stand-in, the D1 filter on the H4 tier, entry consolidation, the 3-tier
 equity risk regime, the BE/chandelier protection layer, no entry stop loss —
 is the parent's.
 
-### 1. M1 trades
+### M1 as a tier
 
 In the parent, M1 is the foot of every chain and never opens anything: the
-comment in the header says so outright, *"M1 alone never trades — it is only
-the start of the stack."* Here it becomes a sixth tier. `LEVELS` goes from 5
-to 6 and a tier's index is now its own index in `tfs[]` rather than one
-above it, so tier 0 is M1 and its chain check (`ChainAligned(s, 0)`) is
-simply M1 aligned on its own — a chain of one.
+header says so outright, *"M1 alone never trades — it is only the start of
+the stack."* Here it becomes a sixth tier. `LEVELS` goes from 5 to 6 and a
+tier's index is now its own index in `tfs[]` rather than one above it, so
+tier 0 is M1 and its chain check (`ChainAligned(s, 0)`) is simply M1 aligned
+on its own — a chain of one.
 
 Everything that was keyed to the tier index moved with it:
 
 | | Parent | This build |
 |---|---|---|
-| Tier → TF | `tfs[lvl + 1]` | `tfs[lvl]` |
+| Tier → TF (entry, ATR, exit cloud, rejection candle) | `tfs[lvl + 1]` | `tfs[lvl]` |
 | Cloud bias pair | TF `lvl` and TF `lvl + 1` | TF `lvl - 1` and TF `lvl` (the M1 tier has nothing below it, so only the M1 cloud is checked) |
 | Tighter BE / full chandelier | `lvl >= 3` (H1, H4) | `lvl >= 4` (H1, H4 — same two tiers) |
 | `ENUM_H1_BIAS_TIER` | `0` M5 … `3` H1 | `0` M1, `1` M5, `2` M15, `3` M30, `4` H1 |
@@ -2486,38 +2486,30 @@ every other tier against ATR(M1) × `InpRiskATRMult`. Half of M5 is a
 judgement call, not a tested number: M1 is the noisiest tier and the one that
 will fire most often, so it starts smaller than the tier above it.
 
-### 2. Every tier exits on the M1 cloud
+### Exits are unchanged — each tier on its own cloud
 
-`ExitCloudTF()` decides which kumo closes a trade. With `InpExitOnM1Cloud`
-(default `true`) the answer is M1 for **every** tier: an H4 trade no longer
-waits for price to come back to the H4 cloud — the first touch of the M1
-cloud takes it off. The touch test itself is the parent's (bid vs the upper
-edge for a long, ask vs the lower edge for a short, checked on each closed M1
-bar, no wait for a close inside the kumo), only the timeframe it reads
-changed. Exits are logged as `M1 kumo touch` so they are separable in the
-journal.
+The parent's exit rule carries over exactly: a trade is closed when price
+**touches** the edge of the cloud on the tier's **own** timeframe — the M1
+tier on the M1 cloud, M5 on the M5 cloud, M15 on M15, up to H4 on the H4
+cloud. No wait for a candle to close inside the kumo, checked on every closed
+M1 bar. An H4 trade still runs until the H4 cloud is reached; only the new M1
+tier exits on the fastest kumo, because that is its own.
 
-Set `InpExitOnM1Cloud = false` to restore the parent's per-tier cloud exit;
-the build then differs from section 20 only by the M1 tier, which is the A/B
-switch for the two changes.
+Two consequences for the M1 tier fall out of the entry rule rather than being
+coded:
 
-Two consequences worth stating, both of which fall out of the entry rule
-rather than being coded:
-
-- **A trade can never open already touching its exit.** Every entry requires
-  M1 aligned, which means price is clear of the M1 cloud in the trade's
+- **An M1 trade can never open already touching its exit.** Entry requires M1
+  aligned, which means price is clear of the M1 cloud in the trade's
   direction.
-- **A tier that has just exited cannot immediately re-open.** Price touching
+- **The M1 tier cannot immediately re-open after exiting.** Price touching
   the M1 cloud breaks M1's alignment, and M1 alignment is the foot of every
-  chain — so the churn a same-bar re-entry would cause is self-limiting. It
-  resumes as soon as price clears the M1 cloud again, which on M1 can be the
-  next few bars.
+  chain — so same-bar churn is self-limiting. It resumes as soon as price
+  clears the M1 cloud again, which on M1 can be within a few bars.
 
-### New and changed inputs
+### New inputs
 
 | Input | Default | Meaning |
 |-------|---------|---------|
-| `InpExitOnM1Cloud` | `true` | Close on a touch of the M1 cloud whatever the tier; `false` = the tier TF's own cloud, as in the parent |
 | `InpRiskPctM1` | `0.5` | M1 tier risk, % of equity, regime 1 (< `InpRiskTier2At`) |
 | `InpRiskPctM1_T2` | `0.25` | M1 tier risk, half regime |
 | `InpRiskPctM1_T3` | `0.05` | M1 tier risk, tiny regime |
@@ -2528,21 +2520,18 @@ rather than being coded:
 - **Not compiled, not backtested here.** No F7 compile or Strategy Tester run
   is recorded in this repo for it. Compile and demo-test before it touches
   money.
-- **This will trade far more often than its parent, and hold for far less
-  time.** The M1 tier fires on the loosest condition in the family, and the
-  M1 exit cuts every tier on the fastest signal available. Expect a much
-  higher trade count, a much lower average hold, and commission/spread to
-  matter proportionally more — `InpMaxSpreadPoints` is doing real work here.
-- **The M1 exit changes what the high tiers are.** An H4 trade that used to
-  ride to the H4 cloud now ends at the first M1-cloud touch, which on gold
-  can be minutes after entry. That removes most of the runner behaviour the
-  parent's results came from, and the H4 tier still carries tier-1 risk of
-  20% of equity with **no entry stop loss**. A/B `InpExitOnM1Cloud` before
-  concluding anything about either half of this fork.
-- **BE and the chandelier trail rarely get a chance on the low tiers.** They
+- **The M1 tier fires on the loosest condition in the family** — one
+  timeframe aligned, plus the M1 cloud bias and whichever bias (H4 or the H1
+  stand-in) authorises it. Expect a much higher trade count than the parent
+  and a much lower average hold, with commission and spread mattering
+  proportionally more; `InpMaxSpreadPoints` is doing real work here.
+- **BE and the chandelier trail rarely get a chance on the M1 tier.** They
   arm off ATR of the tier's own TF, and ATR(M1) thresholds sit inside the
-  broker's minimum stop distance on many symbols; the M1-cloud exit will
-  usually fire first regardless.
+  broker's minimum stop distance on many symbols; the M1 kumo touch will
+  usually fire first.
 - **Entry consolidation still applies**, so the M1 tier is superseded and
   closed the moment a larger tier aligns — it is the tier of last resort, not
   an extra position alongside the others.
+- **Setting `InpRiskPctM1` to 0 does not disable the tier**, it falls back to
+  `InpFixedLots` (`LevelRiskPct` → `RiskLots`), same as every other tier in
+  this family. To run the parent's behaviour, run the parent.
