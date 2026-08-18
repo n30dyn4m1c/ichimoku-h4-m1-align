@@ -2105,28 +2105,36 @@ touch-only kumo exit, on the D1 cloud.
 ### Flat-kijun filter — now inside the alignment test
 
 `CheckAlign()` requires the timeframe's own kijun to be sloping the same way
-as the breakout. Flat means the line barely moved:
+as the breakout. The test compares **two values** — the last two closed bars —
+and flat means they are the *same*:
 
 ```
-flat  ⇔  |kijun[1] − kijun[1 + InpKijunFlatBars]|  ≤  InpKijunFlatATRMult × ATR(that TF)
+kijun[1] > kijun[2]  → rising     (+1)
+kijun[1] < kijun[2]  → falling    (−1)
+kijun[1] = kijun[2]  → FLAT        (0)   → that TF is not aligned, either way
 ```
 
-A horizontal kijun is price oscillating around the midpoint of its own
-`Kijun`-period high/low range — a range, not a trend — and the price+chikou
-test alone reads cleanly in exactly that state. Because the requirement lives
-inside `CheckAlign()`, it applies **everywhere that function is used**: every
-rung of a tier's chain (M1 included) and every step of the bias ladder. There
-is no separate bias-only guard.
+No ATR tolerance: the kijun is the midpoint of its own `Kijun`-period high/low
+range, so an unchanged kijun means that range has not moved at all and price
+is merely rotating inside it. The comparison is exact — the epsilon in the
+code is `SYMBOL_POINT × 0.01`, there to absorb float noise, not to act as a
+tolerance band. `InpKijunFlatBars` sets the gap between the two values read
+(default `1` = the last two closed bars); raising it compares further back.
+
+Because the requirement lives inside `CheckAlign()`, it applies **everywhere
+that function is used**: every rung of a tier's chain (M1 included) and every
+step of the bias ladder. There is no separate bias-only guard.
 
 | Input | Default | Meaning |
 |-------|---------|---------|
 | `InpKijunFlatGuard` | `true` | Require a sloping kijun on every TF. `false` restores the pure price+chikou test |
-| `InpKijunFlatBars` | `5` | Bars of that TF over which the kijun's travel is measured (clamped to ≥ 1) |
-| `InpKijunFlatATRMult` | `0.25` | Kijun is flat when its travel over those bars is ≤ this × ATR of the same TF |
+| `InpKijunFlatBars` | `1` | Gap between the two kijun values compared — `1` is the last two closed bars (clamped to ≥ 1) |
 
-ATR now exists for every stack timeframe (`atrTF[sym][tf]`, `InpATRPeriod`),
-M1 through D1 — the old per-level `atr[]` and the separate `ichD1[]`/`atrD1[]`
-daily handles collapsed into the stack arrays when D1 joined the stack.
+The old per-level `atr[]` and the separate `ichD1[]`/`atrD1[]` daily handles
+collapsed into one per-TF array (`atrTF[sym][tf]`, `InpATRPeriod`) when D1
+joined the stack. ATR no longer plays any part in the flat test, so the M1
+slot is unused and stays `INVALID_HANDLE`; ATR is still what risk sizing, the
+break-even and the trail measure against, per tier TF.
 
 ### The bias ladder
 
@@ -2170,8 +2178,8 @@ Treat it as a starting point to tune, not a validated number.
 
 - **Not backtested, not compiled here.** No F7 compile or Strategy Tester run
   is recorded in this repo. Compile and test before this goes near an account.
-- **Trade count drops sharply.** Every rung of every chain now needs a sloping
-  kijun, M1 included. The D1 tier in particular needs all seven timeframes
+- **Trade count drops.** Every rung of every chain now needs a moving kijun,
+  M1 included. The D1 tier in particular needs all seven timeframes
   aligned *and* sloping at once — expect it to fire rarely, which is the
   point, but verify it fires at all over your test window before concluding
   the wiring works.
@@ -2180,11 +2188,12 @@ Treat it as a starting point to tune, not a validated number.
   while the flat-kijun filter tightens everything. A/B those two separately —
   `InpD1Filter = D1F_REQUIRED` and `InpKijunFlatGuard = false` — or the
   effects will be impossible to attribute.
-- **`InpKijunFlatATRMult` is the knob that matters.** Too high and only
-  violent trends qualify; too low and the filter passes everything. 0.25 over
-  5 bars follows `experimental-h1-m1-reversion-ea.mq5`, which used it as a
-  *ranging* detector — the same threshold is being used here for the opposite
-  purpose, so it is a starting point, not a tuned value.
+- **The flat test is exact, so it is strict on the fast timeframes.** One
+  point of movement between the last two M1 kijun values counts as "sloping".
+  That makes the filter mostly a *stall* detector — it removes the dead-flat
+  kijun of a tight range, not the shallow drift of a weak trend. If the intent
+  is to demand real slope, raise `InpKijunFlatBars` so the two values sit
+  further apart.
 - **A flat H4 is still not a safe H4.** The H1 stand-in deliberately trades
   into an undecided daily/4-hour picture, relying on the touch-only kumo exit
   to cut losers fast.

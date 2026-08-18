@@ -19,10 +19,10 @@
 //|        M1 alone never trades — it is only the start of the stack. |
 //|        NEW — FLAT-KIJUN FILTER: a timeframe counts as aligned     |
 //|        only when its OWN kijun is sloping the same way as the     |
-//|        breakout. Flat kijun (travel over InpKijunFlatBars bars    |
-//|        <= InpKijunFlatATRMult x ATR of that TF) means that TF is  |
-//|        not aligned at all — price is oscillating around the       |
-//|        midpoint of its own Kijun-period range. This runs on       |
+//|        breakout. Flat = the last two kijun values are the SAME    |
+//|        (the kijun is the midpoint of its Kijun-period high/low    |
+//|        range, so an unchanged kijun means that range has not      |
+//|        moved and price is only rotating inside it). This runs on  |
 //|        every TF, M1 through D1, so it gates both a tier's chain   |
 //|        and every bias below.                                      |
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
@@ -148,8 +148,7 @@ input bool   InpH1BiasCloudCheck = true;   // Also require the H1 cloud (Span A 
 
 input group  "Flat-Kijun Filter (NEW — a breakout over a flat kijun is not an alignment)"
 input bool   InpKijunFlatGuard    = true;  // Every TF (M1..D1) must have its kijun sloping the trade's way to count as aligned
-input int    InpKijunFlatBars     = 5;     // Bars of that TF over which the kijun's travel is measured
-input double InpKijunFlatATRMult  = 0.25;  // Kijun is "flat" when its travel over those bars <= this x ATR(same TF)
+input int    InpKijunFlatBars     = 1;     // Gap between the two kijun values compared (1 = the last two closed bars)
 
 input group  "Profit Protection"
 input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
@@ -178,8 +177,9 @@ ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIO
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4", "D1" };
 
 int      ich[MAX_SYMS][TFS];
-int      atrTF[MAX_SYMS][TFS];      // ATR per stack TF — kijun-slope test, risk sizing, BE and trail
-                                    // (level l runs on tfs[l + 1], so its ATR is atrTF[s][l + 1])
+int      atrTF[MAX_SYMS][TFS];      // ATR per stack TF — risk sizing, BE and trail
+                                    // (level l runs on tfs[l + 1], so its ATR is atrTF[s][l + 1];
+                                    //  index 0 = M1 is unused and stays INVALID_HANDLE)
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -241,9 +241,10 @@ int OnInit()
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
 
-         // ATR on every stack TF — M1 included, the kijun-slope test needs it
-         atrTF[s][t] = iATR(syms[s], tfs[t], InpATRPeriod);
-         if(atrTF[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+         // ATR on every tradable tier TF (level l runs on tfs[l + 1]) — M1
+         // is only the start of a chain, it never sizes or trails a trade
+         atrTF[s][t] = (t == 0) ? INVALID_HANDLE : iATR(syms[s], tfs[t], InpATRPeriod);
+         if(t > 0 && atrTF[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
@@ -345,11 +346,13 @@ void SyncStateFromPositions()
 
 //==============================================================
 // Kijun Slope: the direction the kijun of one stack TF is
-// travelling — 1 rising, -1 falling, 0 FLAT. Flat means the line
-// moved no more than InpKijunFlatATRMult x ATR of that same TF
-// over InpKijunFlatBars bars: price is oscillating around the
-// midpoint of its own Kijun-period range, i.e. a range, not a
-// trend. Unreadable kijun or ATR values return 0 (flat), so an
+// travelling — 1 rising, -1 falling, 0 FLAT. It compares just two
+// values, the last two closed bars (InpKijunFlatBars apart), and
+// FLAT means they are the SAME value: the kijun is the midpoint of
+// its own Kijun-period high/low range, so an unchanged kijun means
+// that range has not moved at all — price is rotating inside it.
+// The comparison is exact; eps only absorbs float noise, it is not
+// a tolerance. Unreadable values return 0 (flat), so an
 // unverifiable timeframe never counts as aligned.
 //==============================================================
 
@@ -357,17 +360,18 @@ int KijunSlope(int s, int tfIdx)
 {
    int bars = MathMax(1, InpKijunFlatBars);
 
-   double kNow[1], kPast[1], a[1];
+   double kNow[1], kPast[1];
    if(CopyBuffer(ich[s][tfIdx], 1, 1,        1, kNow)  <= 0) return 0;
    if(CopyBuffer(ich[s][tfIdx], 1, 1 + bars, 1, kPast) <= 0) return 0;
-   if(CopyBuffer(atrTF[s][tfIdx], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return 0;
+
+   double eps = SymbolInfoDouble(syms[s], SYMBOL_POINT) * 0.01;
+   if(eps <= 0.0) eps = 1e-10;
 
    double travel = kNow[0] - kPast[0];
-   double tol    = InpKijunFlatATRMult * a[0];
 
-   if(travel >  tol) return  1;
-   if(travel < -tol) return -1;
-   return 0;                       // flat
+   if(travel >  eps) return  1;
+   if(travel < -eps) return -1;
+   return 0;                       // unchanged — flat
 }
 
 // A timeframe only counts as aligned when its kijun is moving the
