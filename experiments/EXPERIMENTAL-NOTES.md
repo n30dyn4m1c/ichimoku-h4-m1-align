@@ -2070,12 +2070,16 @@ against the current file to see what those three additions changed.
 **Magic number:** `20260850` — fresh, so it can run alongside the snapshot
 (`20260848`) and the live VPS builds (`20260846`/`20260847`)
 
-A single-change fork of the very-profitable snapshot. Everything else — the
-five-tier bottom-up chain, the touch-only kumo exit, the cloud bias gate, the
-3-tier equity risk regime, the BE/chandelier protection layer, no entry stop
-loss — is byte-for-byte the snapshot. The one addition is a **second, smaller
-directional bias on H1**, so that an undecided H4 no longer freezes the whole
-stack.
+A fork of the very-profitable snapshot that changes only how entries are
+gated. Everything else — the five-tier bottom-up chain, the touch-only kumo
+exit, the cloud bias gate, the 3-tier equity risk regime, the BE/chandelier
+protection layer, no entry stop loss — is the snapshot. Two additions, both
+on the bias:
+
+1. a **second, smaller directional bias on H1**, so that an undecided H4 no
+   longer freezes the whole stack; and
+2. a **flat-kijun guard** on whichever bias authorises the entry, so a bias
+   whose kijun has gone horizontal opens nothing.
 
 ### The problem it addresses
 
@@ -2119,6 +2123,46 @@ Every entry now logs which bias authorised it (`… (bottom-up, bias H4)` /
 `bias H1` / `bias H1x`), so the journal separates the new H1-bias trades from
 the H4 ones without having to reconstruct the H4 state after the fact.
 
+### Flat-kijun bias guard
+
+A bias only counts while its own kijun is *moving*. Whichever timeframe ends
+up authorising an entry — H4 on the primary path, H1 on the stand-in — has its
+kijun measured on that same timeframe, and the trade is skipped when the line
+has stalled:
+
+```
+flat  ⇔  |kijun[1] − kijun[1 + InpKijunFlatBars]|  ≤  InpKijunFlatATRMult × ATR(bias TF)
+```
+
+A horizontal kijun is price oscillating around the midpoint of its own
+`Kijun`-period range — the signature of a range, not a trend. Alignment can
+still read cleanly there (price and chikou sitting above a flat tenkan/kijun/
+cloud in a drifting range), which is exactly the state this guard removes from
+the tradable set.
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `InpKijunFlatGuard` | `true` | Block entries while the authorising bias TF's kijun is flat. `false` = previous behaviour |
+| `InpKijunFlatBars` | `5` | Bars of the bias TF over which the kijun's travel is measured (clamped to ≥ 1) |
+| `InpKijunFlatATRMult` | `0.25` | Kijun is flat when its travel over those bars is ≤ this × ATR of the same TF |
+
+The measurement uses each bias TF's own ATR handle (`InpATRPeriod`, the same
+handles the risk sizing and the trail use), so the tolerance scales with that
+timeframe's volatility instead of being a fixed point distance.
+
+Two deliberate choices:
+
+- **A stalled H4 does not fall through to the H1 stand-in.** When H4 is
+  aligned with the trade but its kijun is flat, the entry is blocked outright
+  rather than re-tested against H1 — a ranging H4 is precisely what the guard
+  exists to sit out. The stand-in still applies in its original case, an H4
+  with *no alignment* at all, and there the H1 kijun must be sloping.
+- **Unreadable values count as flat.** A failed kijun or ATR read blocks the
+  entry, so a bias that cannot be verified never authorises a trade.
+
+The D1 filter on the H4 tier is untouched — it still gates that tier by D1
+alignment alone, with no kijun-slope requirement of its own.
+
 ### Note on `InpH1BiasMaxTier = H1TIER_H1`
 
 At the H1 tier the chain check already requires M1…H1 aligned, so the H1 bias
@@ -2140,6 +2184,12 @@ loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
 - **A flat H4 is not the same as a safe H4.** H4 unaligned often means a
   range or a turn; the H1 stand-in deliberately trades into that, relying on
   the touch-only kumo exit to cut losers fast.
+- **The flat-kijun guard cuts trade count in both directions** — it removes
+  H4-bias entries the snapshot took as well as H1 stand-in ones, so a run
+  with the guard on is not comparable to the snapshot on trade count alone.
+  A/B it with `InpKijunFlatGuard = false`, and treat `InpKijunFlatATRMult` as
+  the knob to tune: too high and only violent trends qualify, too low and the
+  guard passes everything.
 - **`H1BIAS_ALWAYS` is genuinely counter-trend** on the lower tiers — the H4
   bias exists precisely to stop those entries. Off by default for that reason.
 - Trade count still passes through entry consolidation: when H4 later aligns

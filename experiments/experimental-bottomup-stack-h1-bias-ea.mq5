@@ -31,6 +31,14 @@
 //|        trade stays blocked unless InpH1BiasMode = H1BIAS_ALWAYS.  |
 //|        The H4 tier never uses the stand-in, and the D1 filter on  |
 //|        the H4 tier is untouched.                                  |
+//|        FLAT-KIJUN BIAS GUARD: whichever bias authorises an entry  |
+//|        (H4 on the primary path, H1 on the stand-in) must have a   |
+//|        MOVING kijun on that timeframe. A kijun whose travel over  |
+//|        InpKijunFlatBars bars is <= InpKijunFlatATRMult x ATR of   |
+//|        that TF counts as flat — the bias has stalled, price is    |
+//|        ranging around it, and no trade opens on it. Unreadable    |
+//|        kijun/ATR values count as flat, so an unverifiable bias    |
+//|        never lets a trade through.                                |
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
 //|        candle close inside the kumo). A long exits when the bid |
 //|        touches the cloud's upper edge; a short when the ask     |
@@ -121,6 +129,11 @@ input group  "H1 Bias (NEW — lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (snapshot), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
 input ENUM_H1_BIAS_TIER InpH1BiasMaxTier = H1TIER_M30;     // Highest tier allowed to enter on the H1 bias (0=M5, 1=M15, 2=M30, 3=H1)
 input bool   InpH1BiasCloudCheck = true;   // Also require the H1 cloud (Span A vs Span B) to carry the trade's bias
+
+input group  "Flat-Kijun Bias Guard (NEW — no entries while the bias kijun has stalled)"
+input bool   InpKijunFlatGuard    = true;  // Block entries when the kijun of the authorising bias TF (H4 or the H1 stand-in) is flat
+input int    InpKijunFlatBars     = 5;     // Bars of the bias TF over which the kijun's travel is measured
+input double InpKijunFlatATRMult  = 0.25;  // Kijun is "flat" when its travel over those bars <= this x ATR(bias TF)
 
 input group  "Profit Protection"
 input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
@@ -469,6 +482,42 @@ bool LevelCloudBiasOK(int s, int lvl, int dir)
 }
 
 //==============================================================
+// Flat-Kijun Bias Guard (NEW): a bias only counts while its own
+// kijun is actually moving. The kijun is "flat" when its travel
+// over InpKijunFlatBars bars of that TF is <= InpKijunFlatATRMult
+// x ATR of the same TF — the classic stall, where the bias line
+// has gone horizontal and price is ranging around it rather than
+// trending away from it. Unreadable kijun or ATR values count as
+// flat (conservative), so no trade ever opens on a bias that
+// cannot be verified.
+//
+// tfIdx indexes tfs[]; the ATR handles are per LEVEL and level l
+// runs on tfs[l + 1], so the matching ATR handle is tfIdx - 1.
+//==============================================================
+
+bool BiasKijunFlat(int s, int tfIdx)
+{
+   int atrIdx = tfIdx - 1;
+   if(atrIdx < 0 || atrIdx >= LEVELS) return true;   // no ATR for this TF — treat as flat
+
+   int bars = MathMax(1, InpKijunFlatBars);
+
+   double kNow[1], kPast[1], a[1];
+   if(CopyBuffer(ich[s][tfIdx], 1, 1,        1, kNow)  <= 0) return true;
+   if(CopyBuffer(ich[s][tfIdx], 1, 1 + bars, 1, kPast) <= 0) return true;
+   if(CopyBuffer(atr[s][atrIdx], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return true;
+
+   return MathAbs(kNow[0] - kPast[0]) <= InpKijunFlatATRMult * a[0];
+}
+
+// The bias TF may authorise an entry only while its kijun is sloping.
+bool BiasKijunOK(int s, int tfIdx)
+{
+   if(!InpKijunFlatGuard) return true;
+   return !BiasKijunFlat(s, tfIdx);
+}
+
+//==============================================================
 // H4 Bias Filter: H4 is the bias for the whole stack. Every tier
 // only trades in H4's direction — H4 bullish means only buys on
 // all timeframes (a lower-TF sell is just a pullback), H4 bearish
@@ -498,6 +547,9 @@ bool H1BiasOK(int s, int dir)
    // trade's way, now and at the far end of the future cloud.
    if(InpH1BiasCloudCheck && !CloudBiasOK(s, IDX_H1, dir)) return false;
 
+   // Flat-kijun guard: the stand-in bias must be moving, not stalled.
+   if(!BiasKijunOK(s, IDX_H1)) return false;
+
    return true;
 }
 
@@ -520,6 +572,13 @@ bool H1BiasTier(int lvl)
 //   3. H4 aligned AGAINST the trade -> still blocked, unless the
 //      user opts into H1BIAS_ALWAYS.
 //
+// On top of that, the flat-kijun guard: whichever bias ends up
+// authorising the entry must have a moving kijun on its own TF. A
+// stalled H4 kijun blocks the H4 path outright (it does not fall
+// through to the H1 stand-in — a ranging H4 is exactly what the
+// guard is there to sit out), and a stalled H1 kijun blocks the
+// stand-in path.
+//
 // Writes into 'via' the bias that authorised the entry so the caller
 // can log it: "H4", "H1" (stand-in on a flat H4), "H1x" (stand-in
 // against an aligned H4), "--" when no bias gate applied at all.
@@ -541,7 +600,12 @@ bool EntryBiasOK(int s, int lvl, int dir, string &via)
    }
 
    int h4 = H4Bias(s);
-   if(h4 == dir) { via = "H4"; return true; }          // primary path
+   if(h4 == dir)                                       // primary path
+   {
+      if(!BiasKijunOK(s, IDX_H4)) return false;        // H4 kijun stalled — sit it out
+      via = "H4";
+      return true;
+   }
 
    if(!H1BiasTier(lvl)) return false;                  // H1/H4 tiers need H4 itself
    if(h4 != 0 && InpH1BiasMode != H1BIAS_ALWAYS)       // H4 is aligned the other way
