@@ -2059,3 +2059,89 @@ against the current file to see what those three additions changed.
 - Five tiers × per-symbol state means CPU/array usage scales with
   `symsCount × LEVELS` — trivial for a handful of symbols, worth checking
   before scaling `Symbols` up toward `MAX_SYMS` (60).
+
+---
+
+## 20. Bottom-Up Stack EA — H1 Bias variant
+
+**File:** `experimental-bottomup-stack-h1-bias-ea.mq5`
+**Forked from:** `experimental-bottomup-stack-ea-very-profitable.mq5` (the
+"very profitable" snapshot running on the VPS — section 19)
+**Magic number:** `20260850` — fresh, so it can run alongside the snapshot
+(`20260848`) and the live VPS builds (`20260846`/`20260847`)
+
+A single-change fork of the very-profitable snapshot. Everything else — the
+five-tier bottom-up chain, the touch-only kumo exit, the cloud bias gate, the
+3-tier equity risk regime, the BE/chandelier protection layer, no entry stop
+loss — is byte-for-byte the snapshot. The one addition is a **second, smaller
+directional bias on H1**, so that an undecided H4 no longer freezes the whole
+stack.
+
+### The problem it addresses
+
+In the snapshot, `InpH4Bias` makes H4 the bias for *every* tier: H4 bullish
+allows buys only, H4 bearish sells only, and **H4 unaligned blocks all five
+tiers, M5 included**. H4 spends a large share of the time neither above nor
+below its own tenkan/kijun/cloud (or with the chikou disagreeing), and during
+those stretches a perfectly clean M1→M30 chain produces no trade at all.
+
+### What the H1 bias does
+
+When H4 offers no direction, the lower tiers may fall back on H1: a tier at or
+below `InpH1BiasMaxTier` opens if **H1 itself is aligned** with the trade —
+the same price + chikou vs tenkan/kijun/cloud test the H4 bias uses, one
+timeframe down. The H4 bias is untouched as the primary path, and the D1
+filter on the H4 tier is untouched as well.
+
+Resolution order in `EntryBiasOK()`, evaluated after the chain and cloud-bias
+checks the snapshot already ran:
+
+| H4 state | Tier ≤ `InpH1BiasMaxTier` | Tier above it (H1/H4) |
+|----------|---------------------------|------------------------|
+| Aligned **with** the trade | opens (logged `bias H4`) | opens (logged `bias H4`) |
+| **Flat** (unaligned / in its cloud) | opens **if H1 is aligned** (logged `bias H1`) — **new** | blocked, as before |
+| Aligned **against** the trade | blocked, unless `H1BIAS_ALWAYS` (then logged `bias H1x`) | blocked, as before |
+
+The H4 tier can never use the stand-in — it always needs H4 *and* D1 itself.
+
+### New inputs
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `InpH1BiasMode` | `H1BIAS_FLAT_H4` (1) | `0` = off (identical to the snapshot), `1` = stand in only while H4 is flat, `2` = stand in even against an aligned H4 (counter-H4 on the lower tiers) |
+| `InpH1BiasMaxTier` | `H1TIER_M30` (2) | Highest tier allowed to enter on the H1 bias — `0` M5, `1` M15, `2` M30, `3` H1. The H4 tier is deliberately not an option |
+| `InpH1BiasCloudCheck` | `true` | Also require the H1 kumo (Span A vs Span B, now and at the far end of the future cloud) to carry the trade's bias |
+
+Setting `InpH1BiasMode = H1BIAS_OFF` reduces the build exactly to the
+snapshot's entry behaviour — that's the A/B baseline switch.
+
+Every entry now logs which bias authorised it (`… (bottom-up, bias H4)` /
+`bias H1` / `bias H1x`), so the journal separates the new H1-bias trades from
+the H4 ones without having to reconstruct the H4 state after the fact.
+
+### Note on `InpH1BiasMaxTier = H1TIER_H1`
+
+At the H1 tier the chain check already requires M1…H1 aligned, so the H1 bias
+is trivially satisfied there. Opening that tier up therefore means "the H1
+tier trades whenever its chain aligns and H4 isn't opposed" — a much larger
+loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
+10% equity. Treat it as a separate experiment, not a default.
+
+### Status & caveats
+
+- **Not backtested.** Same as the snapshot it forks — no F7 compile or
+  Strategy Tester run is recorded in this repo. Compile and run it in the
+  tester before it goes anywhere near a live account.
+- **More trades means more of everything**, including drawdown. The tiers
+  this opens up are exactly the ones the H4 bias was suppressing, and they
+  run with the snapshot's risk table (M5/M15 1%, M30 5% of equity in tier 1)
+  and **no entry stop loss**. A/B it against `InpH1BiasMode = H1BIAS_OFF` on
+  the same period before judging it.
+- **A flat H4 is not the same as a safe H4.** H4 unaligned often means a
+  range or a turn; the H1 stand-in deliberately trades into that, relying on
+  the touch-only kumo exit to cut losers fast.
+- **`H1BIAS_ALWAYS` is genuinely counter-trend** on the lower tiers — the H4
+  bias exists precisely to stop those entries. Off by default for that reason.
+- Trade count still passes through entry consolidation: when H4 later aligns
+  and the H4 tier opens, any lower tier opened on the H1 bias is closed and
+  superseded, exactly as before.
