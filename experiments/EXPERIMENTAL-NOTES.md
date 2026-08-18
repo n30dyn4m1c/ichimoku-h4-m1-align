@@ -2142,26 +2142,6 @@ loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
   the touch-only kumo exit to cut losers fast.
 - **`H1BIAS_ALWAYS` is genuinely counter-trend** on the lower tiers — the H4
   bias exists precisely to stop those entries. Off by default for that reason.
-- Tiers now run **concurrently** (see below) — an H1-bias M30 trade is no
-  longer closed when H4 later aligns and the H4 tier opens; both run.
-
-### Concurrent tiers (entry consolidation removed)
-
-`InpConsolidateTiers` (default `false`) — this variant no longer consolidates
-tiers into a single position per symbol. Every tier that aligns opens its own
-trade and each one runs to its **own** exit (kumo touch, rejection candle,
-BE/chandelier stop); a bigger tier arming does not close the smaller ones. So
-when M30 aligns while M5 and M15 are already running, all three stay open
-side by side, and each closes on its own timeframe's signal.
-
-Section 19's snapshot behaviour is still available: set
-`InpConsolidateTiers = true` and only the largest aligned tier opens, with any
-smaller tier still running on the symbol closed first
-(`Close <SYM> <TF> (superseded by <TF>)`), one position per symbol at a time.
-
-**Risk implication.** Concurrent tiers stack risk: in tier-1 equity regime a
-symbol can hold M5 1% + M15 1% + M30 5% + H1 10% + H4 20% at once — ~37% of
-equity at risk on one symbol, against reference distances only, since this
-build attaches **no entry stop loss**. `CapLotsToMargin()` still trims each
-order to free margin, but that is a margin cap, not a risk cap. Size the risk
-table down (or use the tier-2/tier-3 regimes) before running this live.
+- Trade count still passes through entry consolidation: when H4 later aligns
+  and the H4 tier opens, any lower tier opened on the H1 bias is closed and
+  superseded, exactly as before.
