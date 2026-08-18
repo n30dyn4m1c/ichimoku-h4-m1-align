@@ -1,77 +1,36 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA — WINDOWS-LAPTOP variant             |
+//| Ichimoku Bottom-Up Stack EA — INTRABAR variant                    |
 //|                                                                  |
-//| Fork of experimental-bottomup-stack-ea-very-profitable.mq5       |
-//| (the "very profitable" snapshot, magic 20260848) with serious    |
-//| issues fixed and the repo's own tested profitability steps       |
-//| folded in. Fresh magic 20260850 — safe to run alongside every    |
-//| other build on the same account.                                 |
+//| Copy of experimental-bottomup-stack-ea-very-profitable.mq5       |
+//| (the "very profitable" snapshot) with ONE change: the entry      |
+//| alignment is evaluated INTRABAR on the slow timeframes, with     |
+//| close confirmation against fakeouts.                             |
 //|                                                                  |
-//| BUG FIXES (vs the snapshot):                                     |
-//|  * MULTI-LEVEL POSITIONS ALLOWED (snapshot behavior restored —    |
-//|    user request): the strict one-position-per-symbol gate is      |
-//|    removed. A level opens whenever IT is flat and aligned, so a   |
-//|    running H4 no longer blocks H1/M30/M15/M5 from opening too     |
-//|    (multiple positions per symbol, one per level). The snapshot's |
-//|    supersede rule is kept: when a LARGER tier aligns, any smaller |
-//|    tier running on the symbol is closed first and only the        |
-//|    largest opens.                                                 |
-//|  * DISASTER STOP (InpDisasterStopATR, default 4 x ATR(level TF)) |
-//|    — snapshot trades were naked until BE armed; a fast adverse   |
-//|    move had nothing to catch it before the cloud exit. A wide    |
-//|    real SL caps the tail risk while normal runners still end at  |
-//|    the cloud exit / chandelier trail.                            |
-//|  * RE-ENTRY COOLDOWN (InpReentryCooldownMin, default 30 min per  |
-//|    level after an exit) — the snapshot re-entered the same       |
-//|    signal on the very next M1 bar after a kumo-touch exit,       |
-//|    churning spreads at the cloud edge.                           |
-//|  * KUMO-TOUCH EXIT PER-TICK — the cloud touch is checked on every |
-//|    tick (with a 5 s retry throttle on failed closes), so an exit  |
-//|    fires within milliseconds instead of up to 60 s late. Entries, |
-//|    profit protection and state sync still run once per minute     |
-//|    (M1-bar gated).                                                |
-//|  * ALIGNMENT CACHE — CheckAlign runs once per TF per M1 bar      |
-//|    instead of up to 21x per symbol per bar (no behavior change,  |
-//|    cheaper when Symbols grows).                                  |
-//|  * INTRABAR H1/H4/D1 ALIGNMENT — the H1, H4 and D1 bias filters  |
-//|    now evaluate the FORMING candle (live price, chikou, tenkan,  |
-//|    kijun, cloud; sampled once per closed M1 bar, i.e. ~per       |
-//|    minute) instead of waiting for those candles to close. M30/   |
-//|    M15/M5/M1 still wait for the close. Toggleable:               |
-//|    InpIntraBarH1H4 / InpIntraBarD1 (both default ON).            |
+//| INTRABAR SPEC (v2 — backtest showed pure intrabar = fakeouts):   |
+//|  * M30, H1, H4 and D1: the price + chikou alignment check uses   |
+//|    the FORMING candle — current price, tenkan, kijun, cloud and  |
+//|    chikou update intrabar (sampled once per new closed M1 bar,   |
+//|    i.e. roughly once per minute).                                |
+//|  * FAKEOUT GUARD: the forming candle must AGREE with the last    |
+//|    closed candle of that TF (InpIntrabarConfirmClose = true). A  |
+//|    momentary intrabar blip — live price wicking through tenkan/  |
+//|    kijun/cloud or the chikou level — never opens a trade by      |
+//|    itself; the developing candle must confirm the committed      |
+//|    close. Set InpIntrabarConfirmClose = false for the pure,      |
+//|    blip-prone intrabar behavior.                                 |
+//|  * M1, M5, M15: unchanged — they wait for the candle to close    |
+//|    (the H4 VPS build's behavior).                                |
 //|                                                                  |
-//| OPTIMIZATIONS (the repo's own tested next steps — commit 8d4fd9a |
-//| plus the news-filter experiment):                                |
-//|  * H4 ADX TREND-STRENGTH filter (InpTrendADX, default ON,        |
-//|    >= 25) — no entries while H4 is flat/choppy.                  |
-//|  * H4 OVEREXTENSION filter (3-factor, default ON) — H1/H4 tier   |
-//|    entries blocked at the peak of a stretched move; lower tiers  |
-//|    may still trade.                                              |
-//|  * KUMO_CLOSE exit mode available (lets trends run; default      |
-//|    stays KUMO_TOUCH = the snapshot's tested behavior).           |
-//|  * NEWS BLACKOUT (MT5 built-in Economic Calendar, default ON):   |
-//|    flatten 60 min before a high-impact ("red folder") event on   |
-//|    the symbol's currencies, block entries until 5 min after.     |
-//|    Fails OPEN (with a warning) when the calendar is unreadable,  |
-//|    and is empty in the Strategy Tester.                          |
-//|  * OPTIONAL real entry SL at the sizing distance (InpUseInitialSL|
-//|    = false by default — the runner config stays the baseline).   |
-//|                                                                  |
-//| Everything else — bottom-up stack entry, cloud bias gate, H4/D1  |
-//| bias, kumo-touch/close exits, rejection-candle exit, BE +        |
-//| chandelier profit protection, 3-tier risk regimes, entry         |
-//| consolidation, notifications — is unchanged from the snapshot.   |
-//| Magic: 20260850                                                  |
+//| Everything else is EXACTLY the snapshot: bottom-up stack entry,  |
+//| cloud bias gate, H4 + D1 bias, kumo-touch exit, rejection exit   |
+//| (off), BE + chandelier, 3-tier risk regimes, consolidation,      |
+//| spread filter, notifications, no entry SL.                       |
+//| Magic: 20260853                                                  |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
-#property copyright "Neo Malesa — Windows-laptop profitability build"
-#property version   "1.00"
 
 #include <Trade/Trade.mqh>
-
-//--- Kumo exit mode: touch (aggressive) or tier-TF bar close (rides trends)
-enum ENUM_KUMO_EXIT { KUMO_TOUCH = 0, KUMO_CLOSE = 1 };
 
 //--- Input Parameters ---
 input string Symbols  = "GOLDm#";
@@ -105,27 +64,10 @@ input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
 input bool   InpH4Bias           = true;   // H4 is the bias — all tiers only trade in H4's direction (H4 flat = no trades)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
-input double InpOverextDistATR   = 3.0;    // H4 overextended when the close is >= this x ATR(H4) from tenkan, kijun or the cloud (0 = off)
-input double InpOverextCandleATR = 2.5;    // H4 overextended when a recent H4 candle range is >= this x ATR(H4) (huge trending candles; 0 = off)
-input int    InpOverextNoTouch   = 26;     // H4 overextended when NO H4 candle touched tenkan/kijun/cloud for this many bars (0 = off)
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
-input int    InpReentryCooldownMin = 30;   // Per-level cooldown (min) after an exit before the same level may re-enter (0 = off)
 
 input group  "Intrabar Alignment (developing candles)"
-input bool   InpIntraBarH1H4 = true;   // H1/H4 bias: evaluate on the FORMING candle (live price/chikou/tenkan/kijun/cloud) instead of waiting for the close
-input bool   InpIntraBarD1   = true;   // D1 bias (H4 tier): evaluate on the forming daily candle (live) instead of waiting for the daily close
-
-input group  "Trend Strength Filter"
-input bool   InpTrendADX       = true;    // Only enter on good trend conditions: H4 ADX must show a real trend
-input int    InpADXPeriod      = 14;      // ADX period (H4)
-input double InpTrendADXLevel  = 25.0;    // ADX(H4) must be >= this to enter (flat/choppy H4 = no entries)
-
-input group  "Exit Management"
-input ENUM_KUMO_EXIT InpKumoExit = KUMO_TOUCH;   // 0 = exit when price touches the cloud edge, 1 = exit when the tier TF bar closes inside the cloud
-
-input group  "Stop Loss Policy"
-input bool   InpUseInitialSL    = false;   // Attach a real entry SL at ATR x InpRiskATRMult (office-pc style; false = runner config)
-input double InpDisasterStopATR = 4.0;     // Wide disaster stop at ATR x this (0 = off) — caps tail risk while runners run
+input bool   InpIntrabarConfirmClose = true;  // M30/H1/H4/D1: the forming candle must AGREE with the last closed candle before the bias counts (kills intrabar blip fakeouts); false = pure intrabar (blip-prone)
 
 input group  "Profit Protection"
 input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
@@ -142,62 +84,29 @@ input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the reject
 input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
 input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
-input group  "News Filter (MT5 Economic Calendar)"
-input bool   InpNewsFilterEnabled  = true;   // Flatten and stand aside around high-impact news
-input int    InpNewsBlockBeforeMin = 60;     // Close positions / block entries this many minutes BEFORE the event
-input int    InpNewsBlockAfterMin  = 5;      // Resume trading this many minutes AFTER the event
-input bool   InpNewsIncludeMedium  = false;  // Also block on medium impact (orange); false = high (red) only
-input string InpNewsCurrencies     = "";     // Extra currencies to watch, comma-separated (e.g. "USD,EUR")
-input bool   InpSendPush           = true;   // Send push notifications for news events
-
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
 #define LEVELS   5      // tradable levels: M5, M15, M30, H1, H4
 #define TFS      6      // stack: M1, M5, M15, M30, H1, H4
-
-#define NEWS_MAX_EVENTS  256
-#define NEWS_REFRESH_SEC 900          // rebuild the event cache every 15 minutes
-#define NEWS_LOOK_BACK   (6*3600)     // cache window behind now
-#define NEWS_LOOK_AHEAD  (36*3600)    // cache window ahead of now
 
 ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
-int      atr[MAX_SYMS][LEVELS];     // ATR(level TF) — BE and spike-lock trail sizing
-int      adx[MAX_SYMS];             // ADX(H4) — trend strength filter
+int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
-int      state[MAX_SYMS][LEVELS];   // per level: 0 = flat, 1 = long, -1 = short
+int      state[MAX_SYMS][LEVELS];     // per level: 0 = flat, 1 = long, -1 = short
 int      lastMinuteKey = -1;
 
 double   entryPrice[MAX_SYMS][LEVELS];   // reference entry price per level (BE + trail arming)
 double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chandelier reference)
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
-datetime lastExitTime[MAX_SYMS][LEVELS];    // re-entry cooldown anchor per level
-datetime lastExitAttempt[MAX_SYMS][LEVELS]; // per-tick exit retry throttle (seconds)
 
-//--- News filter state (see the News Filter section below)
-struct NewsEvent
-{
-   datetime time;
-   string   currency;
-   string   name;
-};
-NewsEvent newsCache[NEWS_MAX_EVENTS];
-int       newsCount       = 0;
-datetime  newsRefreshedAt = 0;
-bool      newsWarned      = false;          // one-shot "calendar unavailable" warning
-string    newsCcy[32];                      // every currency watched across all symbols
-int       newsCcyCount    = 0;
-string    symCcy[MAX_SYMS];                 // per-symbol currency watch list (","-wrapped)
-datetime  newsBlockUntil[MAX_SYMS];         // entries blocked until this server time
-datetime  newsAnnounced[MAX_SYMS];          // event time of the blackout already alerted on
-
-int MAGIC = 20260850;   // fresh — windows-laptop build (20260848 = very-profitable snapshot, 20260849 = office-pc)
+int MAGIC = 20260853;   // fresh — intrabar variant (20260848 = very-profitable snapshot, 20260850 = windows-laptop)
 
 CTrade trade;
 
@@ -233,8 +142,6 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       lastM1bar[s] = 0;
-      newsBlockUntil[s] = 0;
-      newsAnnounced[s]  = 0;
       for(int l = 0; l < LEVELS; l++)
       {
          state[s][l] = 0;
@@ -242,8 +149,6 @@ int OnInit()
          peakHigh[s][l]   = 0.0;
          peakLow[s][l]    = 0.0;
          beMoved[s][l]    = false;
-         lastExitTime[s][l] = 0;
-         lastExitAttempt[s][l] = 0;
       }
 
       for(int t = 0; t < TFS; t++)
@@ -255,17 +160,12 @@ int OnInit()
       ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
       if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
 
-      adx[s] = iADX(syms[s], PERIOD_H4, InpADXPeriod);
-      if(adx[s] == INVALID_HANDLE) return(INIT_FAILED);
-
       for(int l = 0; l < LEVELS; l++)
       {
          atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
          if(atr[s][l] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
-
-   BuildNewsCurrencies();
 
    trade.SetDeviationInPoints(Slippage);
    trade.SetExpertMagicNumber(MAGIC);
@@ -280,7 +180,6 @@ void OnDeinit(const int reason)
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
-      if(adx[s] != INVALID_HANDLE) IndicatorRelease(adx[s]);
       for(int l = 0; l < LEVELS; l++)
          if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
    }
@@ -368,17 +267,18 @@ void SyncStateFromPositions()
 // Alignment Check: price and chikou both above/below tenkan,
 // kijun, and cloud on one timeframe. Returns 1 (bullish),
 // -1 (bearish), 0 (none) — identical to the H4 VPS build.
-// 'sh' selects the bar to evaluate:
-//   sh = 1 -> the LAST CLOSED bar (the H4 VPS build's behavior;
-//             used by M1/M5/M15/M30 — wait for the candle to close)
-//   sh = 0 -> the FORMING bar (live values: current price, tenkan,
-//             kijun, cloud and chikou all update intrabar; used by
-//             H1/H4/D1 so the bias reacts while the candle develops).
-// The chikou comparison always uses the bar Kijun periods back from
-// 'sh' (a closed bar), so it shifts with the chosen bar consistently.
+// INTRABAR SPEC (with close confirmation):
+//  * M1/M5/M15 (tfIdx < 3): the last CLOSED candle only — they wait
+//    for the candle to close (the H4 VPS build's behavior).
+//  * M30/H1/H4 (tfIdx >= 3): the FORMING candle (live price, chikou,
+//    tenkan, kijun, cloud; sampled once per closed M1 bar) must AGREE
+//    with the last closed candle. A momentary intrabar blip alone
+//    never opens a trade — the developing candle must confirm the
+//    committed close (InpIntrabarConfirmClose; false = pure intrabar).
 //==============================================================
 
-int CheckAlign(int s, int tfIdx, int sh)
+// Alignment at a given bar shift: 0 = forming (live), 1 = last closed
+int AlignAt(int s, int tfIdx, int sh)
 {
    ENUM_TIMEFRAMES tf = tfs[tfIdx];
 
@@ -423,20 +323,34 @@ int CheckAlign(int s, int tfIdx, int sh)
    return 0;
 }
 
+int CheckAlign(int s, int tfIdx)
+{
+   if(tfIdx < 3) return AlignAt(s, tfIdx, 1);   // M1/M5/M15 — closed bar only
+
+   int live = AlignAt(s, tfIdx, 0);             // M30/H1/H4 — forming candle
+   if(live == 0) return 0;
+
+   if(InpIntrabarConfirmClose)
+   {
+      int closed = AlignAt(s, tfIdx, 1);        // must confirm the committed close
+      if(closed != live) return 0;
+   }
+   return live;
+}
+
 //==============================================================
 // Chain Check (bottom-up): the full stack M1..topIdx must be
-// aligned in the SAME direction for a level to open. Uses the
-// per-bar alignment cache (computed once per symbol per M1 bar).
+// aligned in the SAME direction for a level to open.
 //==============================================================
 
-int ChainAlignedCached(const int &al[], int topIdx)
+int ChainAligned(int s, int topIdx)
 {
-   int dir = al[0];
+   int dir = CheckAlign(s, 0);
    if(dir == 0) return 0;
 
    for(int t = 1; t <= topIdx; t++)
    {
-      if(al[t] != dir) return 0;
+      if(CheckAlign(s, t) != dir) return 0;
    }
    return dir;
 }
@@ -447,21 +361,17 @@ int ChainAlignedCached(const int &al[], int topIdx)
 // (price + chikou above tenkan, kijun and cloud) allows only H4
 // buys, D1 bearish only H4 sells. A D1 close INSIDE the cloud
 // (or unreadable) returns 0 — no new H4 trades then.
+// INTRABAR (with close confirmation): the FORMING daily candle is
+// evaluated live, but it must AGREE with the last closed daily
+// candle (InpIntrabarConfirmClose) — the daily bias can flip
+// through the day, but never on a momentary blip.
 //==============================================================
 
-// Daily Bias Filter (H4 tier): D1 is the bias for H4 trades.
-// Same alignment semantics as CheckAlign but on D1 — D1 bullish
-// (price + chikou above tenkan, kijun and cloud) allows only H4
-// buys, D1 bearish only H4 sells. A D1 close INSIDE the cloud
-// (or unreadable) returns 0 — no new H4 trades then.
-// With InpIntraBarD1 the FORMING daily candle is used (live values,
-// sampled once per closed M1 bar), so the daily bias can flip
-// intrabar instead of waiting for the daily close.
-int DailyAlign(int s)
+// Daily alignment at a given bar shift: 0 = forming (live), 1 = last closed
+int DailyAlignAt(int s, int sh)
 {
    ENUM_TIMEFRAMES tf = PERIOD_D1;
 
-   int sh      = (InpIntraBarD1 ? 0 : 1);   // 0 = forming daily candle (live), 1 = last closed
    int chShift = sh + Kijun;
 
    MqlRates rt[];
@@ -502,6 +412,19 @@ int DailyAlign(int s)
    return 0;
 }
 
+int DailyAlign(int s)
+{
+   int live = DailyAlignAt(s, 0);   // forming daily candle (live)
+   if(live == 0) return 0;
+
+   if(InpIntrabarConfirmClose)
+   {
+      int closed = DailyAlignAt(s, 1);   // must confirm the committed daily close
+      if(closed != live) return 0;
+   }
+   return live;
+}
+
 //==============================================================
 // Cloud Bias Filter: the cloud must carry the trade's bias
 // (Span A above Span B for a long, below for a short) at both
@@ -535,29 +458,23 @@ bool LevelCloudBiasOK(int s, int lvl, int dir)
 // only trades in H4's direction — H4 bullish means only buys on
 // all timeframes (a lower-TF sell is just a pullback), H4 bearish
 // means only sells. If H4 has no alignment, no trades open.
-// Uses the cached alignment array.
 //==============================================================
 
-bool H4BiasCached(const int &al[], int dir)
+bool H4BiasOK(int s, int dir)
 {
-   int h4 = al[TFS - 1];
+   int h4 = CheckAlign(s, TFS - 1);
    if(h4 == 0) return false;        // H4 not aligned — no trades
    return h4 == dir;
 }
 
 //==============================================================
-// Exit Check: cloud exit with two modes.
-//   KUMO_TOUCH (aggressive): price TOUCHES the level TF's cloud
-//     edge — a long exits when the bid touches the cloud's upper
-//     edge, a short when the ask touches the lower edge. Fires
-//     fast, but a trend pullback touching the cloud intra-bar
-//     cuts the trade short.
-//   KUMO_CLOSE (rides trends): the level TF bar must CLOSE inside
-//     the cloud (or beyond it) — a pullback has to actually close
-//     back into the kumo before the trade exits, letting good
-//     trends run.
-// TOUCH mode is evaluated on EVERY tick (desktop build — no 60 s
-// exit lag); CLOSE mode is naturally per tier-TF bar.
+// Exit Check: price TOUCHES the level TF's cloud edge — no wait
+// for a candle to close inside it. A long (entered above the
+// cloud) exits when the bid touches the cloud's upper edge; a
+// short (entered below) exits when the ask touches the lower
+// edge. Evaluated once per closed M1 bar, so a touch triggers
+// the exit within a minute. This is the trade's main exit; the
+// BE/chandelier stop is the profit-protection layer on top.
 //==============================================================
 
 bool InCloudTouch(int s, int tfIdx, int dir)
@@ -566,19 +483,6 @@ bool InCloudTouch(int s, int tfIdx, int dir)
    if(CopyBuffer(ich[s][tfIdx], 2, 1, 1, senA) <= 0) return false;
    if(CopyBuffer(ich[s][tfIdx], 3, 1, 1, senB) <= 0) return false;
 
-   if(InpKumoExit == KUMO_CLOSE)
-   {
-      // Ride mode: the tier TF's last closed bar must close inside
-      // (or beyond) the cloud
-      MqlRates rt[];
-      if(CopyRates(syms[s], tfs[tfIdx], 1, 1, rt) <= 0) return false;
-      double closeP = rt[0].close;
-      if(dir ==  1) return closeP < MathMax(senA[0], senB[0]);
-      if(dir == -1) return closeP > MathMin(senA[0], senB[0]);
-      return false;
-   }
-
-   // Touch mode: current price touches the cloud edge
    if(dir ==  1)
    {
       double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
@@ -590,270 +494,6 @@ bool InCloudTouch(int s, int tfIdx, int dir)
       return ask >= MathMin(senA[0], senB[0]);
    }
    return false;
-}
-
-//==============================================================
-// H4 Overextension Filter — three H4-only measures. Any of them
-// triggering blocks NEW H1 and H4 tier entries (no positions
-// opened at the peak of a stretched move); the lower tiers
-// (M5/M15/M30) may still trade:
-//   1. DISTANCE: the last closed H4 close sits >=
-//      InpOverextDistATR x ATR(H4) from tenkan, kijun or the
-//      cloud edge — price far from every reference.
-//   2. HUGE CANDLES: a recent H4 candle range is >=
-//      InpOverextCandleATR x ATR(H4) — the trending candles are
-//      enormous, the move is exhausting.
-//   3. NO TOUCH: no H4 candle has touched tenkan, kijun or the
-//      cloud within the last InpOverextNoTouch bars (>= 26) —
-//      price has run away from all pullback references.
-// Any sub-check with unreadable data is skipped (allows entry).
-//==============================================================
-
-bool H4Overextended(int s)
-{
-   double a1[1], a2[1];
-
-   // 1) Distance from tenkan, kijun and the cloud
-   if(InpOverextDistATR > 0)
-   {
-      double tenkan[1], kijun[1], senA[1], senB[1];
-      if(CopyBuffer(ich[s][TFS - 1], 0, 1, 1, tenkan) > 0 &&
-         CopyBuffer(ich[s][TFS - 1], 1, 1, 1, kijun)  > 0 &&
-         CopyBuffer(ich[s][TFS - 1], 2, 1, 1, senA)   > 0 &&
-         CopyBuffer(ich[s][TFS - 1], 3, 1, 1, senB)   > 0 &&
-         CopyBuffer(atr[s][LEVELS - 1], 0, 1, 1, a1) > 0 && a1[0] > 0)
-      {
-         MqlRates rt[];
-         if(CopyRates(syms[s], tfs[TFS - 1], 1, 1, rt) > 0)
-         {
-            double closeP = rt[0].close;
-            double cHi = MathMax(senA[0], senB[0]);
-            double cLo = MathMin(senA[0], senB[0]);
-            double dCloud = (closeP > cHi) ? (closeP - cHi)
-                          : (closeP < cLo ? (cLo - closeP) : 0.0);
-            double worst = MathMax(MathAbs(closeP - tenkan[0]),
-                          MathMax(MathAbs(closeP - kijun[0]), dCloud));
-            if(worst >= InpOverextDistATR * a1[0]) return true;
-         }
-      }
-   }
-
-   // 2) Huge trending candles: max range of the last 3 closed H4 bars
-   if(InpOverextCandleATR > 0)
-   {
-      if(CopyBuffer(atr[s][LEVELS - 1], 0, 1, 1, a2) > 0 && a2[0] > 0)
-      {
-         MqlRates rc[];
-         if(CopyRates(syms[s], tfs[TFS - 1], 1, 3, rc) == 3)
-         {
-            double maxRange = 0.0;
-            for(int i = 0; i < 3; i++)
-            {
-               double rg = rc[i].high - rc[i].low;
-               if(rg > maxRange) maxRange = rg;
-            }
-            if(maxRange >= InpOverextCandleATR * a2[0]) return true;
-         }
-      }
-   }
-
-   // 3) No touch of tenkan / kijun / cloud within InpOverextNoTouch bars
-   if(InpOverextNoTouch > 0)
-   {
-      int win = 60;
-      double tk[60], kj[60], sa[60], sb[60];
-      if(CopyBuffer(ich[s][TFS - 1], 0, 1, win, tk) == win &&
-         CopyBuffer(ich[s][TFS - 1], 1, 1, win, kj) == win &&
-         CopyBuffer(ich[s][TFS - 1], 2, 1, win, sa) == win &&
-         CopyBuffer(ich[s][TFS - 1], 3, 1, win, sb) == win)
-      {
-         MqlRates rt2[];
-         if(CopyRates(syms[s], tfs[TFS - 1], 1, win, rt2) == win)
-         {
-            int sinceTen = win, sinceKj = win, sinceCloud = win;
-            for(int i = 0; i < win; i++)
-            {
-               bool touchTen = rt2[i].low <= tk[i] && rt2[i].high >= tk[i];
-               bool touchKj  = rt2[i].low <= kj[i] && rt2[i].high >= kj[i];
-               double lo = MathMin(sa[i], sb[i]);
-               double hi = MathMax(sa[i], sb[i]);
-               bool touchCloud = rt2[i].low <= hi && rt2[i].high >= lo;
-               if(sinceTen == win && touchTen)  sinceTen  = i + 1;
-               if(sinceKj  == win && touchKj)   sinceKj   = i + 1;
-               if(sinceCloud == win && touchCloud) sinceCloud = i + 1;
-            }
-            if(sinceTen  >= InpOverextNoTouch ||
-               sinceKj   >= InpOverextNoTouch ||
-               sinceCloud >= InpOverextNoTouch) return true;
-         }
-      }
-   }
-
-   return false;
-}
-
-//==============================================================
-// Trend Strength Filter: only enter on good trend conditions.
-// H4 ADX must show a genuine trend (>= InpTrendADXLevel) — a
-// flat or choppy H4 means no entries, so the EA waits for the
-// trend instead of trading every alignment. Unreadable ADX
-// counts as blocking (conservative).
-//==============================================================
-
-bool H4TrendOK(int s)
-{
-   if(!InpTrendADX) return true;
-   double d[1];
-   if(CopyBuffer(adx[s], 0, 1, 1, d) <= 0 || d[0] <= 0) return false;
-   return d[0] >= InpTrendADXLevel;
-}
-
-//==============================================================
-// News Filter — MT5 Economic Calendar (high-impact "red folder")
-//==============================================================
-// Events come from the terminal's built-in economic calendar (the same
-// feed as the Calendar tab, supplied by MetaQuotes rather than the
-// broker), so no WebRequest permission, no DLL and no external site are
-// involved. CALENDAR_IMPORTANCE_HIGH is what Forex Factory paints as a
-// red folder.
-//
-// Calendar times are trade-server time, which is what TimeTradeServer()
-// returns, so the two compare directly — no broker GMT offset handling.
-//
-// Two limitations worth knowing: the calendar is empty in the Strategy
-// Tester (the tester has no calendar access), so a backtest of this file
-// trades as if no news existed; and the calendar needs a connected
-// terminal. When the calendar can't be read the filter fails OPEN — it
-// warns once and lets the EA keep trading, rather than silently freezing
-// the account forever.
-
-// Register a currency in the global watch list, once.
-void NewsAddCcy(string ccy)
-{
-   StringTrimLeft(ccy);
-   StringTrimRight(ccy);
-   StringToUpper(ccy);
-   if(StringLen(ccy) != 3) return;
-   for(int i = 0; i < newsCcyCount; i++)
-      if(newsCcy[i] == ccy) return;
-   if(newsCcyCount < ArraySize(newsCcy)) newsCcy[newsCcyCount++] = ccy;
-}
-
-// Attach a currency to one symbol's watch list (and to the global one).
-void SymAddCcy(int s, string ccy)
-{
-   StringTrimLeft(ccy);
-   StringTrimRight(ccy);
-   StringToUpper(ccy);
-   if(StringLen(ccy) != 3) return;
-   if(StringFind(symCcy[s], "," + ccy + ",") < 0) symCcy[s] += ccy + ",";
-   NewsAddCcy(ccy);
-}
-
-// Which currencies each symbol reacts to: its own base and profit
-// currency plus anything in InpNewsCurrencies. Metals and crypto carry a
-// base the calendar has no events for (XAU, BTC) — harmless, they simply
-// never match; GOLDm# still picks up USD through its profit currency.
-void BuildNewsCurrencies()
-{
-   newsCcyCount = 0;
-
-   string extra[];
-   int extraCount = StringSplit(InpNewsCurrencies, ',', extra);
-
-   for(int s = 0; s < symsCount; s++)
-   {
-      symCcy[s] = ",";
-      SymAddCcy(s, SymbolInfoString(syms[s], SYMBOL_CURRENCY_BASE));
-      SymAddCcy(s, SymbolInfoString(syms[s], SYMBOL_CURRENCY_PROFIT));
-      for(int i = 0; i < extraCount; i++) SymAddCcy(s, extra[i]);
-   }
-}
-
-// Rebuild the cache of qualifying events around now. Cheap enough to call
-// on every M1 bar — it returns immediately until the refresh interval is up.
-void RefreshNewsCache()
-{
-   datetime now = TimeTradeServer();
-   if(newsRefreshedAt > 0 && now - newsRefreshedAt < NEWS_REFRESH_SEC) return;
-   newsRefreshedAt = now;
-   newsCount = 0;
-
-   bool calendarOK = false;
-   int  lastErr    = 0;
-
-   for(int c = 0; c < newsCcyCount; c++)
-   {
-      MqlCalendarValue vals[];
-      ResetLastError();
-      int n = CalendarValueHistory(vals, now - NEWS_LOOK_BACK, now + NEWS_LOOK_AHEAD, NULL, newsCcy[c]);
-      if(n <= 0)
-      {
-         int err = GetLastError();
-         if(err == 0) calendarOK = true;   // no events for this currency is not a failure
-         else         lastErr = err;
-         continue;
-      }
-      calendarOK = true;
-
-      for(int i = 0; i < n; i++)
-      {
-         if(newsCount >= NEWS_MAX_EVENTS) break;
-
-         MqlCalendarEvent ev;
-         if(!CalendarEventById(vals[i].event_id, ev)) continue;
-
-         bool wanted = (ev.importance == CALENDAR_IMPORTANCE_HIGH) ||
-                       (InpNewsIncludeMedium && ev.importance == CALENDAR_IMPORTANCE_MODERATE);
-         if(!wanted) continue;
-
-         newsCache[newsCount].time     = vals[i].time;
-         newsCache[newsCount].currency = newsCcy[c];
-         newsCache[newsCount].name     = ev.name;
-         newsCount++;
-      }
-   }
-
-   if(!calendarOK && !newsWarned)
-   {
-      newsWarned = true;
-      string msg = PCTime() + " | News filter: MT5 calendar unavailable (err " +
-                   IntegerToString(lastErr) + ") — trading WITHOUT the news blackout";
-      Print(msg); Alert(msg);
-      if(InpSendPush) SendNotification(msg);
-   }
-   if(calendarOK) newsWarned = false;
-}
-
-// Is this symbol inside a news blackout right now? Reports the end of the
-// window — the latest one when several events overlap — and the event that
-// opened it.
-bool NewsBlackout(int s, datetime &until, string &evName, datetime &evTime)
-{
-   until  = 0;
-   evName = "";
-   evTime = 0;
-   if(!InpNewsFilterEnabled) return false;
-
-   RefreshNewsCache();
-
-   datetime now = TimeTradeServer();
-   for(int i = 0; i < newsCount; i++)
-   {
-      if(StringFind(symCcy[s], "," + newsCache[i].currency + ",") < 0) continue;
-
-      datetime from = newsCache[i].time - InpNewsBlockBeforeMin * 60;
-      datetime to   = newsCache[i].time + InpNewsBlockAfterMin  * 60;
-      if(now < from || now > to) continue;
-
-      if(to > until)
-      {
-         until  = to;
-         evName = newsCache[i].name;
-         evTime = newsCache[i].time;
-      }
-   }
-   return (until > 0);
 }
 
 //==============================================================
@@ -959,33 +599,6 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
 // Trading Functions
 //==============================================================
 
-// Real SL price for a level entry: the tighter of the policy inputs
-// (initial SL at the sizing distance, or the wider disaster stop). Both
-// only ever TIGHTEN afterwards via BE/chandelier. Returns 0.0 when no SL
-// should be attached (disabled, data unavailable, or inside the broker
-// minimum stop distance — a naked entry is preferable to a rejected one).
-double EntrySLPrice(int s, int lvl, int dir, double price)
-{
-   double a[1];
-   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return 0.0;
-
-   double dist = (InpUseInitialSL) ? InpRiskATRMult * a[0]
-                                   : InpDisasterStopATR * a[0];
-   if(dist <= 0) return 0.0;
-
-   double sl = (dir == 1) ? price - dist : price + dist;
-   sl = NormalizeDouble(sl, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS));
-
-   double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
-   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * point;
-   double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
-   double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
-
-   if(dir ==  1 && sl < bid - minDist) return sl;
-   if(dir == -1 && sl > ask + minDist) return sl;
-   return 0.0;
-}
-
 bool OpenLevel(int s, int lvl, int dir, double lots)
 {
    string sym = syms[s];
@@ -993,15 +606,10 @@ bool OpenLevel(int s, int lvl, int dir, double lots)
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
 
-   // No tight entry stop loss in the runner config — the trade runs until
-   // the cloud exit; the BE/chandelier layer protects it once in profit.
-   // The disaster stop (or optional initial SL) is attached when enabled.
-   double sl = 0.0;
-   if(InpUseInitialSL || InpDisasterStopATR > 0)
-      sl = EntrySLPrice(s, lvl, dir, price);
-
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, 0, comment)
-                        : trade.Sell(lots, sym, price, sl, 0, comment);
+   // No entry stop loss in this test build — the trade runs until the
+   // cloud close; the BE/chandelier layer protects it once in profit.
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, 0, 0, comment)
+                        : trade.Sell(lots, sym, price, 0, 0, comment);
    if(ok)
    {
       state[s][lvl] = dir;
@@ -1064,8 +672,7 @@ bool CloseLevelPositions(int s, int lvl)
 //     TF, including the bar still forming; it only ever tightens
 //     and never sits inside the broker minimum stop.
 // ATR comes from the level's own TF, so H4/H1 protection is sized
-// to those timeframes. The entry/disaster stop is replaced by BE
-// and the trail once in profit.
+// to those timeframes. No entry stop loss in this test build.
 //==============================================================
 
 bool LevelTicket(int s, int lvl, ulong &ticket)
@@ -1236,7 +843,6 @@ int RejectionCandle(int s, int tfIdx)
 
 // Close a level's positions with a notification; returns true only
 // when nothing remains open, so a failed close is retried next bar.
-// On success the level's re-entry cooldown is armed.
 bool ExitLevel(int s, int l, string reason)
 {
    string side = (state[s][l] == 1) ? "Long" : "Short";
@@ -1247,7 +853,6 @@ bool ExitLevel(int s, int l, string reason)
    if(CloseLevelPositions(s, l))
    {
       state[s][l] = 0;
-      lastExitTime[s][l] = TimeCurrent();
       msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " level closed";
       Print(msg); SendNotification(msg);
       return true;
@@ -1262,26 +867,8 @@ bool ExitLevel(int s, int l, string reason)
 
 void OnTick()
 {
-   // Per-tick cloud-touch exits: the touch is checked on EVERY tick so
-   // an exit fires within milliseconds instead of up to 60 s late. Only
-   // levels with an open position pay the (2 CopyBuffer) cost. CLOSE
-   // mode is naturally bar-gated by the tier TF. Failed closes are
-   // retried at most once every 5 seconds (no notification spam).
-   for(int s = 0; s < symsCount; s++)
-   {
-      for(int l = 0; l < LEVELS; l++)
-      {
-         if(state[s][l] != 0 && TimeCurrent() >= lastExitAttempt[s][l] + 5 &&
-            InCloudTouch(s, l + 1, state[s][l]))
-         {
-            lastExitAttempt[s][l] = TimeCurrent();
-            ExitLevel(s, l, "kumo touch");
-         }
-      }
-   }
-
-   // Everything else — entries, profit protection, state sync — runs once
-   // per minute of server time, never on every tick.
+   // VPS perf: all logic runs only on closed M1 bars, which change at most
+   // once per minute. Skip every intermediate tick entirely.
    int nowKey = (int)(TimeCurrent() / 60);
    if(nowKey == lastMinuteKey) return;
    lastMinuteKey = nowKey;
@@ -1296,72 +883,17 @@ void OnTick()
       if(m1[1].time == lastM1bar[s]) continue;
       lastM1bar[s] = m1[1].time;
 
-      // Sync position state once per minute on the first new M1 bar instead of
+      // Sync position state once per tick on the first new M1 bar instead of
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // News blackout: flatten ahead of a high-impact event and stay out
-      // until the post-event window closes. Runs before every other check
-      // so the news exit wins over the trail, BE and entry logic.
-      datetime newsUntil = 0, newsTime = 0;
-      string   newsName  = "";
-      if(NewsBlackout(s, newsUntil, newsName, newsTime))
-      {
-         newsBlockUntil[s] = newsUntil;
-
-         if(newsAnnounced[s] != newsTime)
-         {
-            newsAnnounced[s] = newsTime;
-            string msg = PCTime() + " | News blackout " + syms[s] + ": " + newsName +
-                         " at " + TimeToString(newsTime, TIME_MINUTES) +
-                         " — flat until " + TimeToString(newsUntil, TIME_MINUTES) + " (server)";
-            Print(msg); Alert(msg);
-            if(InpSendPush) SendNotification(msg);
-         }
-
-         bool anyOpen = false;
-         for(int l = 0; l < LEVELS; l++)
-            if(state[s][l] != 0) { anyOpen = true; break; }
-
-         if(anyOpen)
-         {
-            string msg = PCTime() + " | Close " + syms[s] + " all levels (news: " + newsName + ")";
-            Print(msg); Alert(msg);
-            if(InpSendPush) SendNotification(msg);
-
-            bool allClosed = true;
-            for(int l = 0; l < LEVELS; l++)
-            {
-               if(state[s][l] != 0)
-               {
-                  if(CloseLevelPositions(s, l)) state[s][l] = 0;
-                  else                          allClosed = false;
-               }
-            }
-            if(!allClosed)
-               Print(PCTime() + " | " + syms[s] + " news close failed — will retry next bar");
-         }
-
-         // Flat and blocked: nothing left to manage this bar. A position that
-         // refused to close falls through so the trail and BE keep guarding it.
-         bool stillOpen = false;
-         for(int l = 0; l < LEVELS; l++)
-            if(state[s][l] != 0) { stillOpen = true; break; }
-         if(!stillOpen) continue;
-      }
-
-      // Alignment cache: every CheckAlign result for this symbol, once per
-      // M1 bar (i.e. sampled roughly once per minute). H1/H4 are evaluated
-      // on the FORMING candle when InpIntraBarH1H4 is on, so their bias
-      // reacts intrabar; M30/M15/M5/M1 always wait for the candle to close.
-      int al[TFS];
-      for(int t = 0; t < TFS; t++)
-         al[t] = CheckAlign(s, t, (InpIntraBarH1H4 && t >= 4) ? 0 : 1);
-
-      // Bar-based exits and profit protection per level (once per minute;
-      // the kumo-touch exit itself already runs per tick above)
+      // Exits and profit protection per level
       for(int l = 0; l < LEVELS; l++)
       {
+         // Exit check: price touched the level TF's cloud edge
+         if(state[s][l] != 0 && InCloudTouch(s, l + 1, state[s][l]))
+            ExitLevel(s, l, "kumo touch");
+
          // Rejection exit: a very strong rejection candle formed on
          // the tier TF against the trade (bearish kills a long,
          // bullish kills a short)
@@ -1376,33 +908,24 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
       }
 
-      // Entry scan — snapshot behavior: a level opens whenever IT is
-      // flat (one position per level), out of its post-exit cooldown,
-      // and every filter passes — regardless of other levels' positions,
-      // so H4 + H1 (etc.) can run together. When several tiers align at
-      // once the LARGEST one opens.
+      // Entry consolidation: when several tiers align at once, only the
+      // LARGEST one opens (highest TF wins). Any smaller tier already
+      // running on the symbol is closed first — e.g. M15 and M30 align
+      // together: the running M15 trade closes and only M30 opens.
       int topTier = -1;
       int topDir  = 0;
-      if(SpreadOK(syms[s]) && H4TrendOK(s) &&
-         TimeTradeServer() >= newsBlockUntil[s])
+      if(SpreadOK(syms[s]))
       {
          for(int l = LEVELS - 1; l >= 0; l--)
          {
             if(state[s][l] != 0) continue;
-            if(InpReentryCooldownMin > 0 &&
-               TimeCurrent() < lastExitTime[s][l] + InpReentryCooldownMin * 60) continue;
-
-            int st = ChainAlignedCached(al, l + 1);
+            int st = ChainAligned(s, l + 1);
             if(st == 0) continue;
             if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
-            if(InpH4Bias && !H4BiasCached(al, st)) continue;
+            if(InpH4Bias && !H4BiasOK(s, st)) continue;
 
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
-
-            // H1/H4 tiers: no entries while H4 is overextended — the
-            // lower tiers (M5/M15/M30) may still trade
-            if(l >= 3 && H4Overextended(s)) continue;
 
             topTier = l;
             topDir  = st;
@@ -1412,10 +935,7 @@ void OnTick()
 
       if(topTier >= 0)
       {
-         // Snapshot supersede rule: close any smaller (lower-tier) trades
-         // still running when a larger tier opens (e.g. M30 running and
-         // H4 aligns -> M30 closes, H4 opens). Larger tiers already
-         // running are left alone — that is how H4 + H1 coexist.
+         // Close any smaller (lower-tier) trades still running
          for(int l = 0; l < topTier; l++)
          {
             if(state[s][l] != 0)
