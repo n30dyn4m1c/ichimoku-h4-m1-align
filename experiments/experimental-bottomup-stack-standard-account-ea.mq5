@@ -1,32 +1,34 @@
 //+------------------------------------------------------------------+
 //| Ichimoku Bottom-Up Stack EA (H1 bias) — STANDARD-ACCOUNT build   |
-//| EXPERIMENTAL. A fork of the live VPS build                       |
-//| ichimoku-h4-m1-vps-ea.mq5 (magic 20260850) re-scaled for a       |
-//| STANDARD (full-size) account funded with about $100. The trading |
-//| logic — bottom-up chain alignment, H4/H1 bias, D1 filter on the  |
-//| H4 tier, kumo-touch exit, BE + chandelier protection — is        |
-//| IDENTICAL to the VPS build. Only the money management differs.   |
+//| EXPERIMENTAL. A fork of                                          |
+//| experimental-bottomup-stack-h1-bias-ea.mq5 (magic 20260850 — the |
+//| H1-bias variant currently deployed), re-scaled for a STANDARD    |
+//| (full-size) account funded with about $100. The trading logic —  |
+//| bottom-up chain alignment, the H4 bias with the H1 stand-in, the |
+//| D1 filter on the H4 tier, the touch-only kumo exit, BE +         |
+//| chandelier protection — is IDENTICAL to that parent. Only the    |
+//| money management differs.                                        |
 //| WHY A SEPARATE BUILD: on a standard account the smallest lot the |
 //| broker will take (0.01) is a hundred times the exposure of the   |
 //| same number on a cent-sized account. On gold, 0.01 lot = 1 oz =  |
 //| about $1 of P/L per $1 of price. Against a reference distance of |
 //| ATR(H4) x 2 (roughly $40-60 of gold), one minimum-lot H4 trade   |
 //| already risks $40-60 — half of a $100 account — no matter what   |
-//| risk percentage is configured. The VPS build hides this: it ends |
+//| risk percentage is configured. The parent hides this: it ends    |
 //| its sizing with MathMax(lotMin, lots), so whenever the           |
 //| risk-correct size falls under the broker minimum the order is    |
 //| silently ROUNDED UP and the trade risks far more than the tier   |
 //| asked for. That is harmless when the minimum lot is tiny; it is  |
 //| the dominant risk on a $100 standard account.                    |
-//| WHAT CHANGED FROM THE VPS BUILD (money management only):         |
-//|  1. Every risk percentage is exactly a QUARTER of the VPS        |
-//|     build's, in the same three-tier de-risking shape:            |
+//| WHAT CHANGED FROM THE PARENT (money management only):            |
+//|  1. Every risk percentage is exactly a QUARTER of the parent's,  |
+//|     in the same three-tier de-risking shape:                     |
 //|       tier 1 (M5/M15 0.25%, M30 1.25%, H1 2.5%, H4 5%),          |
 //|       tier 2 half of that, tier 3 a quarter of tier 2 —          |
-//|     matching the VPS 1/1/5/10/20, 0.5/0.5/2.5/5/10,              |
-//|     0.1/0.1/0.2/1/2 ladder divided by four throughout.           |
+//|     the parent's 1/1/5/10/20, 0.5/0.5/2.5/5/10, 0.1/0.1/0.2/1/2  |
+//|     ladder divided by four throughout.                           |
 //|  2. The equity thresholds move with the smaller start: tier 2 at |
-//|     $700 and tier 3 at $1300, i.e. the VPS build's 7000/13000    |
+//|     $700 and tier 3 at $1300, i.e. the parent's 7000/13000       |
 //|     scaled to a $100 account so the de-risking still triggers    |
 //|     after a 7x and a 13x, not after a gain the account can never |
 //|     reach.                                                       |
@@ -39,20 +41,24 @@
 //|     the fast tiers (M5, and M15 in calm conditions) can trade at |
 //|     0.01 lot, while M30/H1/H4 stay blocked until equity is large |
 //|     enough that a minimum lot is a sane fraction of it. Tiers    |
-//|     unlock on their own as the account grows. Set               |
+//|     unlock on their own as the account grows. Set                |
 //|     InpMinLotMaxRiskPct = 0 to refuse every minimum-lot trade    |
 //|     (strict risk, likely no trades at $100), or raise it to      |
-//|     re-enable the VPS build's round-up behaviour knowingly.      |
+//|     re-enable the parent's round-up behaviour knowingly.         |
 //|  4. No silent fixed-lot fallback: InpFixedLots defaults to 0, so |
 //|     a trade whose ATR/tick sizing data is unavailable is SKIPPED |
 //|     rather than sent at an arbitrary size. Set it to 0.01 to     |
 //|     restore a fallback.                                          |
 //|  5. Margin cap: an order the free margin cannot carry at the     |
 //|     minimum lot is skipped instead of being clamped up to it.    |
-//| Entry: per-TF alignment (price + chikou above/below tenkan,       |
-//|        kijun and cloud), checked BOTTOM-UP: a tier opens only     |
-//|        when the full stack M1..tier TF is aligned in one          |
-//|        direction:                                                 |
+//|  6. Sizing runs BEFORE the supersede-close, so a gated higher    |
+//|     tier no longer closes a running lower-tier trade and then    |
+//|     opens nothing.                                               |
+//| The parent's own description of the strategy follows unchanged.  |
+//| Entry: same per-TF alignment as the H4 VPS build (price + chikou  |
+//|        above/below tenkan, kijun and cloud), checked BOTTOM-UP:   |
+//|        a tier opens only when the full stack M1..tier TF is       |
+//|        aligned in one direction:                                  |
 //|          Tier M5 : M1 + M5 aligned              -> open trade     |
 //|          Tier M15: M1 + M5 + M15 aligned        -> open trade     |
 //|          Tier M30: M1 + M5 + M15 + M30 aligned  -> open trade     |
@@ -65,15 +71,16 @@
 //|        only, flat -> no trades), and the H4 tier itself is also   |
 //|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
 //|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
-//|        H1 BIAS: an unaligned H4 would otherwise freeze the whole  |
-//|        stack, including M5. The lower tiers get a second, smaller |
-//|        bias to fall back on: when H4 carries no direction, a tier |
-//|        at or below InpH1BiasMaxTier may open provided H1 itself   |
-//|        is aligned (same price+chikou test) with the trade. H4     |
-//|        aligned WITH the trade is still the primary path; H4       |
-//|        aligned AGAINST the trade stays blocked unless             |
-//|        InpH1BiasMode = H1BIAS_ALWAYS. The H4 tier never uses the  |
-//|        stand-in, and the D1 filter on the H4 tier is untouched.   |
+//|        NEW — H1 BIAS: in the snapshot an unaligned H4 froze the   |
+//|        whole stack, including M5. Here the lower tiers get a      |
+//|        second, smaller bias to fall back on: when H4 carries no   |
+//|        direction, a tier at or below InpH1BiasMaxTier may open    |
+//|        provided H1 itself is aligned (same price+chikou test)     |
+//|        with the trade. H4 aligned WITH the trade is still the     |
+//|        primary path and is unchanged; H4 aligned AGAINST the      |
+//|        trade stays blocked unless InpH1BiasMode = H1BIAS_ALWAYS.  |
+//|        The H4 tier never uses the stand-in, and the D1 filter on  |
+//|        the H4 tier is untouched.                                  |
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
 //|        candle close inside the kumo). A long exits when the bid |
 //|        touches the cloud's upper edge; a short when the ask     |
@@ -82,9 +89,9 @@
 //|        swing extreme of InpRejSwingBars bars, wick >=           |
 //|        InpRejWickPct of the range, close in the outer           |
 //|        InpRejClosePct — all four conditions must hold). No      |
-//|        entry stop loss in this build — the trade runs until an |
-//|        exit, with the profit protection layer taking over once  |
-//|        it turns green:                                          |
+//|        entry stop loss in this test build — the trade runs      |
+//|        until an exit, with the profit protection layer taking   |
+//|        over once it turns green:                                |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
 //|                         H1/H4 levels) -> SL to entry + cover      |
 //|          Chandelier   : H1/H4 levels trail the stop behind the    |
@@ -98,21 +105,21 @@
 //|        closed first — so at most one position per symbol runs at  |
 //|        a time (the highest aligned tier). Every trade risks a     |
 //|        fixed % of the ACTUAL equity at entry, de-risking as the   |
-//|        account grows: tier 1 below $700 (M5/M15 0.25%, M30        |
-//|        1.25%, H1 2.5%, H4 5%), tier 2 half regime $700-$1300      |
-//|        (0.125/0.125/0.625/1.25/2.5), tier 3 tiny regime $1300+    |
-//|        (0.025/0.025/0.05/0.25/0.5), against the reference         |
-//|        distance ATR(level TF) x InpRiskATRMult (sizing basis      |
-//|        only — no entry stop is attached). No multipliers, no      |
-//|        streak compounding, and no rounding up to the broker       |
-//|        minimum — see the minimum-lot gate above.                  |
-//| VPS:   no Alert() popups and no equity alert — every entry/exit   |
-//|        sends a SendNotification push and a journal Print, and all |
-//|        logic runs only on closed M1 bars (once per minute) to     |
-//|        keep CPU/network use on a cheap VPS negligible.            |
-//| Magic: 20260854 — its own number so a standard-account instance   |
-//|        never adopts or manages positions belonging to the live    |
-//|        VPS build (20260850) or the desktop build (20260852).      |
+//|        account grows: tier 1 below $7000 (M5/M15 1%, M30 5%, H1   |
+//|        10%, H4 20%), tier 2 half regime $7000-$13000              |
+//|        (0.5/0.5/2.5/5/10), tier 3 tiny regime $13000+             |
+//|        (0.1/0.1/0.2/1/2), against the reference distance           |
+//|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
+//|        entry stop is attached). No multipliers, no streak         |
+//|        compounding.                                               |
+//| NOTE: the Risk paragraph above states the PARENT's percentages   |
+//|        (1/1/5/10/20 etc). This build runs a quarter of them at   |
+//|        $700/$1300 thresholds — see WHAT CHANGED, items 1 and 2,  |
+//|        and it skips rather than rounds up to the minimum lot.    |
+//| Magic: 20260854 — its own number so a standard-account instance  |
+//|        never adopts or manages positions belonging to the        |
+//|        H1-bias parent / VPS build (20260850), the desktop build  |
+//|        (20260852) or the D1-ladder fork (20260851).              |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -126,7 +133,7 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-input group  "Risk Management (per level, % of actual equity) — quarter of the VPS build"
+input group  "Risk Management (per level, % of actual equity) — quarter of the H1-bias parent"
 input double InpFixedLots       = 0.0;    // Fallback lots when ATR/tick sizing data is unavailable (0 = skip the trade)
 input double InpMinLots         = 0.01;   // Smallest lot this account can trade (standard account minimum)
 input double InpMinLotMaxRiskPct= 10.0;   // Max % of equity a forced MINIMUM-lot trade may risk (0 = never trade below the risk-correct size)
@@ -151,7 +158,7 @@ input double InpRiskPctH4_T3    = 0.5;    // H4   — tier 3
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
 // does not carry the trade.
-//   H1BIAS_OFF     : no stand-in; H4 governs every tier on its own
+//   H1BIAS_OFF     : no stand-in; H4 governs every tier (snapshot behaviour)
 //   H1BIAS_FLAT_H4 : stand-in allowed only while H4 is FLAT (unaligned /
 //                    in its cloud) — never against an aligned H4
 //   H1BIAS_ALWAYS  : stand-in allowed even when H4 is aligned the OTHER
@@ -168,8 +175,8 @@ input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in 
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
-input group  "H1 Bias (lets the lower tiers trade when H4 is flat)"
-input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (H4 only), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
+input group  "H1 Bias (NEW — lets the lower tiers trade when H4 is flat)"
+input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (snapshot), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
 input ENUM_H1_BIAS_TIER InpH1BiasMaxTier = H1TIER_M30;     // Highest tier allowed to enter on the H1 bias (0=M5, 1=M15, 2=M30, 3=H1)
 input bool   InpH1BiasCloudCheck = true;   // Also require the H1 cloud (Span A vs Span B) to carry the trade's bias
 
@@ -213,7 +220,7 @@ double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chande
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 datetime lastSkipLog[MAX_SYMS][LEVELS];  // last time a sizing skip was logged (throttles the journal)
 
-int MAGIC = 20260854;   // standard-account fork (VPS runs 20260850, desktop 20260852)
+int MAGIC = 20260854;   // standard-account fork of the H1-bias variant (parent runs 20260850)
 
 CTrade trade;
 
@@ -565,11 +572,11 @@ bool H1BiasTier(int lvl)
 //==============================================================
 // Entry Bias Gate: H4 primary, H1 stand-in for the lower tiers.
 //
-//   1. H4 aligned WITH the trade  -> allowed, whatever the tier.
-//      This is the primary path.
+//   1. H4 aligned WITH the trade  -> allowed (unchanged snapshot
+//      behaviour, whatever the tier).
 //   2. H4 FLAT -> the tiers at or below InpH1BiasMaxTier may still
-//      open if H1 carries the trade — an undecided H4 no longer
-//      freezes the whole stack.
+//      open if H1 carries the trade. This is the whole point of
+//      the variant: an undecided H4 no longer freezes the stack.
 //   3. H4 aligned AGAINST the trade -> still blocked, unless the
 //      user opts into H1BIAS_ALWAYS.
 //
@@ -586,7 +593,7 @@ bool EntryBiasOK(int s, int lvl, int dir, string &via)
    {
       // H4 bias switched off: the H1 stand-in, where enabled, is the only
       // directional gate left on those tiers. Higher tiers stay ungated,
-      // exactly as they were when the H4 bias is switched off.
+      // exactly as they were with InpH4Bias = false in the snapshot.
       if(!H1BiasTier(lvl)) return true;
       if(!H1BiasOK(s, dir)) return false;
       via = "H1";
@@ -658,8 +665,8 @@ bool SpreadOK(string sym)
 //==============================================================
 // Risk Management — per-level risk as a fixed % of the ACTUAL
 // equity at entry, in three equity tiers that DE-RISK as the
-// account grows. Every percentage here is a QUARTER of the live
-// VPS build's: full regime below InpRiskTier2At (M5/M15 0.25%,
+// account grows. Every percentage here is a QUARTER of the H1-bias
+// parent's: full regime below InpRiskTier2At (M5/M15 0.25%,
 // M30 1.25%, H1 2.5%, H4 5%), half regime between the tiers
 // (0.125/0.125/0.625/1.25/2.5), and the tiny regime at
 // InpRiskTier3At and above (0.025/0.025/0.05/0.25/0.5). Sizing
@@ -668,7 +675,7 @@ bool SpreadOK(string sym)
 // attached there). More equity -> more risk money -> bigger lots
 // at the same ATR distance; no multipliers on top.
 //
-// STANDARD-ACCOUNT DIFFERENCE: the VPS build finishes its sizing
+// STANDARD-ACCOUNT DIFFERENCE: the parent finishes its sizing
 // with MathMax(lotMin, lots), so a risk-correct size below the
 // broker minimum is silently rounded UP and the trade risks more
 // — often far more — than its tier asked for. On a full-size
@@ -807,7 +814,7 @@ double SizedLots(int s, int lvl)
 }
 
 // Scale a single order down to the free margin so it fills fully.
-// Unlike the VPS build this never clamps UP to the broker minimum:
+// Unlike the parent this never clamps UP to the broker minimum:
 // when the free margin cannot carry even the smallest lot, lots is
 // set to 0 and the entry is skipped.
 void CapLotsToMargin(int s, int lvl, bool isBuy, double &lots)
@@ -846,7 +853,7 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
 
-   // No entry stop loss in this build — the trade runs until the
+   // No entry stop loss in this test build — the trade runs until the
    // cloud close; the BE/chandelier layer protects it once in profit.
    bool ok = (dir == 1) ? trade.Buy(lots, sym, price, 0, 0, comment)
                         : trade.Sell(lots, sym, price, 0, 0, comment);
@@ -912,7 +919,7 @@ bool CloseLevelPositions(int s, int lvl)
 //     TF, including the bar still forming; it only ever tightens
 //     and never sits inside the broker minimum stop.
 // ATR comes from the level's own TF, so H4/H1 protection is sized
-// to those timeframes. No entry stop loss in this build.
+// to those timeframes. No entry stop loss in this test build.
 //==============================================================
 
 bool LevelTicket(int s, int lvl, ulong &ticket)

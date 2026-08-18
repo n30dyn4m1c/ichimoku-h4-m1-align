@@ -2323,15 +2323,18 @@ Treat it as a starting point to tune, not a validated number.
 ## 22. Bottom-Up Stack EA — standard-account build ($100 start)
 
 **File:** `experimental-bottomup-stack-standard-account-ea.mq5`
-**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
-`20260850`), which is left untouched
+**Forked from:** `experimental-bottomup-stack-h1-bias-ea.mq5` (the H1-bias
+variant, magic `20260850` — the version currently deployed), which is left
+untouched. That parent's executable code is identical to the live VPS build
+`ichimoku-h4-m1-vps-ea.mq5` apart from one input-group label, so this fork
+carries the same strategy either way.
 **Magic number:** `20260854` — fresh, so a standard-account instance never
-adopts or manages positions belonging to the VPS build (`20260850`), the
-desktop build (`20260852`), the D1-ladder fork (`20260851`) or anything
-archived
+adopts or manages positions belonging to the H1-bias parent / VPS build
+(`20260850`), the desktop build (`20260852`), the D1-ladder fork
+(`20260851`) or anything archived
 
 The same strategy re-scaled for a **standard (full-size) account funded with
-about $100**. The trading logic is byte-for-byte the VPS build's — bottom-up
+about $100**. The trading logic is byte-for-byte the parent's — bottom-up
 chain alignment, H4 bias with the H1 stand-in, D1 filter on the H4 tier,
 touch-only kumo exit, BE + chandelier protection, no entry stop loss. **Only
 the money management differs.** `diff` the two files and every hunk should
@@ -2343,7 +2346,7 @@ On a standard account the smallest lot the broker accepts (0.01) is a
 hundred times the exposure of the same number on a cent-sized account. On
 gold, 0.01 lot = 1 oz ≈ $1 of P/L per $1 of price.
 
-The VPS build's sizing ends with `MathMax(lotMin, MathMin(lotMax, lots))`.
+The parent's sizing ends with `MathMax(lotMin, MathMin(lotMax, lots))`.
 Whenever the risk-correct size falls below the broker minimum, that line
 silently rounds the order **up** and the trade risks whatever the minimum lot
 happens to risk — not what its tier asked for. On a cent-sized account the
@@ -2354,7 +2357,7 @@ matter what percentage is configured.
 
 ### What changed
 
-1. **Every risk percentage is exactly a quarter of the VPS build's**, in the
+1. **Every risk percentage is exactly a quarter of the parent's**, in the
    same three-tier de-risking shape:
 
    | Regime | Equity | M5 | M15 | M30 | H1 | H4 |
@@ -2363,11 +2366,11 @@ matter what percentage is configured.
    | Tier 2 (half) | $700–$1300 | 0.125% | 0.125% | 0.625% | 1.25% | 2.5% |
    | Tier 3 (tiny) | ≥ `InpRiskTier3At` ($1300) | 0.025% | 0.025% | 0.05% | 0.25% | 0.5% |
 
-   That is the VPS ladder (1/1/5/10/20 → 0.5/0.5/2.5/5/10 →
+   That is the parent's ladder (1/1/5/10/20 → 0.5/0.5/2.5/5/10 →
    0.1/0.1/0.2/1/2) divided by four throughout.
 
 2. **Equity thresholds scaled to the smaller start** — $700 and $1300,
-   i.e. the VPS build's 7000/13000 in the same ratio against a $100 account,
+   i.e. the parent's 7000/13000 in the same ratio against a $100 account,
    so the de-risking still triggers after a 7× and a 13× rather than after a
    gain the account can never reach.
 
@@ -2376,17 +2379,17 @@ matter what percentage is configured.
    (0.01), `SizedLots()` prices what that minimum lot would actually risk
    over the reference distance and **skips the entry** when it exceeds
    `InpMinLotMaxRiskPct` of equity. Set it to 0 to refuse every minimum-lot
-   trade outright; raise it to re-enable the VPS build's round-up knowingly.
+   trade outright; raise it to re-enable the parent's round-up knowingly.
 
 4. **No silent fixed-lot fallback** — `InpFixedLots` defaults to 0, so a
    trade whose ATR/tick sizing data is unavailable is skipped rather than
    sent at an arbitrary size. Set it to 0.01 to restore a fallback.
 
 5. **Margin cap skips instead of clamping up** — an order the free margin
-   cannot carry at the minimum lot is skipped, where the VPS build clamped
+   cannot carry at the minimum lot is skipped, where the parent clamped
    `maxLots` back up to `lotMin` and sent it anyway.
 
-6. **Sizing now runs before the supersede-close.** In the VPS build the
+6. **Sizing now runs before the supersede-close.** In the parent the
    entry consolidation closes every smaller running tier and *then* sizes the
    winner. With the gate in place a blocked higher tier would kill a
    perfectly good M5 trade and open nothing, so `SizedLots()` is called
@@ -2424,8 +2427,8 @@ Two things follow, and neither is a bug:
 
 - **Not compiled, not backtested here.** No F7 compile or Strategy Tester run
   is recorded in this repo. Compile and demo-test before this touches money.
-- **The tier thresholds are a judgement call.** $700/$1300 preserve the VPS
-  build's 7000:13000 ratio against a $100 start, but they de-risk the account
+- **The tier thresholds are a judgement call.** $700/$1300 preserve the
+  parent's 7000:13000 ratio against a $100 start, but they de-risk the account
   at roughly the point where the risk table would otherwise have started to
   bind, keeping it inert for longer. Leaving them at 7000/13000 is a
   defensible alternative and a one-input change.
@@ -2434,7 +2437,7 @@ Two things follow, and neither is a bug:
   is still a 10%-of-equity loss per trade in the worst case, on a build with
   **no entry stop loss** — the reference distance is a sizing basis, not a
   stop, and a gap can exceed it.
-- **`.set` files from the VPS build will not load here** — `InpFixedLots`
+- **`.set` files from the parent will not load here** — `InpFixedLots`
   changed meaning and `InpMinLots` / `InpMinLotMaxRiskPct` are new.
 - **Cent-account instances must not run this file**, and vice versa: the
   magic numbers differ deliberately so the two never manage each other's
