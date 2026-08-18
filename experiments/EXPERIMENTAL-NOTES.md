@@ -2538,3 +2538,83 @@ coded:
 - **Setting `InpRiskPctM1` to 0 does not disable the tier**, it falls back to
   `InpFixedLots` (`LevelRiskPct` → `RiskLots`), same as every other tier in
   this family. To run the parent's behaviour, run the parent.
+
+---
+
+## 24. Bottom-Up Stack EA — REFINED experiment (consolidation hardening)
+
+**File:** `experimental-bottomup-stack-refined-ea.mq5`
+**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
+`20260850`), which is left untouched. The parent's executable code is
+byte-for-byte the VPS build; every change below is additive and marked
+`(REFINED)` in the code.
+**Magic number:** `20260857` — fresh, so this experiment never adopts or
+manages positions belonging to the live builds (`20260850` VPS, `20260852`
+desktop) or any other fork.
+
+### What changed (all in one build, each toggleable)
+
+1. **Per-tier cloud exit modes** (`InpKumoCloseFrom`, default `KUMO_CLOSE_M30`):
+   tiers at/above the setting (M30, H1, H4 by default) exit when the tier TF
+   bar **closes** inside the cloud; M5/M15 keep the touch exit. `0` = touch
+   everywhere (parent behaviour). Trend-profit experiment — lets H1/H4 runs
+   survive pullbacks that only graze the kumo.
+2. **Bias kijun-slope stall filter** (`InpKijunFlatGuard`, default on, with
+   `InpKijunFlatBars`): the D1, H4 and H1 *bias* timeframes additionally need
+   a SLOPING kijun (last two values differ) to authorise entries. Unlike the
+   D1-ladder fork (section 21), the guard is NOT inside `CheckAlign` — the
+   lower-TF chain/breakout triggers keep the pure price + chikou test. A
+   price-aligned but kijun-stalled H4 counts as FLAT, so the H1 stand-in may
+   cover the lower tiers. Consolidation experiment — dead-flat kijuns are the
+   stall signature of a range.
+3. **High-water-mark risk regime**: `LevelRiskPct()` now picks the tier from
+   `max(current equity, peak equity)`, the peak stored in a terminal global
+   variable (`EA_Refined_PeakEq_<login>`) and ratcheted once per minute. The
+   regime de-risks one-way: a drawdown can never re-arm the full-risk tier
+   (H4 20% / H1 10% / M30 5%). `InpResetPeakEquity` = true once re-baselines.
+   Pure downside protection — in a trend the peak only ratchets up, so the
+   regime path is unchanged.
+4. **Daily loss circuit breaker** (`InpDailyLossLimitPct`, default 10%):
+   once the day loses that % of its start equity (day anchor in GVs), NEW
+   entries stop until the next day. Open positions are still managed and
+   exited; only entries are blocked. Announced once per day via push.
+5. **News blackout** (ported from the windows-laptop build): MT5 Economic
+   Calendar high-impact events — flatten
+   `InpNewsBlockBeforeMin` (60) before, block entries until
+   `InpNewsBlockAfterMin` (5) after. Fails OPEN when the calendar is
+   unavailable; the Strategy Tester has no calendar, so backtests trade as
+   if no news existed.
+6. **Disaster stop** (`InpDisasterStopATR`, default 4.0, 0 = off): a wide
+   entry SL at 4 x ATR(level TF) attached at entry, replacing the fully
+   naked entry when enabled; only ever tightens afterwards via BE/chandelier.
+   Skips the SL (naked entry) if data is unavailable or the stop sits inside
+   the broker minimum distance.
+
+### A/B switches
+
+- `InpKijunFlatGuard = false` restores the parent's bias tests.
+- `InpKumoCloseFrom = KUMO_CLOSE_OFF` restores the touch-only exit.
+- `InpDisasterStopATR = 0` restores naked entries.
+- `InpDailyLossLimitPct = 0` disables the daily breaker.
+- `InpNewsFilterEnabled = false` disables the news blackout.
+- The HWM regime cannot be switched off (it is the point of the build);
+  `InpResetPeakEquity` re-baselines it.
+
+### Status & caveats
+
+- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
+  run is recorded in this repo. Compile and test before this goes near an
+  account.
+- **The stack still runs** — one position per level per symbol, so a full
+  H4+H1+M30+M15+M5 stack can be open at once (tier 1 = 37% of equity at
+  risk on one symbol). This is the parent's actual behaviour; the parent's
+  header claimed one position per symbol, which this build's header
+  corrects. No per-symbol total-risk cap was added — not requested.
+- **The daily breaker and HWM use terminal global variables**: in the
+  Strategy Tester they persist per test run; on live accounts they survive
+  restarts and recompiles. If a backtest run carries over a peak from a
+  previous run, reset via `InpResetPeakEquity` or clear the terminal GVs.
+- **KUMO_CLOSE on M30+ changes the exit lag structure**: the exit now waits
+  for a tier-TF close, so an M30 trade can ride a pullback up to the M30
+  bar close. Expect fewer, larger exits on the upper tiers; A/B against
+  `KUMO_CLOSE_OFF` on both the 2026 trend window and a range window.
