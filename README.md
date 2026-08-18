@@ -784,7 +784,11 @@ hand-off bias ladder. A **standard-account build**
 re-scales the live VPS build's money management for a full-size account
 funded with about $100 — quarter risk throughout, equity thresholds at
 $700/$1300, and a minimum-lot gate that skips an entry rather than silently
-rounding it up to 0.01 lot; the trading logic is unchanged. The rest are
+rounding it up to 0.01 lot; the trading logic is unchanged. An **M1-tier
+fork** (`experimental-bottomup-stack-m1-tier-ea.mq5`, magic `20260856`) turns
+M1 into a sixth tradable tier — it opens on M1 alignment alone — and closes
+every tier, M1 through H4, on a touch of the **M1** cloud instead of the
+tier's own; `InpExitOnM1Cloud` switches the exit back for A/B. The rest are
 newer and less battle-tested
 than the main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
