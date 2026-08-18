@@ -2145,3 +2145,73 @@ loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
 - Trade count still passes through entry consolidation: when H4 later aligns
   and the H4 tier opens, any lower tier opened on the H1 bias is closed and
   superseded, exactly as before.
+
+---
+
+## 21. Bottom-Up Stack EA — H1 Bias, flat 0.1 lot (test build)
+
+**File:** `experimental-bottomup-stack-h1-bias-fixedlot-ea.mq5`
+**Forked from:** `experimental-bottomup-stack-h1-bias-ea.mq5` (section 20)
+**Magic number:** `20260851` — fresh, so it runs alongside the H1-bias build
+(`20260850`), the snapshot (`20260848`) and the live VPS builds
+
+**Testing only.** Entries, exits, filters and the H1 stand-in bias are
+identical to section 20. The single change is that the whole equity-%
+risk regime is gone: every trade opens at `InpTestLots`, default **0.10**.
+
+### Why flat sizing
+
+The parent build sizes each entry from a tier × equity-regime table where an
+H4-tier trade in regime 1 risks 20% of equity and an M5 trade risks 1% — a
+20:1 spread, on top of ATR-scaled lots and a live-equity base that compounds
+as the run progresses. A tester result from that build is dominated by the
+sizing table: a handful of large H4 trades set the shape of the curve, and
+the per-tier and per-bias statistics are not comparable with each other.
+
+With one constant lot, trade count, win rate and average P/L per tier and per
+bias path all sit on the same scale, so a run measures the **signal** —
+including whether the new H1-bias entries are worth having at all.
+
+### What was removed
+
+`LevelRiskPct()` and `RiskLots()` are replaced by `FlatLots()`. Gone with
+them: `InpFixedLots`, `InpRiskATRMult`, `InpRiskTier2At`, `InpRiskTier3At`
+and all fifteen `InpRiskPct*` inputs. One input replaces them:
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `InpTestLots` | `0.10` | Every trade opens at this size, whatever the tier, bias or equity |
+
+ATR is still computed per level — it is what the break-even and chandelier
+thresholds are measured in — it just no longer feeds sizing.
+
+### Deviations from the flat size are logged
+
+Two things can still move the lot off `InpTestLots`, and both now print a
+warning naming the actual size:
+
+- the symbol's volume step / min / max (`FlatLots()`), and
+- the free-margin cap (`CapLotsToMargin()`).
+
+Both messages end `results are NOT at the flat test size`, so a run where the
+broker quietly changed the size can't be mistaken for a clean one. Worth a
+grep of the journal before reading any tester output.
+
+### Status & caveats
+
+- **Not compiled or backtested** — same as its parents. Compile (F7) and run
+  the tester before drawing any conclusion.
+- **Not an account-scaling build.** Flat 0.1 lots means the return is
+  meaningless as a return; only the per-trade and per-tier statistics are.
+  Don't put this on a live account expecting the snapshot's behaviour.
+- **Still no entry stop loss.** Flat sizing caps how bad any single trade can
+  be in absolute terms, which is the point, but the position is still naked
+  until BE arms.
+- **The equity curve will look nothing like the parent's.** No compounding
+  and no tier weighting means the H4 trades that drive the parent's P/L now
+  count exactly as much as an M5 scalp. That is the intended distortion —
+  read it as a signal test, not as a performance comparison against
+  section 19 or 20.
+- Once the signal question is settled, the risk ladder proposed in #30
+  (H1 bias highest, H4 medium, daily lowest) is the natural next thing to
+  layer back on top of these numbers.
