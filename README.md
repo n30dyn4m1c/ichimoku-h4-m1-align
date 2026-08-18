@@ -572,11 +572,7 @@ single-change variant of the "very profitable" snapshot: the H4 bias and the
 D1 filter stay exactly as they are, but the lower tiers (M5/M15/M30 by
 default) gain a second, smaller bias to fall back on, so a flat H4 no longer
 freezes the whole stack — set `InpH1BiasMode = H1BIAS_OFF` to get the
-snapshot's behaviour back for an A/B. That fork in turn has a **flat-lot test
-build** (`experimental-bottomup-stack-h1-bias-fixedlot-ea.mq5`) with the whole
-equity-% risk regime stripped out and every trade pinned to 0.10 lots, so a
-tester run measures the entries rather than the sizing table — testing only,
-not for a live account. They're newer and less battle-tested
+snapshot's behaviour back for an A/B. They're newer and less battle-tested
 than the main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
 for the full catalog.
