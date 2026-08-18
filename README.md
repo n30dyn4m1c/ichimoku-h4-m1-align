@@ -779,7 +779,13 @@ since been **promoted to the main VPS and desktop builds at the repo root**
 and is kept here as the experimental reference — and a **D1-ladder fork**
 (`experimental-bottomup-stack-d1-ladder-ea.mq5`, magic `20260851`) that adds
 a D1 tier, a flat-kijun filter on every timeframe, and a D1 → H4 → H1
-hand-off bias ladder. The rest are newer and less battle-tested
+hand-off bias ladder. A **standard-account build**
+(`experimental-bottomup-stack-standard-account-ea.mq5`, magic `20260854`)
+re-scales the live VPS build's money management for a full-size account
+funded with about $100 — quarter risk throughout, equity thresholds at
+$700/$1300, and a minimum-lot gate that skips an entry rather than silently
+rounding it up to 0.01 lot; the trading logic is unchanged. The rest are
+newer and less battle-tested
 than the main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
 for the full catalog.
