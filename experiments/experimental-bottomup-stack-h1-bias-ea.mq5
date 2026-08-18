@@ -2,9 +2,10 @@
 //| Ichimoku Bottom-Up Stack EA — H1 BIAS VARIANT (EXPERIMENT)        |
 //| Fork of experimental-bottomup-stack-ea-very-profitable.mq5 (the   |
 //| live-VPS "very profitable" snapshot). Everything is identical to  |
-//| that build except for ONE addition: a new H1 bias that lets the   |
-//| lower tiers keep trading when H4 offers no direction. The H4 bias |
-//| and the D1 filter are unchanged and still in force.               |
+//| that build except for the entry bias gating: a new H1 bias that   |
+//| lets the lower tiers keep trading when H4 offers no direction,    |
+//| plus a flat-kijun guard on every bias. The H4 bias and the D1     |
+//| filter are otherwise unchanged and still in force.                |
 //| Entry: same per-TF alignment as the H4 VPS build (price + chikou  |
 //|        above/below tenkan, kijun and cloud), checked BOTTOM-UP:   |
 //|        a tier opens only when the full stack M1..tier TF is       |
@@ -29,16 +30,17 @@
 //|        with the trade. H4 aligned WITH the trade is still the     |
 //|        primary path and is unchanged; H4 aligned AGAINST the      |
 //|        trade stays blocked unless InpH1BiasMode = H1BIAS_ALWAYS.  |
-//|        The H4 tier never uses the stand-in, and the D1 filter on  |
-//|        the H4 tier is untouched.                                  |
-//|        FLAT-KIJUN BIAS GUARD: whichever bias authorises an entry  |
-//|        (H4 on the primary path, H1 on the stand-in) must have a   |
-//|        MOVING kijun on that timeframe. A kijun whose travel over  |
-//|        InpKijunFlatBars bars is <= InpKijunFlatATRMult x ATR of   |
-//|        that TF counts as flat — the bias has stalled, price is    |
-//|        ranging around it, and no trade opens on it. Unreadable    |
-//|        kijun/ATR values count as flat, so an unverifiable bias    |
-//|        never lets a trade through.                                |
+//|        The H4 tier never uses the stand-in, and the stand-in      |
+//|        does not touch the D1 filter on the H4 tier.               |
+//|        FLAT-KIJUN BIAS GUARD: every bias gating an entry must     |
+//|        have a MOVING kijun on its own timeframe — H4 on the       |
+//|        primary path, H1 on the stand-in, and D1 on the H4 tier's  |
+//|        daily filter. A kijun whose travel over InpKijunFlatBars   |
+//|        bars is <= InpKijunFlatATRMult x ATR of that TF counts as  |
+//|        flat — the bias has stalled, price is ranging around it,   |
+//|        and no trade opens on it. Unreadable kijun/ATR values      |
+//|        count as flat, so an unverifiable bias never lets a trade  |
+//|        through.                                                   |
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
 //|        candle close inside the kumo). A long exits when the bid |
 //|        touches the cloud's upper edge; a short when the ask     |
@@ -131,7 +133,7 @@ input ENUM_H1_BIAS_TIER InpH1BiasMaxTier = H1TIER_M30;     // Highest tier allow
 input bool   InpH1BiasCloudCheck = true;   // Also require the H1 cloud (Span A vs Span B) to carry the trade's bias
 
 input group  "Flat-Kijun Bias Guard (NEW — no entries while the bias kijun has stalled)"
-input bool   InpKijunFlatGuard    = true;  // Block entries when the kijun of the authorising bias TF (H4 or the H1 stand-in) is flat
+input bool   InpKijunFlatGuard    = true;  // Block entries when the kijun of a gating bias TF (H4, the H1 stand-in, or D1 on the H4 tier) is flat
 input int    InpKijunFlatBars     = 5;     // Bars of the bias TF over which the kijun's travel is measured
 input double InpKijunFlatATRMult  = 0.25;  // Kijun is "flat" when its travel over those bars <= this x ATR(bias TF)
 
@@ -163,6 +165,7 @@ string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
 int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
+int      atrD1[MAX_SYMS];             // ATR(D1) — flat-kijun guard on the D1 filter
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -228,6 +231,9 @@ int OnInit()
       ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
       if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
 
+      atrD1[s] = iATR(syms[s], PERIOD_D1, InpATRPeriod);
+      if(atrD1[s] == INVALID_HANDLE) return(INIT_FAILED);
+
       for(int l = 0; l < LEVELS; l++)
       {
          atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
@@ -248,6 +254,7 @@ void OnDeinit(const int reason)
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
+      if(atrD1[s] != INVALID_HANDLE) IndicatorRelease(atrD1[s]);
       for(int l = 0; l < LEVELS; l++)
          if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
    }
@@ -405,7 +412,9 @@ int ChainAligned(int s, int topIdx)
 // Same alignment semantics as CheckAlign but on D1 — D1 bullish
 // (price + chikou above tenkan, kijun and cloud) allows only H4
 // buys, D1 bearish only H4 sells. A D1 close INSIDE the cloud
-// (or unreadable) returns 0 — no new H4 trades then.
+// (or unreadable) returns 0 — no new H4 trades then. The flat-kijun
+// guard (DailyKijunOK) applies on top: an aligned D1 whose kijun has
+// stalled opens nothing either.
 //==============================================================
 
 int DailyAlign(int s)
@@ -491,23 +500,33 @@ bool LevelCloudBiasOK(int s, int lvl, int dir)
 // flat (conservative), so no trade ever opens on a bias that
 // cannot be verified.
 //
-// tfIdx indexes tfs[]; the ATR handles are per LEVEL and level l
-// runs on tfs[l + 1], so the matching ATR handle is tfIdx - 1.
+// It guards all three bias gates: the H4 bias, the H1 stand-in,
+// and the D1 filter on the H4 tier.
 //==============================================================
 
+// Core test, on one ichimoku handle measured against one ATR handle
+// of the same timeframe.
+bool KijunFlatOn(int ichHandle, int atrHandle)
+{
+   int bars = MathMax(1, InpKijunFlatBars);
+
+   double kNow[1], kPast[1], a[1];
+   if(CopyBuffer(ichHandle, 1, 1,        1, kNow)  <= 0) return true;
+   if(CopyBuffer(ichHandle, 1, 1 + bars, 1, kPast) <= 0) return true;
+   if(CopyBuffer(atrHandle, 0, 1, 1, a) <= 0 || a[0] <= 0.0) return true;
+
+   return MathAbs(kNow[0] - kPast[0]) <= InpKijunFlatATRMult * a[0];
+}
+
+// Stack timeframes: tfIdx indexes tfs[], while the ATR handles are per
+// LEVEL and level l runs on tfs[l + 1], so the matching ATR handle is
+// tfIdx - 1.
 bool BiasKijunFlat(int s, int tfIdx)
 {
    int atrIdx = tfIdx - 1;
    if(atrIdx < 0 || atrIdx >= LEVELS) return true;   // no ATR for this TF — treat as flat
 
-   int bars = MathMax(1, InpKijunFlatBars);
-
-   double kNow[1], kPast[1], a[1];
-   if(CopyBuffer(ich[s][tfIdx], 1, 1,        1, kNow)  <= 0) return true;
-   if(CopyBuffer(ich[s][tfIdx], 1, 1 + bars, 1, kPast) <= 0) return true;
-   if(CopyBuffer(atr[s][atrIdx], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return true;
-
-   return MathAbs(kNow[0] - kPast[0]) <= InpKijunFlatATRMult * a[0];
+   return KijunFlatOn(ich[s][tfIdx], atr[s][atrIdx]);
 }
 
 // The bias TF may authorise an entry only while its kijun is sloping.
@@ -515,6 +534,14 @@ bool BiasKijunOK(int s, int tfIdx)
 {
    if(!InpKijunFlatGuard) return true;
    return !BiasKijunFlat(s, tfIdx);
+}
+
+// Same guard on D1, the H4 tier's own bias filter — off its own
+// ichimoku and ATR handles.
+bool DailyKijunOK(int s)
+{
+   if(!InpKijunFlatGuard) return true;
+   return !KijunFlatOn(ichD1[s], atrD1[s]);
 }
 
 //==============================================================
@@ -577,7 +604,8 @@ bool H1BiasTier(int lvl)
 // stalled H4 kijun blocks the H4 path outright (it does not fall
 // through to the H1 stand-in — a ranging H4 is exactly what the
 // guard is there to sit out), and a stalled H1 kijun blocks the
-// stand-in path.
+// stand-in path. The H4 tier's D1 filter carries the same guard,
+// applied at the entry site alongside DailyAlign().
 //
 // Writes into 'via' the bias that authorised the entry so the caller
 // can log it: "H4", "H1" (stand-in on a flat H4), "H1x" (stand-in
@@ -1081,8 +1109,11 @@ void OnTick()
             string via = "--";
             if(!EntryBiasOK(s, l, st, via)) continue;
 
-            // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
-            if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
+            // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4
+            // trades), and its kijun must be sloping — a stalled D1 kijun is
+            // a daily range, so the tier sits it out
+            if(l == LEVELS - 1 && InpD1Filter &&
+               (DailyAlign(s) != st || !DailyKijunOK(s))) continue;
 
             topTier = l;
             topDir  = st;

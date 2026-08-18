@@ -2078,8 +2078,9 @@ on the bias:
 
 1. a **second, smaller directional bias on H1**, so that an undecided H4 no
    longer freezes the whole stack; and
-2. a **flat-kijun guard** on whichever bias authorises the entry, so a bias
-   whose kijun has gone horizontal opens nothing.
+2. a **flat-kijun guard** on every bias that gates an entry — H4, the H1
+   stand-in, and D1 on the H4 tier — so a bias whose kijun has gone
+   horizontal opens nothing.
 
 ### The problem it addresses
 
@@ -2125,10 +2126,10 @@ the H4 ones without having to reconstruct the H4 state after the fact.
 
 ### Flat-kijun bias guard
 
-A bias only counts while its own kijun is *moving*. Whichever timeframe ends
-up authorising an entry — H4 on the primary path, H1 on the stand-in — has its
-kijun measured on that same timeframe, and the trade is skipped when the line
-has stalled:
+A bias only counts while its own kijun is *moving*. Every timeframe that gates
+an entry — H4 on the primary path, H1 on the stand-in, and D1 on the H4 tier's
+daily filter — has its kijun measured on that same timeframe, and the trade is
+skipped when the line has stalled:
 
 ```
 flat  ⇔  |kijun[1] − kijun[1 + InpKijunFlatBars]|  ≤  InpKijunFlatATRMult × ATR(bias TF)
@@ -2142,13 +2143,15 @@ the tradable set.
 
 | Input | Default | Meaning |
 |-------|---------|---------|
-| `InpKijunFlatGuard` | `true` | Block entries while the authorising bias TF's kijun is flat. `false` = previous behaviour |
+| `InpKijunFlatGuard` | `true` | Block entries while a gating bias TF's kijun is flat (H4, the H1 stand-in, or D1 on the H4 tier). `false` = previous behaviour |
 | `InpKijunFlatBars` | `5` | Bars of the bias TF over which the kijun's travel is measured (clamped to ≥ 1) |
 | `InpKijunFlatATRMult` | `0.25` | Kijun is flat when its travel over those bars is ≤ this × ATR of the same TF |
 
 The measurement uses each bias TF's own ATR handle (`InpATRPeriod`, the same
 handles the risk sizing and the trail use), so the tolerance scales with that
-timeframe's volatility instead of being a fixed point distance.
+timeframe's volatility instead of being a fixed point distance. D1 had no ATR
+handle in the snapshot — `atrD1[]` is new, created and released alongside the
+existing `ichD1[]` daily ichimoku handle.
 
 Two deliberate choices:
 
@@ -2160,8 +2163,12 @@ Two deliberate choices:
 - **Unreadable values count as flat.** A failed kijun or ATR read blocks the
   entry, so a bias that cannot be verified never authorises a trade.
 
-The D1 filter on the H4 tier is untouched — it still gates that tier by D1
-alignment alone, with no kijun-slope requirement of its own.
+On the H4 tier the guard sits on top of the existing D1 gate: `DailyAlign()`
+must carry the trade's direction **and** the D1 kijun must be sloping, so an
+aligned but stalled daily — price drifting inside a multi-week range with the
+kijun pinned at the midpoint — no longer opens the tier. The guard only applies
+where the D1 filter itself does: with `InpD1Filter = false`, D1 gates nothing
+and is not measured.
 
 ### Note on `InpH1BiasMaxTier = H1TIER_H1`
 
@@ -2184,9 +2191,12 @@ loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
 - **A flat H4 is not the same as a safe H4.** H4 unaligned often means a
   range or a turn; the H1 stand-in deliberately trades into that, relying on
   the touch-only kumo exit to cut losers fast.
-- **The flat-kijun guard cuts trade count in both directions** — it removes
-  H4-bias entries the snapshot took as well as H1 stand-in ones, so a run
-  with the guard on is not comparable to the snapshot on trade count alone.
+- **The flat-kijun guard cuts trade count across all three gates** — it
+  removes H4-bias entries the snapshot took, H1 stand-in ones, and H4-tier
+  entries the D1 filter used to pass, so a run with the guard on is not
+  comparable to the snapshot on trade count alone. The H4 tier feels it most:
+  it must now clear an aligned-and-sloping H4 *and* an aligned-and-sloping D1,
+  and the daily kijun spends long stretches flat.
   A/B it with `InpKijunFlatGuard = false`, and treat `InpKijunFlatATRMult` as
   the knob to tune: too high and only violent trends qualify, too low and the
   guard passes everything.
