@@ -11,6 +11,15 @@ tell apart from the two main builds at a glance. The MS-W1-D1 build (section
 unbacktested, so it's documented and tracked here alongside the
 experimental builds until it has earned main-build status.
 
+> **Promoted, 2026-08-18.** The **H1-bias bottom-up stack** (section 20) is no
+> longer only an experiment — it is now the code behind both main builds,
+> `ichimoku-h4-m1-vps-ea.mq5` (magic `20260850`) and
+> `ichimoku-h4-m1-mt5pc-ea.mq5` (magic `20260852`). The top-down alignment
+> builds it replaced are in [`archives/`](../archives/). The experimental
+> file stays here as the reference copy and as the parent of the D1-ladder
+> fork (section 21); the main builds are where changes to the live strategy
+> now belong.
+
 ---
 
 ## 1. H4-M1 PO3 Alignment EA
@@ -1852,11 +1861,19 @@ trade exits on the cross back, or the ATR stop.
 ## 18. Dual-Mode H4/H1 Kijun-Start EA (VPS merge experiment)
 
 **Files:** `experiments/experimental-h4-m1-kijun-start-vps-ea.mq5` (the
-experiment), promoted to **`ichimoku-h4-m1-vps-ea.mq5`** — the single
-production VPS file replacing both former VPS builds (originals archived
-2026-08-14 as `archives/ichimoku-h4-m1-vps-ea-archived20260814.mq5` and
-`archives/ichimoku-h1-m1-vps-ea-archived20260814.mq5`).
+experiment), promoted on 2026-08-14 to **`ichimoku-h4-m1-vps-ea.mq5`** — the
+single production VPS file replacing both former VPS builds (originals
+archived 2026-08-14 as `archives/ichimoku-h4-m1-vps-ea-archived20260814.mq5`
+and `archives/ichimoku-h1-m1-vps-ea-archived20260814.mq5`).
 Magic `20260846` = H4 mode, `20260847` = H1 mode.
+
+> **Superseded, 2026-08-18.** This top-down dual-mode build is no longer the
+> production VPS EA — the H1-bias bottom-up stack (section 20) took over the
+> `ichimoku-h4-m1-vps-ea.mq5` / `ichimoku-h4-m1-mt5pc-ea.mq5` filenames. The
+> dual-mode files it describes are archived as
+> `archives/ichimoku-h4-m1-vps-ea-archived20260818.mq5` and
+> `archives/ichimoku-h4-m1-mt5pc-ea-archived20260818.mq5`; the notes below
+> describe them as they were.
 
 A single file that merges **both live VPS builds** — `ichimoku-h4-m1-vps-ea.mq5`
 and `ichimoku-h1-m1-vps-ea.mq5` — selected with `InpTopTF`:
@@ -2062,13 +2079,24 @@ against the current file to see what those three additions changed.
 
 ---
 
-## 20. Bottom-Up Stack EA — H1 Bias variant
+## 20. Bottom-Up Stack EA — H1 Bias variant *(promoted to the main builds)*
 
 **File:** `experimental-bottomup-stack-h1-bias-ea.mq5`
 **Forked from:** `experimental-bottomup-stack-ea-very-profitable.mq5` (the
 "very profitable" snapshot running on the VPS — section 19)
-**Magic number:** `20260850` — fresh, so it can run alongside the snapshot
-(`20260848`) and the live VPS builds (`20260846`/`20260847`)
+**Magic number:** `20260850`
+
+> **Status: promoted, 2026-08-18.** This variant is now the production
+> strategy. Its code was copied to `ichimoku-h4-m1-vps-ea.mq5` (VPS, magic
+> `20260850` carried over so positions it already opened keep being managed)
+> and to `ichimoku-h4-m1-mt5pc-ea.mq5` (desktop, magic `20260852`, plus
+> `Alert()` popups on every entry/exit and the weekly equity reminder). The
+> top-down alignment builds that previously held those filenames were
+> archived as `archives/ichimoku-h4-m1-vps-ea-archived20260818.mq5` and
+> `archives/ichimoku-h4-m1-mt5pc-ea-archived20260818.mq5`. The write-up below
+> describes the strategy as it was developed here; the main
+> [README](../README.md#how-the-strategy-works) now documents it as the
+> shipped behaviour. Edit the root files, not this one, for live changes.
 
 A single-change fork of the very-profitable snapshot. Everything else — the
 five-tier bottom-up chain, the touch-only kumo exit, the cloud bias gate, the
@@ -2129,9 +2157,10 @@ loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
 
 ### Status & caveats
 
-- **Not backtested.** Same as the snapshot it forks — no F7 compile or
-  Strategy Tester run is recorded in this repo. Compile and run it in the
-  tester before it goes anywhere near a live account.
+- **Not backtested when it was promoted.** No F7 compile or Strategy Tester
+  run is recorded in this repo for it; it went live on the strength of the
+  snapshot's forward results plus the reasoning above. Compile and test any
+  further change before it reaches the account.
 - **More trades means more of everything**, including drawdown. The tiers
   this opens up are exactly the ones the H4 bias was suppressing, and they
   run with the snapshot's risk table (M5/M15 1%, M30 5% of equity in tier 1)
@@ -2153,9 +2182,9 @@ loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
 **File:** `experimental-bottomup-stack-d1-ladder-ea.mq5`
 **Forked from:** `experimental-bottomup-stack-h1-bias-ea.mq5` (section 20),
 which is left untouched
-**Magic number:** `20260851` — fresh, so it runs alongside the H1-bias build
-(`20260850`), the snapshot (`20260848`) and the live VPS builds
-(`20260846`/`20260847`)
+**Magic number:** `20260851` — fresh, so it runs alongside the live builds
+(VPS `20260850`, desktop `20260852`), the snapshot (`20260848`) and the
+archived top-down builds (`20260846`/`20260847`, `20260830`/`20260831`)
 
 Takes the H1-bias build and changes the stack's top end and how entries are
 qualified. Everything else — the bottom-up chain, the touch-only kumo exit,
