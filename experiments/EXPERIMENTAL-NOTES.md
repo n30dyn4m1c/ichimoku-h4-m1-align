@@ -2061,8 +2061,7 @@ against the current file to see what those three additions changed.
   before scaling `Symbols` up toward `MAX_SYMS` (60).
 
 ---
-
-## 20. Bottom-Up Stack EA — H1 Bias variant
+## 20. Bottom-Up Stack EA — D1..M1 stack with a bias ladder
 
 **File:** `experimental-bottomup-stack-h1-bias-ea.mq5`
 **Forked from:** `experimental-bottomup-stack-ea-very-profitable.mq5` (the
@@ -2070,138 +2069,127 @@ against the current file to see what those three additions changed.
 **Magic number:** `20260850` — fresh, so it can run alongside the snapshot
 (`20260848`) and the live VPS builds (`20260846`/`20260847`)
 
-A fork of the very-profitable snapshot that changes only how entries are
-gated. Everything else — the five-tier bottom-up chain, the touch-only kumo
-exit, the cloud bias gate, the 3-tier equity risk regime, the BE/chandelier
-protection layer, no entry stop loss — is the snapshot. Two additions, both
-on the bias:
+A fork of the very-profitable snapshot that changes the stack's top end and
+how entries are gated. Everything else — the bottom-up chain, the touch-only
+kumo exit, the cloud bias gate, the equity risk regime, the BE/chandelier
+protection layer, no entry stop loss — is the snapshot. Three additions:
 
-1. a **second, smaller directional bias on H1**, so that an undecided H4 no
-   longer freezes the whole stack; and
-2. a **flat-kijun guard** on every bias that gates an entry — H4, the H1
-   stand-in, and D1 on the H4 tier — so a bias whose kijun has gone
-   horizontal opens nothing.
+1. a **D1 tier** on top of H4, so the full M1…D1 chain is tradable;
+2. a **flat-kijun filter on every timeframe**, so a breakout over a stalled
+   kijun is not an alignment at all; and
+3. a **bias ladder** — D1 → H4 → H1 — in which a *flat* step stands aside and
+   hands the tiers below to the next step down, while an *opposed* step still
+   blocks.
 
-### The problem it addresses
+### The six tiers
 
-In the snapshot, `InpH4Bias` makes H4 the bias for *every* tier: H4 bullish
-allows buys only, H4 bearish sells only, and **H4 unaligned blocks all five
-tiers, M5 included**. H4 spends a large share of the time neither above nor
-below its own tenkan/kijun/cloud (or with the chikou disagreeing), and during
-those stretches a perfectly clean M1→M30 chain produces no trade at all.
+| Tier | Chain required | Bias above it |
+|------|----------------|---------------|
+| M5 | M1 + M5 | H4, or H1 as stand-in |
+| M15 | M1 … M15 | H4, or H1 as stand-in |
+| M30 | M1 … M30 | H4, or H1 as stand-in (default `InpH1BiasMaxTier`) |
+| H1 | M1 … H1 | H4 (stand-in only if `InpH1BiasMaxTier = H1TIER_H1`) |
+| H4 | M1 … H4 | the D1 step (`InpD1Filter`) |
+| **D1** | **M1 … D1** | **none — its own chain is the bias** |
 
-### What the H1 bias does
+Consolidation is unchanged: when several tiers align at once only the largest
+opens, and smaller tiers already running on the symbol are closed first. D1
+now sits at the top of that ordering, so an aligning D1 tier supersedes a
+running H4 trade.
 
-When H4 offers no direction, the lower tiers may fall back on H1: a tier at or
-below `InpH1BiasMaxTier` opens if **H1 itself is aligned** with the trade —
-the same price + chikou vs tenkan/kijun/cloud test the H4 bias uses, one
-timeframe down. The H4 bias is untouched as the primary path, and the D1
-filter on the H4 tier is untouched as well.
+The D1 tier inherits the H1/H4 branch of the protection layer (`lvl >= 3`):
+the tighter `InpBEProfitH1H4` break-even and the `InpTrailActivateATR`
+chandelier trail, both measured against ATR(D1). Its exit is the same
+touch-only kumo exit, on the D1 cloud.
 
-Resolution order in `EntryBiasOK()`, evaluated after the chain and cloud-bias
-checks the snapshot already ran:
+### Flat-kijun filter — now inside the alignment test
 
-| H4 state | Tier ≤ `InpH1BiasMaxTier` | Tier above it (H1/H4) |
-|----------|---------------------------|------------------------|
-| Aligned **with** the trade | opens (logged `bias H4`) | opens (logged `bias H4`) |
-| **Flat** (unaligned / in its cloud) | opens **if H1 is aligned** (logged `bias H1`) — **new** | blocked, as before |
-| Aligned **against** the trade | blocked, unless `H1BIAS_ALWAYS` (then logged `bias H1x`) | blocked, as before |
-
-The H4 tier can never use the stand-in — it always needs H4 *and* D1 itself.
-
-### New inputs
-
-| Input | Default | Meaning |
-|-------|---------|---------|
-| `InpH1BiasMode` | `H1BIAS_FLAT_H4` (1) | `0` = off (identical to the snapshot), `1` = stand in only while H4 is flat, `2` = stand in even against an aligned H4 (counter-H4 on the lower tiers) |
-| `InpH1BiasMaxTier` | `H1TIER_M30` (2) | Highest tier allowed to enter on the H1 bias — `0` M5, `1` M15, `2` M30, `3` H1. The H4 tier is deliberately not an option |
-| `InpH1BiasCloudCheck` | `true` | Also require the H1 kumo (Span A vs Span B, now and at the far end of the future cloud) to carry the trade's bias |
-
-Setting `InpH1BiasMode = H1BIAS_OFF` reduces the build exactly to the
-snapshot's entry behaviour — that's the A/B baseline switch.
-
-Every entry now logs which bias authorised it (`… (bottom-up, bias H4)` /
-`bias H1` / `bias H1x`), so the journal separates the new H1-bias trades from
-the H4 ones without having to reconstruct the H4 state after the fact.
-
-### Flat-kijun bias guard
-
-A bias only counts while its own kijun is *moving*. Every timeframe that gates
-an entry — H4 on the primary path, H1 on the stand-in, and D1 on the H4 tier's
-daily filter — has its kijun measured on that same timeframe, and the trade is
-skipped when the line has stalled:
+`CheckAlign()` requires the timeframe's own kijun to be sloping the same way
+as the breakout. Flat means the line barely moved:
 
 ```
-flat  ⇔  |kijun[1] − kijun[1 + InpKijunFlatBars]|  ≤  InpKijunFlatATRMult × ATR(bias TF)
+flat  ⇔  |kijun[1] − kijun[1 + InpKijunFlatBars]|  ≤  InpKijunFlatATRMult × ATR(that TF)
 ```
 
 A horizontal kijun is price oscillating around the midpoint of its own
-`Kijun`-period range — the signature of a range, not a trend. Alignment can
-still read cleanly there (price and chikou sitting above a flat tenkan/kijun/
-cloud in a drifting range), which is exactly the state this guard removes from
-the tradable set.
+`Kijun`-period high/low range — a range, not a trend — and the price+chikou
+test alone reads cleanly in exactly that state. Because the requirement lives
+inside `CheckAlign()`, it applies **everywhere that function is used**: every
+rung of a tier's chain (M1 included) and every step of the bias ladder. There
+is no separate bias-only guard.
 
 | Input | Default | Meaning |
 |-------|---------|---------|
-| `InpKijunFlatGuard` | `true` | Block entries while a gating bias TF's kijun is flat (H4, the H1 stand-in, or D1 on the H4 tier). `false` = previous behaviour |
-| `InpKijunFlatBars` | `5` | Bars of the bias TF over which the kijun's travel is measured (clamped to ≥ 1) |
+| `InpKijunFlatGuard` | `true` | Require a sloping kijun on every TF. `false` restores the pure price+chikou test |
+| `InpKijunFlatBars` | `5` | Bars of that TF over which the kijun's travel is measured (clamped to ≥ 1) |
 | `InpKijunFlatATRMult` | `0.25` | Kijun is flat when its travel over those bars is ≤ this × ATR of the same TF |
 
-The measurement uses each bias TF's own ATR handle (`InpATRPeriod`, the same
-handles the risk sizing and the trail use), so the tolerance scales with that
-timeframe's volatility instead of being a fixed point distance. D1 had no ATR
-handle in the snapshot — `atrD1[]` is new, created and released alongside the
-existing `ichD1[]` daily ichimoku handle.
+ATR now exists for every stack timeframe (`atrTF[sym][tf]`, `InpATRPeriod`),
+M1 through D1 — the old per-level `atr[]` and the separate `ichD1[]`/`atrD1[]`
+daily handles collapsed into the stack arrays when D1 joined the stack.
 
-Two deliberate choices:
+### The bias ladder
 
-- **A stalled H4 does not fall through to the H1 stand-in.** When H4 is
-  aligned with the trade but its kijun is flat, the entry is blocked outright
-  rather than re-tested against H1 — a ranging H4 is precisely what the guard
-  exists to sit out. The stand-in still applies in its original case, an H4
-  with *no alignment* at all, and there the H1 kijun must be sloping.
-- **Unreadable values count as flat.** A failed kijun or ATR read blocks the
-  entry, so a bias that cannot be verified never authorises a trade.
+Each step gates the tiers below it. The key property: **flat is not a veto,
+it is a hand-off.**
 
-On the H4 tier the guard sits on top of the existing D1 gate: `DailyAlign()`
-must carry the trade's direction **and** the D1 kijun must be sloping, so an
-aligned but stalled daily — price drifting inside a multi-week range with the
-kijun pinned at the midpoint — no longer opens the tier. The guard only applies
-where the D1 filter itself does: with `InpD1Filter = false`, D1 gates nothing
-and is not measured.
+| Step | Aligned with the trade | Flat (no breakout, or flat kijun) | Aligned against |
+|------|------------------------|-----------------------------------|-----------------|
+| D1 | authorises the H4 tier (logged `bias D1`) | no D1-tier trade; the H4 tier stands on H4 itself | blocks the H4 tier |
+| H4 | authorises every tier below (logged `bias H4`) | no H4-tier trade; tiers ≤ `InpH1BiasMaxTier` may open on H1 | blocks, unless `H1BIAS_ALWAYS` |
+| H1 | authorises the stand-in (logged `bias H1`) | nothing opens on the stand-in | no stand-in |
 
-### Note on `InpH1BiasMaxTier = H1TIER_H1`
+So a flat daily stops daily trades without freezing H4; a flat H4 stops H4
+trades without freezing M5–M30; and since the flat-kijun filter is part of
+alignment, "flat" now includes "broke out but the kijun has stalled".
 
-At the H1 tier the chain check already requires M1…H1 aligned, so the H1 bias
-is trivially satisfied there. Opening that tier up therefore means "the H1
-tier trades whenever its chain aligns and H4 isn't opposed" — a much larger
-loosening than the M5/M15/M30 default, and the H1 tier carries tier-1 risk of
-10% equity. Treat it as a separate experiment, not a default.
+`InpD1Filter` became a three-way mode for the daily step:
+
+| Value | Behaviour |
+|-------|-----------|
+| `D1F_OFF` (0) | no daily step at all |
+| `D1F_NOT_OPPOSED` (1, default) | only an opposed D1 blocks the H4 tier; a flat D1 stands aside |
+| `D1F_REQUIRED` (2) | D1 must itself carry the trade — the snapshot's strict filter |
+
+`InpH1BiasMode` / `InpH1BiasMaxTier` / `InpH1BiasCloudCheck` are unchanged
+from the H1-bias variant, and the H4 and D1 tiers still never use the
+stand-in.
+
+Every entry logs the step that authorised it — `… (bottom-up, bias D1)` /
+`bias H4` / `bias H1` / `bias H1x` — so the journal separates ladder levels
+without reconstructing state after the fact.
+
+### Risk for the D1 tier
+
+`InpRiskPctD1` = **20 / 10 / 2** across the three equity regimes — the same
+row as H4, deliberately *not* the next doubling the lower ladder implies
+(1, 1, 5, 10, 20 → 40 would be reckless on a build with no entry stop loss).
+Treat it as a starting point to tune, not a validated number.
 
 ### Status & caveats
 
-- **Not backtested.** Same as the snapshot it forks — no F7 compile or
-  Strategy Tester run is recorded in this repo. Compile and run it in the
-  tester before it goes anywhere near a live account.
-- **More trades means more of everything**, including drawdown. The tiers
-  this opens up are exactly the ones the H4 bias was suppressing, and they
-  run with the snapshot's risk table (M5/M15 1%, M30 5% of equity in tier 1)
-  and **no entry stop loss**. A/B it against `InpH1BiasMode = H1BIAS_OFF` on
-  the same period before judging it.
-- **A flat H4 is not the same as a safe H4.** H4 unaligned often means a
-  range or a turn; the H1 stand-in deliberately trades into that, relying on
-  the touch-only kumo exit to cut losers fast.
-- **The flat-kijun guard cuts trade count across all three gates** — it
-  removes H4-bias entries the snapshot took, H1 stand-in ones, and H4-tier
-  entries the D1 filter used to pass, so a run with the guard on is not
-  comparable to the snapshot on trade count alone. The H4 tier feels it most:
-  it must now clear an aligned-and-sloping H4 *and* an aligned-and-sloping D1,
-  and the daily kijun spends long stretches flat.
-  A/B it with `InpKijunFlatGuard = false`, and treat `InpKijunFlatATRMult` as
-  the knob to tune: too high and only violent trends qualify, too low and the
-  guard passes everything.
-- **`H1BIAS_ALWAYS` is genuinely counter-trend** on the lower tiers — the H4
-  bias exists precisely to stop those entries. Off by default for that reason.
-- Trade count still passes through entry consolidation: when H4 later aligns
-  and the H4 tier opens, any lower tier opened on the H1 bias is closed and
-  superseded, exactly as before.
+- **Not backtested, not compiled here.** No F7 compile or Strategy Tester run
+  is recorded in this repo. Compile and test before this goes near an account.
+- **Trade count drops sharply.** Every rung of every chain now needs a sloping
+  kijun, M1 included. The D1 tier in particular needs all seven timeframes
+  aligned *and* sloping at once — expect it to fire rarely, which is the
+  point, but verify it fires at all over your test window before concluding
+  the wiring works.
+- **The ladder cuts both ways.** `D1F_NOT_OPPOSED` *loosens* the H4 tier
+  relative to the old strict D1 filter (a flat daily no longer blocks it),
+  while the flat-kijun filter tightens everything. A/B those two separately —
+  `InpD1Filter = D1F_REQUIRED` and `InpKijunFlatGuard = false` — or the
+  effects will be impossible to attribute.
+- **`InpKijunFlatATRMult` is the knob that matters.** Too high and only
+  violent trends qualify; too low and the filter passes everything. 0.25 over
+  5 bars follows `experimental-h1-m1-reversion-ea.mq5`, which used it as a
+  *ranging* detector — the same threshold is being used here for the opposite
+  purpose, so it is a starting point, not a tuned value.
+- **A flat H4 is still not a safe H4.** The H1 stand-in deliberately trades
+  into an undecided daily/4-hour picture, relying on the touch-only kumo exit
+  to cut losers fast.
+- **No entry stop loss** — every position is naked until BE arms, and the D1
+  tier carries 20% of equity in the tier-1 regime.
+- **Saved `.set` files from the previous build will not load cleanly**:
+  `InpD1Filter` changed from `bool` to an enum, and the risk inputs gained a
+  D1 row.
