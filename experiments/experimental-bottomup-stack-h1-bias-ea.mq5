@@ -49,14 +49,18 @@
 //|                         M5/M15/M30 keep the spike-gated trail     |
 //|                         (InpSpikeLockATR), only ever tightening   |
 //|        ATR comes from each level's own TF.                        |
-//| Risk:  single position per level per symbol, but consolidation:   |
-//|        when several tiers align at once only the LARGEST opens,   |
-//|        and any smaller tier already running on the symbol is      |
-//|        closed first — so at most one position per symbol runs at  |
-//|        a time (the highest aligned tier). Every trade risks a     |
-//|        fixed % of the ACTUAL equity at entry, de-risking as the   |
-//|        account grows: tier 1 below $7000 (M5/M15 1%, M30 5%, H1   |
-//|        10%, H4 20%), tier 2 half regime $7000-$13000              |
+//| Risk:  single position per level per symbol; the levels run       |
+//|        CONCURRENTLY (up to 5 per symbol) and each one re-enters   |
+//|        independently whenever its own chain re-aligns. A higher   |
+//|        tier arming never closes the smaller ones — every trade    |
+//|        runs to its own exit (kumo touch / rejection / trail).     |
+//|        Set InpConsolidateTiers = true to restore the old          |
+//|        consolidation: only the LARGEST aligned tier opens and any |
+//|        smaller tier still running on the symbol is closed first.  |
+//|        Every trade risks a fixed % of the ACTUAL equity at entry, |
+//|        de-risking as the account grows: tier 1 below $7000        |
+//|        (M5/M15 1%, M30 5%, H1 10%, H4 20%), tier 2 half regime    |
+//|        $7000-$13000                                               |
 //|        (0.5/0.5/2.5/5/10), tier 3 tiny regime $13000+             |
 //|        (0.1/0.1/0.2/1/2), against the reference distance           |
 //|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
@@ -116,6 +120,7 @@ input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on t
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
+input bool   InpConsolidateTiers = false;  // Consolidate: only the largest aligned tier opens and smaller running trades are closed (false = every tier trades and runs on its own)
 
 input group  "H1 Bias (NEW — lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (snapshot), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
@@ -713,6 +718,18 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
    return ok;
 }
 
+// Size and open one level's trade: risk % of equity vs ATR(level TF),
+// capped to free margin. Logs the retcode when the order is rejected.
+void EnterLevel(int s, int lvl, int dir, string via)
+{
+   double lots = RiskLots(s, lvl);
+   CapLotsToMargin(syms[s], (dir == 1), lots);
+
+   if(!OpenLevel(s, lvl, dir, lots, via))
+      Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] +
+            " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
+}
+
 // Close all positions of the level; returns true only when none remain
 // open, so a failed close (requote, halt) is retried instead of freeing
 // the level for a fresh entry.
@@ -996,10 +1013,12 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
       }
 
-      // Entry consolidation: when several tiers align at once, only the
-      // LARGEST one opens (highest TF wins). Any smaller tier already
-      // running on the symbol is closed first — e.g. M15 and M30 align
-      // together: the running M15 trade closes and only M30 opens.
+      // Entries. Every tier that aligns opens its own trade and each one
+      // runs to its own exit — a bigger tier arming does NOT close the
+      // smaller ones, so several timeframes can run side by side on the
+      // same symbol. InpConsolidateTiers = true restores the old
+      // behaviour: only the LARGEST aligned tier opens and any smaller
+      // tier already running on the symbol is closed first.
       int    topTier = -1;
       int    topDir  = 0;
       string topVia  = "--";
@@ -1020,14 +1039,23 @@ void OnTick()
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
 
-            topTier = l;
-            topDir  = st;
-            topVia  = via;
-            break;
+            if(InpConsolidateTiers)
+            {
+               // Remember the largest aligned tier and stop — it is the
+               // only one that opens, below.
+               topTier = l;
+               topDir  = st;
+               topVia  = via;
+               break;
+            }
+
+            // Independent tiers: open this one now and keep scanning the
+            // smaller tiers, which are free to open alongside it.
+            EnterLevel(s, l, st, via);
          }
       }
 
-      if(topTier >= 0)
+      if(InpConsolidateTiers && topTier >= 0)
       {
          // Close any smaller (lower-tier) trades still running
          for(int l = 0; l < topTier; l++)
@@ -1046,13 +1074,9 @@ void OnTick()
          }
 
          // Open only the largest tier
-         double lots = RiskLots(s, topTier);
-         CapLotsToMargin(syms[s], (topDir == 1), lots);
-
-         if(!OpenLevel(s, topTier, topDir, lots, topVia))
-            Print(PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
-                  " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
+         EnterLevel(s, topTier, topDir, topVia);
       }
    }
 }
+
 //This work is my worship unto GOD
