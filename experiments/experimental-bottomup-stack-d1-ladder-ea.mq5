@@ -1,10 +1,12 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA — H1 BIAS VARIANT (EXPERIMENT)        |
-//| Fork of experimental-bottomup-stack-ea-very-profitable.mq5 (the   |
-//| live-VPS "very profitable" snapshot). Everything is identical to  |
-//| that build except for ONE addition: a new H1 bias that lets the   |
-//| lower tiers keep trading when H4 offers no direction. The H4 bias |
-//| and the D1 filter are unchanged and still in force.               |
+//| Ichimoku Bottom-Up Stack EA — D1..M1 STACK + BIAS LADDER (EXPT)   |
+//| Fork of experimental-bottomup-stack-h1-bias-ea.mq5, which is      |
+//| itself a fork of the live-VPS "very profitable" snapshot. That    |
+//| build is left untouched; everything here is identical to it       |
+//| except for the stack's top end and how entries are gated: a D1    |
+//| tier on top of H4, a bias LADDER (D1 -> H4 -> H1) in which a      |
+//| flat step hands over to the one below it, and a flat-kijun        |
+//| filter that runs on EVERY timeframe of the stack.                 |
 //| Entry: same per-TF alignment as the H4 VPS build (price + chikou  |
 //|        above/below tenkan, kijun and cloud), checked BOTTOM-UP:   |
 //|        a tier opens only when the full stack M1..tier TF is       |
@@ -14,23 +16,33 @@
 //|          Tier M30: M1 + M5 + M15 + M30 aligned  -> open trade     |
 //|          Tier H1 : M1 ... H1 aligned            -> open trade     |
 //|          Tier H4 : M1 ... H4 aligned            -> open trade     |
+//|          Tier D1 : M1 ... D1 aligned            -> open trade     |
 //|        M1 alone never trades — it is only the start of the stack. |
+//|        NEW — FLAT-KIJUN FILTER: a timeframe counts as aligned     |
+//|        only when its OWN kijun is sloping the same way as the     |
+//|        breakout. Flat = the last two kijun values are the SAME    |
+//|        (the kijun is the midpoint of its Kijun-period high/low    |
+//|        range, so an unchanged kijun means that range has not      |
+//|        moved and price is only rotating inside it). This runs on  |
+//|        every TF, M1 through D1, so it gates both a tier's chain   |
+//|        and every bias below.                                      |
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
-//|        TF and the TF directly below it, H4 is the bias for the    |
-//|        whole stack (H4 bullish -> buys only, bearish -> sells     |
-//|        only, flat -> no trades), and the H4 tier itself is also   |
-//|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
-//|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
-//|        NEW — H1 BIAS: in the snapshot an unaligned H4 froze the   |
-//|        whole stack, including M5. Here the lower tiers get a      |
-//|        second, smaller bias to fall back on: when H4 carries no   |
-//|        direction, a tier at or below InpH1BiasMaxTier may open    |
-//|        provided H1 itself is aligned (same price+chikou test)     |
-//|        with the trade. H4 aligned WITH the trade is still the     |
-//|        primary path and is unchanged; H4 aligned AGAINST the      |
-//|        trade stays blocked unless InpH1BiasMode = H1BIAS_ALWAYS.  |
-//|        The H4 tier never uses the stand-in, and the D1 filter on  |
-//|        the H4 tier is untouched.                                  |
+//|        TF and the TF directly below it, and above that sits the   |
+//|        BIAS LADDER — D1, then H4, then H1. Each step gates the    |
+//|        tiers below it, and a step that is FLAT (no alignment of   |
+//|        its own, flat kijun included) does not freeze the stack:   |
+//|        it stands aside and the next step down takes over. A step  |
+//|        aligned AGAINST the trade still blocks it.                 |
+//|          D1 flat -> no D1 trade, but the H4 tier stands on H4     |
+//|                     itself (InpD1Filter = D1F_NOT_OPPOSED); an    |
+//|                     opposed D1 blocks the H4 tier                 |
+//|          H4 flat -> no H4 trade, but a tier at or below           |
+//|                     InpH1BiasMaxTier may open on H1 (the H1       |
+//|                     stand-in, InpH1BiasMode); an opposed H4       |
+//|                     blocks unless InpH1BiasMode = H1BIAS_ALWAYS   |
+//|          H1 flat -> nothing below it opens on the stand-in        |
+//|        The D1 tier needs no step above it — its own chain already |
+//|        requires an aligned, sloping D1.                           |
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a  |
 //|        candle close inside the kumo). A long exits when the bid |
 //|        touches the cloud's upper edge; a short when the ask     |
@@ -43,8 +55,8 @@
 //|        until an exit, with the profit protection layer taking   |
 //|        over once it turns green:                                |
 //|          Break-even   : profit >= ATR threshold (tighter for the  |
-//|                         H1/H4 levels) -> SL to entry + cover      |
-//|          Chandelier   : H1/H4 levels trail the stop behind the    |
+//|                         H1/H4/D1 levels) -> SL to entry + cover   |
+//|          Chandelier   : H1/H4/D1 levels trail the stop behind the |
 //|                         peak once profitable (InpTrailActivateATR);|
 //|                         M5/M15/M30 keep the spike-gated trail     |
 //|                         (InpSpikeLockATR), only ever tightening   |
@@ -56,14 +68,15 @@
 //|        a time (the highest aligned tier). Every trade risks a     |
 //|        fixed % of the ACTUAL equity at entry, de-risking as the   |
 //|        account grows: tier 1 below $7000 (M5/M15 1%, M30 5%, H1   |
-//|        10%, H4 20%), tier 2 half regime $7000-$13000              |
-//|        (0.5/0.5/2.5/5/10), tier 3 tiny regime $13000+             |
-//|        (0.1/0.1/0.2/1/2), against the reference distance           |
+//|        10%, H4 20%, D1 20%), tier 2 half regime $7000-$13000      |
+//|        (0.5/0.5/2.5/5/10/10), tier 3 tiny regime $13000+          |
+//|        (0.1/0.1/0.2/1/2/2), against the reference distance        |
 //|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
 //|        entry stop is attached). No multipliers, no streak         |
 //|        compounding.                                               |
-//| Magic: 20260850 — fresh, so this variant can run side by side     |
-//|        with the 20260848 snapshot and the live VPS builds         |
+//| Magic: 20260851 — fresh, so this variant can run side by side     |
+//|        with the 20260850 H1-bias build it forks, the 20260848     |
+//|        snapshot and the live VPS builds                           |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -87,16 +100,19 @@ input double InpRiskPctM15      = 1.0;    // M15  — tier 1
 input double InpRiskPctM30      = 5.0;    // M30  — tier 1
 input double InpRiskPctH1       = 10.0;   // H1   — tier 1
 input double InpRiskPctH4       = 20.0;   // H4   — tier 1
+input double InpRiskPctD1       = 20.0;   // D1   — tier 1 (mirrors H4; the ladder is not doubled again)
 input double InpRiskPctM5_T2    = 0.5;    // M5   — tier 2 (half regime)
 input double InpRiskPctM15_T2   = 0.5;    // M15  — tier 2
 input double InpRiskPctM30_T2   = 2.5;    // M30  — tier 2
 input double InpRiskPctH1_T2    = 5.0;    // H1   — tier 2
 input double InpRiskPctH4_T2    = 10.0;   // H4   — tier 2
+input double InpRiskPctD1_T2    = 10.0;   // D1   — tier 2
 input double InpRiskPctM5_T3    = 0.1;    // M5   — tier 3 (equity >= Tier3At)
 input double InpRiskPctM15_T3   = 0.1;    // M15  — tier 3
 input double InpRiskPctM30_T3   = 0.2;    // M30  — tier 3
 input double InpRiskPctH1_T3    = 1.0;    // H1   — tier 3
 input double InpRiskPctH4_T3    = 2.0;    // H4   — tier 3
+input double InpRiskPctD1_T3    = 2.0;    // D1   — tier 3
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
 // does not carry the trade.
@@ -107,28 +123,42 @@ input double InpRiskPctH4_T3    = 2.0;    // H4   — tier 3
 //                    way (counter-H4 trading on the lower tiers)
 enum ENUM_H1_BIAS_MODE { H1BIAS_OFF = 0, H1BIAS_FLAT_H4 = 1, H1BIAS_ALWAYS = 2 };
 
-// Highest tier permitted to enter on the H1 stand-in bias. The H4 tier is
-// deliberately absent — it always needs H4 (and D1) itself.
+// Highest tier permitted to enter on the H1 stand-in bias. The H4 and D1
+// tiers are deliberately absent — they always need H4 (and the daily step)
+// themselves.
 enum ENUM_H1_BIAS_TIER { H1TIER_M5 = 0, H1TIER_M15 = 1, H1TIER_M30 = 2, H1TIER_H1 = 3 };
+
+// How the D1 step of the ladder gates the H4 tier.
+//   D1F_OFF         : no daily step at all
+//   D1F_NOT_OPPOSED : a D1 aligned AGAINST the trade blocks it; a FLAT D1
+//                     (unaligned, or a stalled daily kijun) stands aside and
+//                     lets H4 carry the tier on its own
+//   D1F_REQUIRED    : D1 must itself carry the trade (the strict filter the
+//                     snapshot used)
+enum ENUM_D1_FILTER { D1F_OFF = 0, D1F_NOT_OPPOSED = 1, D1F_REQUIRED = 2 };
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
-input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
-input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
+input bool   InpH4Bias           = true;   // H4 is the bias for the tiers below it (H4 flat = no trades unless the H1 bias stands in)
+input ENUM_D1_FILTER InpD1Filter = D1F_NOT_OPPOSED; // D1 step for the H4 tier: 0=off, 1=block only when D1 is aligned against the trade (a flat D1 stands aside), 2=D1 must carry the trade (old strict filter)
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
-input group  "H1 Bias (NEW — lets the lower tiers trade when H4 is flat)"
+input group  "H1 Bias (lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (snapshot), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
 input ENUM_H1_BIAS_TIER InpH1BiasMaxTier = H1TIER_M30;     // Highest tier allowed to enter on the H1 bias (0=M5, 1=M15, 2=M30, 3=H1)
 input bool   InpH1BiasCloudCheck = true;   // Also require the H1 cloud (Span A vs Span B) to carry the trade's bias
 
+input group  "Flat-Kijun Filter (NEW — a breakout over a flat kijun is not an alignment)"
+input bool   InpKijunFlatGuard    = true;  // Every TF (M1..D1) must have its kijun sloping the trade's way to count as aligned
+input int    InpKijunFlatBars     = 1;     // Gap between the two kijun values compared (1 = the last two closed bars)
+
 input group  "Profit Protection"
 input int    InpATRPeriod         = 14;    // ATR period (each level uses its own TF's ATR)
 input double InpBEProfitATR       = 1.0;   // BE arms once profit >= this x ATR (M5/M15/M30 levels)
-input double InpBEProfitH1H4      = 0.5;   // BE arms once profit >= this x ATR (H1/H4 levels — tighter)
+input double InpBEProfitH1H4      = 0.5;   // BE arms once profit >= this x ATR (H1/H4/D1 levels — tighter)
 input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE stop (covers spread)
 input double InpSpikeLockATR      = 2.0;   // Chandelier trail arms once profit >= this x ATR (M5/M15/M30 spike lock)
-input double InpTrailActivateATR  = 0.5;   // H1/H4 chandelier trail arms once profit >= this x ATR
+input double InpTrailActivateATR  = 0.5;   // H1/H4/D1 chandelier trail arms once profit >= this x ATR
 input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR (level TF)
 
 input group  "Rejection Exit (strong rejection candle)"
@@ -139,17 +169,19 @@ input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this 
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
-#define LEVELS   5      // tradable levels: M5, M15, M30, H1, H4
-#define TFS      6      // stack: M1, M5, M15, M30, H1, H4
-#define IDX_H1   4      // index of H1 in tfs[] — the stand-in bias TF
-#define IDX_H4   5      // index of H4 in tfs[] — the primary bias TF
+#define LEVELS   6      // tradable levels: M5, M15, M30, H1, H4, D1
+#define TFS      7      // stack: M1, M5, M15, M30, H1, H4, D1
+#define IDX_H1   4      // index of H1 in tfs[] — the lowest bias of the ladder
+#define IDX_H4   5      // index of H4 in tfs[] — the middle bias of the ladder
+#define IDX_D1   6      // index of D1 in tfs[] — the top bias, and the top tier
 
-ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
-string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
+ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1 };
+string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4", "D1" };
 
 int      ich[MAX_SYMS][TFS];
-int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
-int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
+int      atrTF[MAX_SYMS][TFS];      // ATR per stack TF — risk sizing, BE and trail
+                                    // (level l runs on tfs[l + 1], so its ATR is atrTF[s][l + 1];
+                                    //  index 0 = M1 is unused and stays INVALID_HANDLE)
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -161,7 +193,7 @@ double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chand
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-int MAGIC = 20260850;   // fresh — H1-bias variant (20260848 is the snapshot it forks, 20260846/47 the live VPS builds)
+int MAGIC = 20260851;   // fresh — D1..M1 ladder variant (20260850 is the H1-bias build it forks, 20260848 the snapshot, 20260846/47 the live VPS builds)
 
 CTrade trade;
 
@@ -210,15 +242,11 @@ int OnInit()
       {
          ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
          if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
-      }
 
-      ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
-      if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
-
-      for(int l = 0; l < LEVELS; l++)
-      {
-         atr[s][l] = iATR(syms[s], tfs[l + 1], InpATRPeriod);
-         if(atr[s][l] == INVALID_HANDLE) return(INIT_FAILED);
+         // ATR on every tradable tier TF (level l runs on tfs[l + 1]) — M1
+         // is only the start of a chain, it never sizes or trails a trade
+         atrTF[s][t] = (t == 0) ? INVALID_HANDLE : iATR(syms[s], tfs[t], InpATRPeriod);
+         if(t > 0 && atrTF[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
@@ -233,10 +261,10 @@ void OnDeinit(const int reason)
    for(int s = 0; s < symsCount; s++)
    {
       for(int t = 0; t < TFS; t++)
-         if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
-      if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
-      for(int l = 0; l < LEVELS; l++)
-         if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
+      {
+         if(ich[s][t]   != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
+         if(atrTF[s][t] != INVALID_HANDLE) IndicatorRelease(atrTF[s][t]);
+      }
    }
 }
 
@@ -319,9 +347,51 @@ void SyncStateFromPositions()
 }
 
 //==============================================================
+// Kijun Slope: the direction the kijun of one stack TF is
+// travelling — 1 rising, -1 falling, 0 FLAT. It compares just two
+// values, the last two closed bars (InpKijunFlatBars apart), and
+// FLAT means they are the SAME value: the kijun is the midpoint of
+// its own Kijun-period high/low range, so an unchanged kijun means
+// that range has not moved at all — price is rotating inside it.
+// The comparison is exact; eps only absorbs float noise, it is not
+// a tolerance. Unreadable values return 0 (flat), so an
+// unverifiable timeframe never counts as aligned.
+//==============================================================
+
+int KijunSlope(int s, int tfIdx)
+{
+   int bars = MathMax(1, InpKijunFlatBars);
+
+   double kNow[1], kPast[1];
+   if(CopyBuffer(ich[s][tfIdx], 1, 1,        1, kNow)  <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, 1 + bars, 1, kPast) <= 0) return 0;
+
+   double eps = SymbolInfoDouble(syms[s], SYMBOL_POINT) * 0.01;
+   if(eps <= 0.0) eps = 1e-10;
+
+   double travel = kNow[0] - kPast[0];
+
+   if(travel >  eps) return  1;
+   if(travel < -eps) return -1;
+   return 0;                       // unchanged — flat
+}
+
+// A timeframe only counts as aligned when its kijun is moving the
+// same way as the breakout. InpKijunFlatGuard = false drops the
+// requirement and restores the pure price + chikou test.
+bool KijunCarries(int s, int tfIdx, int dir)
+{
+   if(!InpKijunFlatGuard) return true;
+   return KijunSlope(s, tfIdx) == dir;
+}
+
+//==============================================================
 // Alignment Check: price and chikou both above/below tenkan,
-// kijun, and cloud on one timeframe. Returns 1 (bullish),
-// -1 (bearish), 0 (none) — identical to the H4 VPS build.
+// kijun and cloud on one timeframe, AND that TF's kijun sloping
+// the same way. Returns 1 (bullish), -1 (bearish), 0 (none).
+// A breakout over a FLAT kijun is not an alignment — on any
+// timeframe, M1 through D1 — so it counts neither for a tier's
+// chain nor for a bias.
 //==============================================================
 
 int CheckAlign(int s, int tfIdx)
@@ -362,10 +432,12 @@ int CheckAlign(int s, int tfIdx)
    double cLoC = MathMin(senA_ch[0], senB_ch[0]);
 
    if(above && chik > rt[chShift].high &&
-      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
+      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC)
+      return KijunCarries(s, tfIdx, 1) ? 1 : 0;
 
    if(below && chik < rt[chShift].low &&
-      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
+      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC)
+      return KijunCarries(s, tfIdx, -1) ? -1 : 0;
 
    return 0;
 }
@@ -388,56 +460,17 @@ int ChainAligned(int s, int topIdx)
 }
 
 //==============================================================
-// Daily Bias Filter (H4 tier): D1 is the bias for H4 trades.
-// Same alignment semantics as CheckAlign but on D1 — D1 bullish
-// (price + chikou above tenkan, kijun and cloud) allows only H4
-// buys, D1 bearish only H4 sells. A D1 close INSIDE the cloud
-// (or unreadable) returns 0 — no new H4 trades then.
+// Daily Bias (top of the ladder, and the D1 tier's own TF):
+// exactly the stack alignment test on D1 — price + chikou clear
+// of tenkan/kijun/cloud AND the daily kijun sloping that way. A
+// flat daily kijun therefore returns 0: no D1-tier trade, and no
+// daily bias for the H4 tier to lean on (H4 then stands on its
+// own, see the entry gate).
 //==============================================================
 
 int DailyAlign(int s)
 {
-   ENUM_TIMEFRAMES tf = PERIOD_D1;
-
-   int sh      = 1;
-   int chShift = sh + Kijun;
-
-   MqlRates rt[];
-   if(CopyRates(syms[s], tf, 0, chShift + 1, rt) <= 0) return 0;
-   ArraySetAsSeries(rt, true);
-   if(ArraySize(rt) <= chShift) return 0;
-
-   double tenkan[1], kijun[1], senA[1], senB[1];
-   if(CopyBuffer(ichD1[s], 0, sh, 1, tenkan) <= 0) return 0;
-   if(CopyBuffer(ichD1[s], 1, sh, 1, kijun)  <= 0) return 0;
-   if(CopyBuffer(ichD1[s], 2, sh, 1, senA)   <= 0) return 0;
-   if(CopyBuffer(ichD1[s], 3, sh, 1, senB)   <= 0) return 0;
-
-   double closeP = rt[sh].close;
-   double cHi    = MathMax(senA[0], senB[0]);
-   double cLo    = MathMin(senA[0], senB[0]);
-
-   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
-   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
-   if(!above && !below) return 0;   // D1 close inside the cloud — no H4 trades
-
-   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
-   if(CopyBuffer(ichD1[s], 0, chShift, 1, tenkan_ch) <= 0) return 0;
-   if(CopyBuffer(ichD1[s], 1, chShift, 1, kijun_ch)  <= 0) return 0;
-   if(CopyBuffer(ichD1[s], 2, chShift, 1, senA_ch)   <= 0) return 0;
-   if(CopyBuffer(ichD1[s], 3, chShift, 1, senB_ch)   <= 0) return 0;
-
-   double chik = closeP;
-   double cHiC = MathMax(senA_ch[0], senB_ch[0]);
-   double cLoC = MathMin(senA_ch[0], senB_ch[0]);
-
-   if(above && chik > rt[chShift].high &&
-      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
-
-   if(below && chik < rt[chShift].low &&
-      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
-
-   return 0;
+   return CheckAlign(s, IDX_D1);
 }
 
 //==============================================================
@@ -469,11 +502,12 @@ bool LevelCloudBiasOK(int s, int lvl, int dir)
 }
 
 //==============================================================
-// H4 Bias Filter: H4 is the bias for the whole stack. Every tier
-// only trades in H4's direction — H4 bullish means only buys on
-// all timeframes (a lower-TF sell is just a pullback), H4 bearish
-// means only sells. If H4 has no alignment, no trades open —
-// except on the tiers the new H1 stand-in bias covers (below).
+// H4 Bias Filter: the middle step of the ladder — the bias for
+// every tier below H4. H4 bullish means only buys there (a
+// lower-TF sell is just a pullback), H4 bearish only sells. A flat
+// H4 — no breakout, or a breakout over a flat H4 kijun — opens
+// nothing on the H4 tier itself, and hands the tiers below over to
+// the H1 stand-in (below).
 //==============================================================
 
 int H4Bias(int s)
@@ -505,7 +539,7 @@ bool H1BiasOK(int s, int dir)
 bool H1BiasTier(int lvl)
 {
    if(InpH1BiasMode == H1BIAS_OFF)     return false;
-   if(lvl >= LEVELS - 1)               return false;   // never the H4 tier
+   if(lvl + 1 >= IDX_H4)               return false;   // never the H4 or D1 tiers
    return lvl <= (int)InpH1BiasMaxTier;
 }
 
@@ -519,6 +553,12 @@ bool H1BiasTier(int lvl)
 //      the variant: an undecided H4 no longer freezes the stack.
 //   3. H4 aligned AGAINST the trade -> still blocked, unless the
 //      user opts into H1BIAS_ALWAYS.
+//
+// The flat-kijun filter is already baked into CheckAlign(), so a
+// stalled H4 kijun simply reads as "H4 flat" here and hands the
+// lower tiers over to the H1 stand-in, which in turn needs an H1
+// whose own kijun is sloping. The daily step of the ladder sits at
+// the entry site, alongside DailyAlign().
 //
 // Writes into 'via' the bias that authorised the entry so the caller
 // can log it: "H4", "H1" (stand-in on a flat H4), "H1x" (stand-in
@@ -543,7 +583,7 @@ bool EntryBiasOK(int s, int lvl, int dir, string &via)
    int h4 = H4Bias(s);
    if(h4 == dir) { via = "H4"; return true; }          // primary path
 
-   if(!H1BiasTier(lvl)) return false;                  // H1/H4 tiers need H4 itself
+   if(!H1BiasTier(lvl)) return false;                  // H1/H4/D1 tiers need H4 itself
    if(h4 != 0 && InpH1BiasMode != H1BIAS_ALWAYS)       // H4 is aligned the other way
       return false;
    if(!H1BiasOK(s, dir)) return false;
@@ -629,6 +669,7 @@ double LevelRiskPct(int lvl)
       case 2:  return t3 ? InpRiskPctM30_T3 : t2 ? InpRiskPctM30_T2 : InpRiskPctM30;
       case 3:  return t3 ? InpRiskPctH1_T3  : t2 ? InpRiskPctH1_T2  : InpRiskPctH1;
       case 4:  return t3 ? InpRiskPctH4_T3  : t2 ? InpRiskPctH4_T2  : InpRiskPctH4;
+      case 5:  return t3 ? InpRiskPctD1_T3  : t2 ? InpRiskPctD1_T2  : InpRiskPctD1;
    }
    return 0.0;
 }
@@ -639,7 +680,7 @@ double RiskLots(int s, int lvl)
    if(riskPct <= 0) return InpFixedLots;
 
    double a[1];
-   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
+   if(CopyBuffer(atrTF[s][lvl + 1], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
    double stopDist = a[0] * InpRiskATRMult;
 
    double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
@@ -684,8 +725,8 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
 // Trading Functions
 //==============================================================
 
-// 'via' names the bias that authorised the entry ("H4", "H1" stand-in,
-// "H1x" counter-H4 stand-in, "--" none) — logged so the H1-bias trades
+// 'via' names the bias that authorised the entry ("D1", "H4", "H1"
+// stand-in, "H1x" counter-H4 stand-in, "--" none) — logged so the trades
 // are separable from the H4 ones when reviewing the journal.
 bool OpenLevel(int s, int lvl, int dir, double lots, string via)
 {
@@ -783,7 +824,7 @@ void ManageLevelProtection(int s, int lvl)
    if(dir == 0) return;
 
    double a[1];
-   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
+   if(CopyBuffer(atrTF[s][lvl + 1], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
    double atrVal = a[0];
 
    // The reference point is the extreme of the level-TF bar that is still
@@ -813,7 +854,7 @@ void ManageLevelProtection(int s, int lvl)
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
 
-   // Break-even: tighter arming threshold on the long-running H1/H4 levels
+   // Break-even: tighter arming threshold on the long-running H1/H4/D1 levels
    double beATR = (lvl >= 3) ? InpBEProfitH1H4 : InpBEProfitATR;
    if(!beMoved[s][lvl])
    {
@@ -838,7 +879,7 @@ void ManageLevelProtection(int s, int lvl)
       }
    }
 
-   // Chandelier trail behind the peak. H1/H4 levels get the full
+   // Chandelier trail behind the peak. H1/H4/D1 levels get the full
    // chandelier: it arms once the trade is profitable by InpTrailActivateATR
    // x ATR so long-running higher-TF trades are always protected. The lower
    // levels keep the spike-gated trail (InpSpikeLockATR x ATR). Only ever
@@ -1012,13 +1053,26 @@ void OnTick()
             if(st == 0) continue;
             if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
 
-            // Directional bias: H4 as before, with the new H1 stand-in for
-            // the lower tiers when H4 has no direction of its own.
+            // Directional bias: the ladder's H4 step, with the H1 stand-in
+            // for the lower tiers when H4 has no direction of its own.
             string via = "--";
             if(!EntryBiasOK(s, l, st, via)) continue;
 
-            // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
-            if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
+            // H4 tier: the daily step of the ladder. A D1 aligned AGAINST
+            // the trade blocks it; a FLAT D1 (no breakout, or a stalled
+            // daily kijun) simply steps aside and lets H4 carry the tier on
+            // its own; D1F_REQUIRED restores the old strict filter.
+            if(l + 1 == IDX_H4 && InpD1Filter != D1F_OFF)
+            {
+               int d1 = DailyAlign(s);
+               if(d1 == -st) continue;
+               if(InpD1Filter == D1F_REQUIRED && d1 != st) continue;
+               if(d1 == st) via = "D1";      // the daily step carried it
+            }
+
+            // The D1 tier is its own bias — its chain already requires an
+            // aligned, sloping D1, and nothing sits above it.
+            if(l + 1 == IDX_D1) via = "D1";
 
             topTier = l;
             topDir  = st;
