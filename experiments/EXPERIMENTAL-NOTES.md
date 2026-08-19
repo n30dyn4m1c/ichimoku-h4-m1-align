@@ -2589,6 +2589,15 @@ desktop) or any other fork.
    naked entry when enabled; only ever tightens afterwards via BE/chandelier.
    Skips the SL (naked entry) if data is unavailable or the stop sits inside
    the broker minimum distance.
+7. **Cloud bias gate — far-end only** (`CloudBiasOK` rewritten): the gate
+   now reads ONLY the projected kumo 26 bars ahead (shift `1 - Kijun` on
+   Span A / Span B) and requires the twist there alone — Span A above Span
+   B for a long, below for a short. The cloud under current price is
+   deliberately NOT required to agree; price + chikou vs the kumo remains
+   the alignment test's job. Applies to the tier TF pair (level TF + the
+   TF below it) and to the H1 stand-in cloud confirmation. Design decision
+   by the owner: the future cloud is the only cloud that matters for the
+   bias.
 
 ### A/B switches
 
@@ -2597,6 +2606,9 @@ desktop) or any other fork.
 - `InpDisasterStopATR = 0` restores naked entries.
 - `InpDailyLossLimitPct = 0` disables the daily breaker.
 - `InpNewsFilterEnabled = false` disables the news blackout.
+- The far-end-only cloud gate cannot be switched off in this build (it is
+  the owner's design decision); the parent's near+far twist is the
+  baseline to A/B against.
 - The HWM regime cannot be switched off (it is the point of the build);
   `InpResetPeakEquity` re-baselines it.
 

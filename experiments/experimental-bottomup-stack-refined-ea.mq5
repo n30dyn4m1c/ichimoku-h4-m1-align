@@ -15,6 +15,9 @@
 //|  * the MT5 Economic Calendar news blackout (flatten + block),     |
 //|  * an optional wide disaster stop (InpDisasterStopATR, default    |
 //|    4 x ATR, 0 = off).                                             |
+//|  * the cloud bias gate checks ONLY the projected kumo 26 bars     |
+//|    ahead (far end of the future cloud) — the cloud under current  |
+//|    price is not required to agree.                                |
 //| The header below documents the base behaviour; the REFINED        |
 //| additions are marked "(REFINED)" in the code.                     |
 //| DIFFERENT MODEL: the top-down builds required every timeframe     |
@@ -39,6 +42,11 @@
 //|        only, flat -> no trades), and the H4 tier itself is also   |
 //|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
 //|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
+//|        (REFINED) The cloud bias gate checks ONLY the projected    |
+//|        kumo 26 bars ahead (far end of the future-cloud window):   |
+//|        Span A above Span B there = bullish, below = bearish. The  |
+//|        cloud under current price is NOT required to agree — price |
+//|        + chikou vs the kumo is the alignment test's job.          |
 //|        H1 BIAS: an unaligned H4 would otherwise freeze the whole  |
 //|        stack, including M5. The lower tiers get a second, smaller |
 //|        bias to fall back on: when H4 carries no direction, a tier |
@@ -623,22 +631,23 @@ int DailyAlign(int s)
 }
 
 //==============================================================
-// Cloud Bias Filter: the cloud must carry the trade's bias
-// (Span A above Span B for a long, below for a short) at both
-// the last closed bar and the far end of the future-cloud
-// window. Unreadable values count as blocking.
+// (REFINED) Cloud Bias Filter: ONLY the PROJECTED cloud 26 bars
+// ahead (the far end of the future-cloud window) must carry the
+// trade's bias — Span A above Span B for a long, below for a
+// short. The cloud under current price is deliberately NOT
+// checked and does not need to agree with the projection; price
+// and chikou vs the kumo is CheckAlign's job, not this gate's.
+// Unreadable values count as blocking.
 //==============================================================
 
 bool CloudBiasOK(int s, int tfIdx, int dir)
 {
-   double aNow[1], bNow[1], aFar[1], bFar[1];
-   if(CopyBuffer(ich[s][tfIdx], 2, 1,         1, aNow) <= 0) return false;
-   if(CopyBuffer(ich[s][tfIdx], 3, 1,         1, bNow) <= 0) return false;
+   double aFar[1], bFar[1];
    if(CopyBuffer(ich[s][tfIdx], 2, 1 - Kijun, 1, aFar) <= 0) return false;
    if(CopyBuffer(ich[s][tfIdx], 3, 1 - Kijun, 1, bFar) <= 0) return false;
 
-   if(dir == 1) return aNow[0] > bNow[0] && aFar[0] > bFar[0];
-   return aNow[0] < bNow[0] && aFar[0] < bFar[0];
+   if(dir == 1) return aFar[0] > bFar[0];
+   return aFar[0] < bFar[0];
 }
 
 // The bias must hold on the level TF and the TF directly below it
