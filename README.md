@@ -789,17 +789,38 @@ fork** (`experimental-bottomup-stack-m1-tier-ea.mq5`, magic `20260856`) turns
 M1 into a sixth tradable tier — it opens on M1 alignment alone and exits on a
 touch of the M1 cloud, each higher tier still exiting on its own timeframe's
 cloud exactly as before. An **M30-bias fork**
-(`experimental-bottomup-stack-m30-bias-ea.mq5`, magic `20260855`) keeps the
-parent's H4 bias and H1 stand-in untouched and adds two changes: a
-**fundamental redefinition of a valid kumo breakout** — on every timeframe
-from M1 to D1 (entry chains, biases, the D1 filter), a breakout now
-requires price beyond the kumo **and** chikou beyond the kumo **and** the
-tenkan/kijun twist (tenkan > kijun bullish, < bearish) — plus an **M30
-bias** as the last-resort stand-in: when H4 and H1 are both flat, the M5
-and M15 tiers may still open provided M30 shows that valid breakout, and
-those M30-authorised trades close when a candle closes beyond the highest
-timeframe's **tenkan sen** (an M5 candle close beyond the M5 tenkan, an
-M15 candle close beyond the M15 tenkan) instead of the cloud. The rest are
+(`experimental-bottomup-stack-m30-bias-ea-third-most-profitable.mq5`,
+magic `20260855`) — the third most profitable build in the family per the
+user's 2026-08-20 report — keeps the parent's H4 bias and H1 stand-in
+untouched and adds two changes: a **fundamental redefinition of a valid
+kumo breakout** — on every timeframe from M1 to D1 (entry chains, biases,
+the D1 filter), a breakout now requires price beyond the kumo **and**
+chikou beyond the kumo **and** the tenkan/kijun twist (tenkan > kijun
+bullish, < bearish) — plus an **M30 bias** as the last-resort stand-in:
+when H4 and H1 are both flat, the M5 and M15 tiers may still open provided
+M30 shows that valid breakout, and those M30-authorised trades close when
+a candle closes beyond the highest timeframe's **tenkan sen** (an M5
+candle close beyond the M5 tenkan, an M15 candle close beyond the M15
+tenkan) instead of the cloud. A further fork
+(`experimental-bottomup-stack-m1m5m15m30-strict-cloud-bias-ea.mq5`, magic
+`20260859`) makes the cloud-bias gate **wait for both cloud positions to
+agree** on M1 through M30 — the Span A/B twist must hold at the current
+bar AND at the far end of the future cloud — while H1 and H4 only look at
+the future cloud. An
+**M1-strict cloud-bias fork** (`experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5`,
+magic `20260858`) keeps the early-breakout freedom on the bigger tiers:
+on M1 both the current and future cloud must be twisted the trade's way,
+while M5 and above need only the future cloud — the current cloud may be
+either direction. It is the most profitable iteration reported so far
+($100 → $14000 on Jan–Aug 2026 backtest, user report). An
+**M1/M5-strict follow-up** (`experimental-bottomup-stack-m1m5-strict-cloud-bias-ea-second-most-profitable.mq5`,
+same magic) extends the full check to M5 as well — M1 and M5 both need
+current+future agreement, M15 and above keep the future-only rule; the
+user reports it as the second most profitable iteration. A
+**M1/M5/M15-strict follow-up** (`experimental-bottomup-stack-m1m5m15-strict-cloud-bias-ea.mq5`,
+same magic) extends the full check to M15 too — M1/M5/M15 need
+current+future agreement, M30 and above keep the future-only rule. The
+rest are
 newer and less battle-tested
 than the main builds; see
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**

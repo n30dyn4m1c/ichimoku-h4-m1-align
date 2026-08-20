@@ -1,81 +1,34 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA — M30 BIAS variant (EXPERIMENT)      |
-//| Fork of ichimoku-h4-m1-vps-ea.mq5 (the live H1-bias bottom-up    |
-//| VPS build, magic 20260850), which is left untouched.             |
-//| The parent's full behaviour is preserved — H4 bias primary, H1   |
-//| stand-in for the lower tiers, five tradable tiers, kumo-touch    |
-//| exits, D1 filter on the H4 tier — with TWO experimental changes: |
-//|   A. NEW KUMO-BREAKOUT DEFINITION, ALL TIMEFRAMES M1..D1. A      |
-//|      valid kumo breakout anywhere in the stack (the per-TF test  |
-//|      behind the entry chains and the H4/H1 biases, the D1 filter |
-//|      and the M30 gate) is now: price beyond the kumo AND chikou  |
-//|      beyond the kumo at its own position AND the tenkan/kijun    |
-//|      twist carrying the direction (tenkan > kijun bullish,       |
-//|      < bearish). The old per-line conditions (price and chikou   |
-//|      above tenkan/kijun individually, chikou above the prior     |
-//|      high / below the prior low) no longer apply.                |
-//|   B. M30 BIAS (last-resort stand-in). When there is NO H4 bias   |
-//|      and NO H1 bias (H4 flat and H1 flat), the two smallest      |
-//|      tiers may still open provided M30 shows the valid kumo      |
-//|      breakout of definition A. Under this M30 bias ONLY the      |
-//|      m1-m5 chain (M5 tier) and the m1-m5-m15 chain (M15 tier)    |
-//|      fire — M30/H1/H4 tiers never use the stand-in — and those   |
-//|      trades CLOSE WHEN A CANDLE CLOSES BEYOND THE HIGHEST        |
-//|      TIMEFRAME'S TENKAN SEN — not on a touch: the M5 tier exits  |
-//|      on an M5 candle close beyond the M5 tenkan, the M15 tier on |
-//|      an M15 candle close beyond the M15 tenkan. The position     |
-//|      comment carries a "T" suffix for these trades (e.g. "Exp    |
-//|      Buy M5T") so the exit mode survives a restart.              |
-//| Entry: per-TF kumo breakout (definition A above), checked        |
-//|        BOTTOM-UP: a tier opens only when the full stack          |
-//|        M1..tier TF shows the breakout in one direction:          |
-//|          Tier M5 : M1 + M5 aligned              -> open trade     |
-//|          Tier M15: M1 + M5 + M15 aligned        -> open trade     |
-//|          Tier M30: M1 + M5 + M15 + M30 aligned  -> open trade     |
-//|          Tier H1 : M1 ... H1 aligned            -> open trade     |
-//|          Tier H4 : M1 ... H4 aligned            -> open trade     |
-//|        M1 alone never trades — it is only the start of the stack. |
-//|        The cloud bias gate (Span A vs Span B) applies to the tier |
-//|        TF and the TF directly below it, H4 is the bias for the    |
-//|        whole stack (H4 bullish -> buys only, bearish -> sells     |
-//|        only, flat -> no trades unless a stand-in covers it), the  |
-//|        H1 stand-in lets the tiers at or below InpH1BiasMaxTier    |
-//|        open when H4 is flat, and the M30 bias (InpM30Bias) covers |
-//|        the M5/M15 tiers when H4 AND H1 are both flat. The H4      |
-//|        tier stays gated by the D1 bias as in the parent.          |
-//| Exit:  parent-authorised trades (H4/H1) close on a TOUCH of the   |
-//|        level TF's cloud edge, exactly as in the parent. The       |
-//|        M30-authorised M5/M15 trades close when a CANDLE CLOSES    |
-//|        BEYOND the highest timeframe's TENKAN SEN — the M5 tier on |
-//|        an M5 candle close beyond the M5 tenkan, the M15 tier on   |
-//|        an M15 candle close beyond the M15 tenkan — never the      |
-//|        cloud, and never on a mere touch.                          |
-//|        A very strong REJECTION candle against the trade also      |
-//|        closes it (parent conditions: sweep of the recent swing    |
-//|        extreme of InpRejSwingBars bars, wick >= InpRejWickPct of  |
-//|        the range, close in the outer InpRejClosePct — all four    |
-//|        must hold). No entry stop loss in this build — the trade   |
-//|        runs until an exit, with the profit protection layer       |
-//|        taking over once it turns green:                           |
-//|          Break-even   : profit >= ATR threshold (tighter for the  |
-//|                         H1/H4 levels) -> SL to entry + cover      |
-//|          Chandelier   : H1/H4 levels trail the stop behind the    |
-//|                         peak once profitable (InpTrailActivateATR);|
-//|                         M5/M15/M30 keep the spike-gated trail     |
-//|                         (InpSpikeLockATR), only ever tightening   |
-//|        ATR comes from each level's own TF.                        |
-//| Risk:  the parent's — single position per level per symbol,       |
-//|        consolidation (largest aligned tier opens), three equity   |
-//|        regimes that de-risk as the account grows, ATR-based       |
-//|        sizing, no multipliers.                                    |
-//| VPS:   inherited from the parent — no Alert() popups and no       |
-//|        equity alert; every entry/exit sends a SendNotification    |
-//|        push and a journal Print, and all logic runs only on       |
-//|        closed M1 bars (once per minute) to keep CPU/network use   |
-//|        negligible.                                                |
-//| Magic: 20260855 — fresh, so this experiment never adopts or       |
-//|        manages positions belonging to the live builds (20260850   |
-//|        VPS, 20260852 desktop) or any other fork.                  |
+//| Ichimoku Bottom-Up Stack EA — M1..M30 STRICT CLOUD BIAS          |
+//| (EXPERIMENT) — sixth iteration of the cloud-bias experiment      |
+//| Fork of experimental-bottomup-stack-m30-bias-ea-third-most-      |
+//| profitable.mq5 (the M30-bias build ranked 3rd most profitable,   |
+//| magic 20260855), which is left untouched.                        |
+//| EXPERIMENTAL CHANGE — the CLOUD-BIAS gate (Span A vs Span B)     |
+//| now waits for BOTH cloud positions to agree on every timeframe   |
+//| from M1 to M30: the cloud must be twisted the trade's way at     |
+//| the current bar (last closed bar) AND at the far end of the      |
+//| future-cloud window (Kijun bars ahead). For H1 and H4 it just    |
+//| looks at the FUTURE CLOUD — the far-end twist only; their        |
+//| current cloud may be any value. So the M5 tier needs M1          |
+//| current+future and M5 current+future; the M15 tier M5            |
+//| current+future and M15 current+future; the M30 tier M15          |
+//| current+future and M30 current+future; H1/H4 tiers need only     |
+//| the future clouds of their two TFs.                              |
+//| Inherited from the parent build (unchanged):                     |
+//|   * the kumo-breakout definition on every timeframe M1..D1 —     |
+//|     price beyond the kumo + chikou beyond the kumo + the         |
+//|     tenkan/kijun twist (tenkan > kijun bullish) — in             |
+//|     CheckAlign/DailyAlign and the M30 gate,                      |
+//|   * the M30 bias (last-resort stand-in, only when H4 and H1 are  |
+//|     both flat; only the m1-m5 and m1-m5-15 chains open under it, |
+//|     and those trades exit when a tier-TF candle closes beyond    |
+//|     the highest timeframe's tenkan sen — "T" comment suffix),    |
+//|   * the H4 bias, the H1 stand-in, the D1 filter, the five        |
+//|     tradable tiers, the parent's kumo-touch exits for H4/H1      |
+//|     authorised trades, risk and profit protection.               |
+//| Magic: 20260859 — fresh, so this experiment never adopts or      |
+//|        manages positions belonging to any other build.           |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -124,7 +77,7 @@ enum ENUM_H1_BIAS_MODE { H1BIAS_OFF = 0, H1BIAS_FLAT_H4 = 1, H1BIAS_ALWAYS = 2 }
 enum ENUM_H1_BIAS_TIER { H1TIER_M5 = 0, H1TIER_M15 = 1, H1TIER_M30 = 2, H1TIER_H1 = 3 };
 
 input group  "Entry Filters"
-input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
+input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1..M30 current+future must agree; H1/H4 future cloud only
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
@@ -178,7 +131,7 @@ double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chande
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 bool     tenkanExit[MAX_SYMS][LEVELS];   // true = M30-bias trade — exits on the tier TF's tenkan sen, not the cloud
 
-int MAGIC = 20260855;   // fresh — M30-bias experiment (VPS 20260850, desktop 20260852)
+int MAGIC = 20260859;   // fresh — M1..M30 strict cloud-bias experiment (parent 3rd-most-profitable = 20260855)
 
 CTrade trade;
 
@@ -486,10 +439,10 @@ int DailyAlign(int s)
 }
 
 //==============================================================
-// Cloud Bias Filter: the cloud must carry the trade's bias
-// (Span A above Span B for a long, below for a short) at both
-// the last closed bar and the far end of the future-cloud
-// window. Unreadable values count as blocking.
+// Cloud Bias Filter — FULL CHECK: the cloud must carry the
+// trade's bias (Span A above Span B for a long, below for a
+// short) at BOTH the last closed bar and the far end of the
+// future-cloud window. Unreadable values count as blocking.
 //==============================================================
 
 bool CloudBiasOK(int s, int tfIdx, int dir)
@@ -504,12 +457,53 @@ bool CloudBiasOK(int s, int tfIdx, int dir)
    return aNow[0] < bNow[0] && aFar[0] < bFar[0];
 }
 
-// The bias must hold on the level TF and the TF directly below it
-// (level lvl opens on TF lvl+1, so the pair is TF lvl and TF lvl+1).
+//==============================================================
+// Cloud Bias Filter — FUTURE-ONLY: the far end of the future-
+// cloud window (Kijun bars ahead of the last closed bar) must
+// carry the trade's bias; the immediate cloud where price sits
+// may be either direction. Used for H1 and H4 — and for the H1
+// stand-in bias confirmation (InpH1BiasCloudCheck).
+//==============================================================
+
+bool CloudBiasFarOK(int s, int tfIdx, int dir)
+{
+   double aFar[1], bFar[1];
+   if(CopyBuffer(ich[s][tfIdx], 2, 1 - Kijun, 1, aFar) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 3, 1 - Kijun, 1, bFar) <= 0) return false;
+
+   if(dir == 1) return aFar[0] > bFar[0];
+   return aFar[0] < bFar[0];
+}
+
+//==============================================================
+// Per-TF cloud rule (EXPERIMENTAL CHANGE): M1, M5, M15 and M30
+// must be twisted the trade's way at BOTH the current bar and
+// the far end of the future cloud — the full check (CloudBiasOK):
+// the two cloud positions must AGREE. H1 and H4 need only the
+// FUTURE cloud in the trade's direction; their current cloud may
+// be any value, bullish or bearish (CloudBiasFarOK).
+//==============================================================
+
+bool CloudBiasTFOK(int s, int tfIdx, int dir)
+{
+   if(tfIdx >= IDX_H1) return CloudBiasFarOK(s, tfIdx, dir);   // H1/H4 — future cloud only
+   return CloudBiasOK(s, tfIdx, dir);                          // M1..M30 — current AND future
+}
+
+//==============================================================
+// Level Cloud Bias Gate (EXPERIMENTAL CHANGE): applies to every
+// tier — the tier's TF (lvl+1) and the TF directly below it
+// (lvl), each judged by the per-TF rule above. So the M5 tier
+// needs M1 current+future and M5 current+future; the M15 tier
+// needs M5 current+future and M15 current+future; the M30 tier
+// needs M15 current+future and M30 current+future; H1/H4 tiers
+// need only the future clouds of their two TFs.
+//==============================================================
+
 bool LevelCloudBiasOK(int s, int lvl, int dir)
 {
-   if(!CloudBiasOK(s, lvl + 1, dir)) return false;
-   if(!CloudBiasOK(s, lvl, dir))     return false;
+   if(!CloudBiasTFOK(s, lvl + 1, dir)) return false;   // tier TF
+   if(!CloudBiasTFOK(s, lvl, dir))     return false;   // TF directly below
    return true;
 }
 
@@ -547,9 +541,10 @@ bool H1BiasOK(int s, int dir)
    int h1 = CheckAlign(s, IDX_H1);
    if(h1 != dir) return false;      // H1 flat or opposed — nothing to stand in with
 
-   // Optional extra confirmation: the H1 kumo itself must be twisted the
-   // trade's way, now and at the far end of the future cloud.
-   if(InpH1BiasCloudCheck && !CloudBiasOK(s, IDX_H1, dir)) return false;
+   // Optional extra confirmation: the H1 kumo's far end (future
+   // cloud) must be twisted the trade's way — H1 is an H1-upwards
+   // timeframe, so the future cloud only (CloudBiasTFOK).
+   if(InpH1BiasCloudCheck && !CloudBiasTFOK(s, IDX_H1, dir)) return false;
 
    return true;
 }

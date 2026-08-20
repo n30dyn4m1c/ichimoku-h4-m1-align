@@ -2635,7 +2635,10 @@ desktop) or any other fork.
 
 ## 25. Bottom-Up Stack EA — new kumo-breakout definition (M1..D1), M30 bias, tenkan-close exits
 
-**File:** `experimental-bottomup-stack-m30-bias-ea.mq5`
+**File:** `experimental-bottomup-stack-m30-bias-ea-third-most-profitable.mq5`
+**Rank:** third most profitable build in the family so far (user report,
+2026-08-20) — behind the m1-strict and m1m5-strict cloud-bias builds
+(1st and 2nd, sections 26 and 27)
 **Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
 `20260850`), which is left untouched
 **Magic number:** `20260855` — fresh, so this experiment never adopts or
@@ -2720,3 +2723,324 @@ parent `.set` behaves as the new build with the M30 fallback enabled).
 - **Only M30-authorised trades exit on the tenkan.** H4/H1-authorised
   trades on the same levels keep the parent's kumo exit — the exit mode
   is fixed at entry and carried in the position comment ("T" suffix).
+
+## 26. Bottom-Up Stack EA — M1-strict cloud bias (M1 current+future, M5+ future only)
+
+**File:** `experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5`
+**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
+`20260850`), which is left untouched
+**Magic number:** `20260858` — carried over from the cloud-gate fork it
+supersedes (earlier iterations are documented below), so positions those
+versions already opened keep being managed. It never touches positions of
+the live builds (`20260850` VPS, `20260852` desktop) or any other fork
+
+This is the **third iteration** of the cloud-bias experiment. The first
+iteration (far-end-only check on every timeframe) traded much better than
+the parent; the second (strict M1+M5 gate on the M5 tier only, M15+
+cloud-free) was built to choke off the flood of small M5-tier trades. This
+iteration reconciles both: the gate applies to **every tier again** (tier
+TF + the TF directly below it, exactly like the parent and the first
+iteration), with a **per-timeframe rule**:
+
+> **User report (2026-08-20): most profitable version of the EA so far in
+> all iterations** — hence the `-most-profitable` suffix on the file name.
+> Backtest result reported by the user on Jan–Aug 2026 data: **$100 → $14000**.
+
+- **M1 — the full parent check.** **Both** the current cloud (last closed
+  bar) **and** the future cloud (far end, bar `Kijun` ahead) must be
+  twisted the trade's way (Span A > Span B for a long, Span A < Span B
+  for a short). M1 only appears as the TF below the M5 tier, so this is
+  the strictness that keeps the smallest tier in check.
+- **M5 and above — future-only.** The **current** cloud may be any value,
+  bullish or bearish; only the **future** cloud must be in the trade's
+  direction. Applied to M5, M15, M30, H1 and H4 wherever the gate touches
+  them — the early-breakout behaviour of the well-performing first
+  iteration.
+
+So per tier: the **M5 tier** needs M1 current+future and M5 future; the
+**M15 tier** needs M5 future and M15 future; **M30** needs M15 future and
+M30 future; **H1** needs M30 future and H1 future; **H4** needs H1 future
+and H4 future. `InpCloudBiasEnabled` (default `true`) still switches the
+whole gate; `false` opens everything cloud-free.
+
+The H1 stand-in bias keeps its optional cloud confirmation
+(`InpH1BiasCloudCheck`, default `true`) — the same **future-only** check
+on the H1 kumo (`CloudBiasFarOK`), now naturally consistent with the M5+
+rule. Turn the input off to drop it.
+
+### New inputs
+
+None. All inputs are the parent's, unchanged — **`.set` files from the
+parent load cleanly.**
+
+### Status & caveats
+
+- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
+  run is recorded in this repo. Compile and demo-test before it touches
+  money.
+- **M1 strictness is the only small-tier brake.** The M5 tier is gated by
+  the full M1 check (current+future) plus the M5 future cloud. M1 clouds
+  twist often, so this is a mild brake compared with iteration 2 — "to
+  start off" per the user, with more strictness (e.g. M5 current too)
+  available as a follow-up if M5-tier trades still over-fire.
+- **M15+ tiers are back to future-only, not free.** The gate applies to
+  every tier again; an M15+ entry needs the future clouds of its two TFs
+  in the trade's direction — the exact behaviour of the first iteration
+  the user reported as performing much better.
+- **Magic `20260858` shared with the superseded forks** — deliberate, so
+  open positions from the earlier iterations keep being managed after the
+  file swap. Do not run two of these files on the same account at once.
+- If the test proves out, promote the change into the VPS and desktop
+  builds together (per AGENTS.md the two production files must stay in
+  step).
+
+---
+
+### Earlier iterations (superseded 2026-08-20)
+
+**Iteration 2 — M1/M5 cloud gate.** File
+`experimental-bottomup-stack-m1m5-cloud-gate-ea.mq5` (replaced by
+`experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5` above; magic
+`20260858` carried over). The gate applied **only** to the M5 tier, where
+M1 and M5 both needed the full parent check (current AND future twisted
+the trade's way); the M15 tier and above were **completely cloud-free**.
+Built to prevent small M5-tier trades; superseded by the M1-strict rule
+above before the user tested it further.
+
+**Iteration 1 — future-cloud bias.** File
+`experimental-bottomup-stack-future-cloud-bias-ea.mq5` (replaced by
+iteration 2; magic `20260858` carried over). `CloudBiasOK` checked
+**only** the far end of the future-cloud window (Span A/Span B at shift
+`1 - Kijun`) on every timeframe: the immediate cloud at the last closed
+bar may be anything — same direction as the future cloud or the opposite.
+The parent required the cloud twisted the trade's way at **both** the
+last closed bar and the far end, which effectively waited for the kumo
+twist to cover the whole future window before an early breakout could
+enter.
+
+User feedback on iteration 1: **"performs much better"**, but too many
+small M5-tier trades — which motivated the later iterations. Its relaxed
+far-only check is exactly what the current build applies to every M5+
+timeframe (`CloudBiasFarOK`).
+
+## 27. Bottom-Up Stack EA — M1/M5-strict cloud bias (M5 joins the full check)
+
+**File:** `experimental-bottomup-stack-m1m5-strict-cloud-bias-ea-second-most-profitable.mq5`
+**Forked from:** `experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5`
+(the third-iteration fork, magic `20260858`), which is left untouched —
+it stays in the repo as the most-profitable benchmark
+**Magic number:** `20260858` — carried over again, so positions opened by
+the earlier forks keep being managed when this file is swapped in. It
+never touches positions of the live builds (`20260850` VPS, `20260852`
+desktop); do not run it and the most-profitable file on the same account
+at once
+
+> **User report (2026-08-20): second most profitable version of the EA
+> so far** — hence the `-second-most-profitable` suffix on the file name,
+> runner-up to the m1-strict most-profitable build ($100 → $14000 on
+> Jan–Aug 2026 data).
+
+Fourth iteration of the cloud-bias experiment. The user reported the
+third iteration (M1 strict, M5+ future-only) as **the most profitable so
+far — $100 → $14000 on Jan–Aug 2026 data** — and asked to extend the same
+full condition to M5 as well, with M15 upward unchanged.
+
+**The per-TF rule is now:**
+
+- **M1 and M5 — the full parent check.** **Both** the current cloud (last
+  closed bar) **and** the future cloud (far end, bar `Kijun` ahead) must
+  be twisted the trade's way (Span A > Span B for a long, Span A < Span B
+  for a short).
+- **M15 and above — future-only (unchanged).** The current cloud may be
+  any value, bullish or bearish; only the future cloud must be in the
+  trade's direction.
+
+The gate applies to every tier (tier TF + the TF directly below it),
+judged per-TF via the new `CloudBiasTFOK()` helper (`IDX_M15` marks the
+cut: `tfIdx >= IDX_M15` → future-only, else full check). So per tier:
+
+| Tier | Cloud requirements |
+|------|--------------------|
+| M5   | M1 current+future **+** M5 current+future |
+| M15  | M5 current+future **+** M15 future |
+| M30  | M15 future + M30 future |
+| H1   | M30 future + H1 future |
+| H4   | H1 future + H4 future |
+
+Note the consequence: because the gate also checks the TF directly below
+a tier, the **M15 tier now needs the M5 cloud fully twisted** (current +
+future) — the M15 *timeframe's own* condition is unchanged, but M15-tier
+entries got stricter via their M5-below component. M30/H1/H4 are
+untouched.
+
+The H1 stand-in bias keeps its optional future-only cloud confirmation
+(`InpH1BiasCloudCheck`, default `true`) — H1 is M15+, so it falls under
+the unchanged M15+ rule. Turn the input off to drop it.
+
+### New inputs
+
+None. All inputs are the parent's, unchanged — **`.set` files from the
+parent load cleanly.**
+
+### Status & caveats
+
+- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
+  run is recorded in this repo. Compile and demo-test before it touches
+  money.
+- **The experiment: does M5 strictness beat the most-profitable build?**
+  This version trades fewer, higher-quality entries on the M5 and M15
+  tiers (both now need the M5 cloud fully twisted). The M5 tier needs
+  M1+M5 both current and future — the strictest small-tier gate of any
+  iteration. Whether the fewer trades outweigh the lost early entries is
+  the test; the third iteration is the benchmark at $100 → $14000.
+- **M15-tier entries are also affected** (via the M5-below check), M30+
+  exactly as the third iteration. If the M15 tier should keep the relaxed
+  M5 check, say so and the tier can be excluded from the M5 strictness.
+- **Magic `20260858` shared with the whole fork lineage** — deliberate, so
+  open positions keep being managed across file swaps. Do not run two of
+  these files on the same account at once.
+- If the test proves out, promote the change into the VPS and desktop
+  builds together (per AGENTS.md the two production files must stay in
+  step).
+
+## 28. Bottom-Up Stack EA — M1/M5/M15-strict cloud bias (M15 joins the full check)
+
+**File:** `experimental-bottomup-stack-m1m5m15-strict-cloud-bias-ea.mq5`
+**Forked from:**
+`experimental-bottomup-stack-m1m5-strict-cloud-bias-ea-second-most-profitable.mq5`
+(fourth iteration, magic `20260858`), which is left untouched — it stays
+in the repo as the second-most-profitable build; the m1-strict build
+remains the most-profitable benchmark ($100 → $14000 on Jan–Aug 2026
+data, user report)
+**Magic number:** `20260858` — carried over again, so positions opened by
+the earlier forks keep being managed when this file is swapped in. It
+never touches positions of the live builds (`20260850` VPS, `20260852`
+desktop); do not run two of the lineage files on the same account at once
+
+Fifth iteration of the cloud-bias experiment. The user reported the
+fourth iteration (M1+M5 strict, M15+ future-only) as **the second most
+profitable so far** and asked to extend the same full condition to M15
+as well, with M30 upward unchanged.
+
+**The per-TF rule is now:**
+
+- **M1, M5 and M15 — the full parent check.** **Both** the current cloud
+  (last closed bar) **and** the future cloud (far end, bar `Kijun` ahead)
+  must be twisted the trade's way (Span A > Span B for a long, Span A <
+  Span B for a short).
+- **M30 and above — future-only (unchanged).** The current cloud may be
+  any value, bullish or bearish; only the future cloud must be in the
+  trade's direction.
+
+The gate applies to every tier (tier TF + the TF directly below it),
+judged per-TF via `CloudBiasTFOK()` (the cut moved from `IDX_M15` to
+`IDX_M30`: `tfIdx >= IDX_M30` → future-only, else full check). So per
+tier:
+
+| Tier | Cloud requirements |
+|------|--------------------|
+| M5   | M1 current+future **+** M5 current+future |
+| M15  | M5 current+future **+** M15 current+future |
+| M30  | M15 current+future **+** M30 future |
+| H1   | M30 future + H1 future |
+| H4   | H1 future + H4 future |
+
+Note the consequence: because the gate also checks the TF directly below
+a tier, the **M30 tier now needs the M15 cloud fully twisted** (current +
+future) — the M30 *timeframe's own* condition is unchanged, but M30-tier
+entries got stricter via their M15-below component. H1/H4 are untouched.
+
+The H1 stand-in bias keeps its optional future-only cloud confirmation
+(`InpH1BiasCloudCheck`, default `true`) — H1 is M30+, so it falls under
+the unchanged M30+ rule. Turn the input off to drop it.
+
+### New inputs
+
+None. All inputs are the parent's, unchanged — **`.set` files from the
+parent load cleanly.**
+
+### Status & caveats
+
+- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
+  run is recorded in this repo. Compile and demo-test before it touches
+  money.
+- **The experiment: does M15 strictness beat the second-most-profitable
+  build?** This version trades fewer, higher-quality entries on the M5,
+  M15 and M30 tiers (all three now involve the full M15 check). Whether
+  the fewer trades outweigh the lost early entries is the test; the
+  benchmarks are the third iteration ($100 → $14000) and the fourth
+  (second most profitable).
+- **M30-tier entries are also affected** (via the M15-below check), H1/H4
+  exactly as the fourth iteration. If the M30 tier should keep the
+  relaxed M15 check, say so and the tier can be excluded from the M15
+  strictness.
+- **Magic `20260858` shared with the whole fork lineage** — deliberate, so
+  open positions keep being managed across file swaps. Do not run two of
+  these files on the same account at once.
+
+---
+
+## 29. Bottom-Up Stack EA — M1/M5/M15/M30-strict cloud bias (M30 joins the full check)
+
+**File:** `experimental-bottomup-stack-m1m5m15m30-strict-cloud-bias-ea.mq5`
+**Forked from:** `experimental-bottomup-stack-m30-bias-ea-third-most-
+profitable.mq5` (section 25 — the M30-bias build ranked third most
+profitable, magic `20260855`), which is left untouched
+**Magic number:** `20260859` — fresh, so this build never adopts or manages
+positions belonging to any other file (the strict-lineage forks share
+`20260858`; the parent runs `20260855`)
+
+Sixth iteration of the cloud-bias experiment, and the first one built on
+top of the third-most-profitable M30-bias build rather than the live VPS
+build — so it inherits, unchanged, the new kumo-breakout definition
+(price + chikou beyond the kumo + tenkan/kijun twist on every timeframe
+M1..D1), the M30 last-resort bias (only when H4 and H1 are both flat; only
+the m1-m5 and m1-m5-15 chains open under it) and the tenkan-close exits
+for M30-authorised trades.
+
+The experimental change extends the strict cloud-bias rule from M15 to
+**M30**: the cloud-bias gate now waits for **BOTH cloud positions to
+agree** on every timeframe from M1 to M30 — the Span A/B twist must hold
+at the current bar (last closed bar) AND at the far end of the future
+cloud (Kijun bars ahead). For H1 and H4 it just looks at the **future
+cloud** — the far-end twist only; their current cloud may be any value.
+The H1 stand-in's optional cloud confirmation (`InpH1BiasCloudCheck`)
+follows the same rule (H1 → future only).
+
+Per-tier cloud requirements (`LevelCloudBiasOK` via `CloudBiasTFOK`):
+
+| Tier | Cloud requirements |
+|------|--------------------|
+| M5   | M1 current+future **+** M5 current+future |
+| M15  | M5 current+future **+** M15 current+future |
+| M30  | M15 current+future **+** M30 current+future |
+| H1   | M30 current+future + H1 future |
+| H4   | H1 future + H4 future |
+
+Note the consequence: because the gate also checks the TF directly below
+a tier, the **H1 tier now needs the M30 cloud fully twisted** (current +
+future) — M30-tier entries already got this via their own check; H1-tier
+entries now do too. H4 is untouched (future only for both H1 and H4).
+
+### New inputs
+
+None — all inputs are the parent build's, unchanged. **`.set` files from
+the third-most-profitable parent load cleanly.**
+
+### Status & caveats
+
+- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
+  run is recorded in this repo. Compile and demo-test before it touches
+  money.
+- **The experiment: does M30 strictness beat the third-most-profitable
+  build?** The M5, M15 and M30 tiers all now require both cloud positions
+  to agree; only H1/H4 keep the future-only rule. Whether fewer,
+  higher-quality entries beat the parent is the test.
+- **The M30 bias path is fully strict** — M30-bias entries are M5/M15
+  tiers, whose cloud pairs (M1/M5 and M5/M15) are all current+future.
+- **Magic `20260859` is fresh and unique** — safe to run alongside the
+  strict lineage (`20260858`), the third-most-profitable parent
+  (`20260855`) and the live builds (`20260850`/`20260852`).
+- If the test proves out, promote the change into the VPS and desktop
+  builds together (per AGENTS.md the two production files must stay in
+  step).
