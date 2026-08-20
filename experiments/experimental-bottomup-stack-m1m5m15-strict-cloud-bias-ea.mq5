@@ -1,24 +1,30 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
-//| The live VPS build since 2026-08-20. Promoted from the            |
-//| experimental m1-strict-cloud-bias build — the MOST PROFITABLE     |
-//| iteration of the cloud-bias experiment (user report 2026-08-20;   |
-//| $100 -> $14000 on Jan-Aug 2026 data) — which stays at experiments/|
-//| experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-         |
-//| profitable.mq5 as the experimental reference. It replaces the     |
-//| previous bottom-up bias-stack VPS build (magic 20260850), which   |
-//| is archived as archives/ichimoku-h4-m1-vps-ea-archived20260820.   |
-//| mq5 and is no longer deployed.                                    |
-//| EXPERIMENTAL RULE — the only change vs the parent build: the      |
-//| cloud-bias gate (Span A vs Span B) requires M1 to be twisted the  |
-//| trade's way at BOTH the current bar (last closed bar) and the     |
-//| far end of the future cloud (Kijun bars ahead) — the full check.  |
-//| On M5 and above the CURRENT cloud may be any value, bullish or    |
-//| bearish; only the FUTURE cloud must be in the trade's direction.  |
+//| Ichimoku Bottom-Up Stack EA (H1 bias) — M1/M5/M15-STRICT CLOUD    |
+//| BIAS (EXPERIMENT)                                                 |
+//| EXPERIMENT — NOT DEPLOYED. Fork of ichimoku-h4-m1-vps-ea.mq5      |
+//| (the live VPS build, bottom-up H1-bias stack). Fifth iteration of |
+//| the cloud-bias experiment, forked from the second-most-profitable |
+//| fourth iteration (m1m5-strict-cloud-bias-ea-second-most-          |
+//| profitable; the m1-strict build is the most-profitable benchmark  |
+//| at $100 -> $14000 on Jan-Aug 2026 data).                          |
+//| Rule: on M1, M5 AND M15 the cloud must be twisted the trade's way |
+//| at BOTH the current bar (last closed bar) and the future cloud    |
+//| (far end of the window, Kijun bars ahead) — the full parent check |
+//| on the three smallest timeframes. On M30 and above the CURRENT    |
+//| cloud may be any value, bullish or bearish; only the FUTURE cloud |
+//| must be in the trade's direction (unchanged from iteration 4).    |
 //| The gate applies to every tier (tier TF + the TF directly below   |
-//| it): the tier's own M5+ TF is checked future-only, and the M5     |
-//| tier additionally checks M1 with the full current+future rule —  |
-//| M1 is the only timeframe that must fully agree.                   |
+//| it).                                                              |
+//| Lineage: future-cloud-bias -> M1/M5 gate -> M1-strict (most       |
+//| profitable) -> M1+M5 strict (second most profitable) -> this      |
+//| build (M1+M5+M15 strict, M30+ future-only). The production VPS    |
+//| file is untouched.                                                |
+//| The live VPS build (this fork's parent) is the VPS build since    |
+//| 2026-08-18. It replaces the former top-down alignment VPS build   |
+//| (dual-mode InpTopTF, H4->M1 / H1->M1, kijun-start filter, BE30);  |
+//| that file is archived as archives/                                |
+//| ichimoku-h4-m1-vps-ea-archived20260818.mq5 and is no longer       |
+//| deployed.                                                         |
 //| DIFFERENT MODEL: the top-down builds required every timeframe     |
 //| from the anchor down to M1 to agree before a single trade could   |
 //| open. This build is BOTTOM-UP — the stack is grown upward from    |
@@ -36,14 +42,15 @@
 //|          Tier H4 : M1 ... H4 aligned            -> open trade     |
 //|        M1 alone never trades — it is only the start of the stack. |
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
-//|        TF and the TF directly below it: M1 must be twisted the     |
-//|        trade's way at both the current bar and the far end of the |
-//|        future cloud; M5 and above need only the far end — the     |
-//|        current cloud may be either direction. H4 is the bias for  |
-//|        the whole stack (H4 bullish -> buys only, bearish -> sells |
-//|        only, flat -> no trades), and the H4 tier itself is also   |
-//|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
-//|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
+//|        TF and the TF directly below it: M1, M5 and M15 must be     |
+//|        twisted the trade's way at both the current bar and the    |
+//|        far end of the future cloud; M30 and above need only the   |
+//|        far end — the current cloud may be either direction. H4 is |
+//|        the bias for the whole stack (H4 bullish -> buys only,     |
+//|        bearish -> sells only, flat -> no trades), and the H4 tier |
+//|        itself is also gated by the D1 bias: D1 bullish -> only H4 |
+//|        buys, D1 bearish -> only H4 sells, D1 in the cloud -> no   |
+//|        H4 trades.                                                 |
 //|        H1 BIAS: an unaligned H4 would otherwise freeze the whole  |
 //|        stack, including M5. The lower tiers get a second, smaller |
 //|        bias to fall back on: when H4 carries no direction, a tier |
@@ -90,10 +97,11 @@
 //|        keep CPU/network use on a cheap VPS negligible. The        |
 //|        desktop counterpart ichimoku-h4-m1-mt5pc-ea.mq5 restores   |
 //|        the popups and the weekly equity reminder.                 |
-//| Magic: 20260858 — carried over from the experiment it was         |
-//|        promoted from, so positions it already opened keep being   |
-//|        managed. Distinct from the desktop twin (20260860) and     |
-//|        from the retired builds (20260850 VPS / 20260852 desktop). |
+//| Magic: 20260858 — carried over from the future-cloud-bias fork    |
+//|        it supersedes, so positions that version already opened    |
+//|        keep being managed. Never touches the live VPS build       |
+//|        (20260850), the desktop build (20260852) or any other      |
+//|        experiment's positions.                                    |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -142,7 +150,7 @@ enum ENUM_H1_BIAS_MODE { H1BIAS_OFF = 0, H1BIAS_FLAT_H4 = 1, H1BIAS_ALWAYS = 2 }
 enum ENUM_H1_BIAS_TIER { H1TIER_M5 = 0, H1TIER_M15 = 1, H1TIER_M30 = 2, H1TIER_H1 = 3 };
 
 input group  "Entry Filters"
-input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1 current+future must agree; M5+ future cloud only
+input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1+M5+M15 current+future must agree; M30+ future cloud only
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
@@ -171,6 +179,7 @@ input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this 
 #define MAX_SYMS 60
 #define LEVELS   5      // tradable levels: M5, M15, M30, H1, H4
 #define TFS      6      // stack: M1, M5, M15, M30, H1, H4
+#define IDX_M30  3      // index of M30 in tfs[] — first future-cloud-only timeframe
 #define IDX_H1   4      // index of H1 in tfs[] — the stand-in bias TF
 #define IDX_H4   5      // index of H4 in tfs[] — the primary bias TF
 
@@ -191,7 +200,7 @@ double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chand
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-int MAGIC = 20260858;   // live VPS M1-strict build, carried over from the promoted experiment (desktop twin runs 20260860)
+int MAGIC = 20260858;   // m1m5m15-strict-cloud-bias fork, carried over from the superseded cloud-bias forks (live VPS = 20260850, desktop = 20260852)
 
 CTrade trade;
 
@@ -476,8 +485,8 @@ int DailyAlign(int s)
 // the last closed bar (the immediate cloud where price sits)
 // and the far end of the future-cloud window. This is the
 // parent's full check — the strictest form. Used ONLY on the
-// M1 timeframe (see LevelCloudBiasOK). Unreadable values count
-// as blocking.
+// M1, M5 and M15 timeframes (see CloudBiasTFOK). Unreadable
+// values count as blocking.
 //==============================================================
 
 bool CloudBiasOK(int s, int tfIdx, int dir)
@@ -512,21 +521,34 @@ bool CloudBiasFarOK(int s, int tfIdx, int dir)
 }
 
 //==============================================================
+// Per-TF cloud rule (EXPERIMENTAL CHANGE): M1, M5 and M15 must
+// be twisted the trade's way at BOTH the current bar and the
+// far end — the full check (CloudBiasOK). M30 and above need
+// only the FUTURE cloud in the trade's direction; their current
+// cloud may be any value, bullish or bearish (CloudBiasFarOK).
+//==============================================================
+
+bool CloudBiasTFOK(int s, int tfIdx, int dir)
+{
+   if(tfIdx >= IDX_M30) return CloudBiasFarOK(s, tfIdx, dir);   // M30+ — future cloud only
+   return CloudBiasOK(s, tfIdx, dir);                           // M1, M5, M15 — current AND future
+}
+
+//==============================================================
 // Level Cloud Bias Gate (EXPERIMENTAL CHANGE): applies to every
-// tier — the tier's TF (lvl+1, always M5 or above) needs only
-// the FUTURE cloud in the trade's direction; the TF directly
-// below it is M1 for the M5 tier (full check: current AND future
-// must agree with the trade) and M5 or above for the higher
-// tiers (future-only). So: M1 = both cloud values must agree;
-// M5 upwards = current cloud may be any value, future cloud must
-// be in the trade's direction.
+// tier — the tier's TF (lvl+1) and the TF directly below it
+// (lvl), each judged by the per-TF rule above. So the M5 tier
+// needs M1 current+future and M5 current+future; the M15 tier
+// needs M5 current+future and M15 current+future; the M30 tier
+// needs M15 current+future and M30 future; H1/H4 tiers need
+// only the future clouds of their two TFs.
 //==============================================================
 
 bool LevelCloudBiasOK(int s, int lvl, int dir)
 {
-   if(!CloudBiasFarOK(s, lvl + 1, dir)) return false;   // tier TF — always M5+ — future cloud only
-   if(lvl == 0) return CloudBiasOK(s, 0, dir);          // M1 (below the M5 tier) — current AND future
-   return CloudBiasFarOK(s, lvl, dir);                  // TF below (M5+) — future cloud only
+   if(!CloudBiasTFOK(s, lvl + 1, dir)) return false;   // tier TF
+   if(!CloudBiasTFOK(s, lvl, dir))     return false;   // TF directly below
+   return true;
 }
 
 //==============================================================

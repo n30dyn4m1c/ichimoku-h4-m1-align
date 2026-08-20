@@ -1,24 +1,32 @@
 //+------------------------------------------------------------------+
 //| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
-//| The live VPS build since 2026-08-20. Promoted from the            |
-//| experimental m1-strict-cloud-bias build — the MOST PROFITABLE     |
-//| iteration of the cloud-bias experiment (user report 2026-08-20;   |
-//| $100 -> $14000 on Jan-Aug 2026 data) — which stays at experiments/|
-//| experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-         |
-//| profitable.mq5 as the experimental reference. It replaces the     |
-//| previous bottom-up bias-stack VPS build (magic 20260850), which   |
-//| is archived as archives/ichimoku-h4-m1-vps-ea-archived20260820.   |
-//| mq5 and is no longer deployed.                                    |
-//| EXPERIMENTAL RULE — the only change vs the parent build: the      |
-//| cloud-bias gate (Span A vs Span B) requires M1 to be twisted the  |
-//| trade's way at BOTH the current bar (last closed bar) and the     |
-//| far end of the future cloud (Kijun bars ahead) — the full check.  |
-//| On M5 and above the CURRENT cloud may be any value, bullish or    |
-//| bearish; only the FUTURE cloud must be in the trade's direction.  |
-//| The gate applies to every tier (tier TF + the TF directly below   |
-//| it): the tier's own M5+ TF is checked future-only, and the M5     |
-//| tier additionally checks M1 with the full current+future rule —  |
-//| M1 is the only timeframe that must fully agree.                   |
+//| (EXPERIMENT)                                                      |
+//| MOST PROFITABLE VERSION SO FAR (user report, 2026-08-20) — the    |
+//| -most-profitable suffix marks it as the best-performing iteration  |
+//| of the cloud-bias experiment across all iterations.               |
+//| PROMOTED 2026-08-20: this build is now the code behind the main   |
+//| VPS and desktop EAs at the repo root (magics 20260858 / 20260860) |
+//| and is kept here as the experimental reference.                   |
+//| EXPERIMENT — NOT DEPLOYED. Fork of ichimoku-h4-m1-vps-ea.mq5      |
+//| (the live VPS build, bottom-up H1-bias stack). Third iteration of |
+//| the cloud-bias experiment. Rule: on M1 the cloud must be twisted  |
+//| the trade's way at BOTH the current bar (last closed bar) and the |
+//| future cloud (far end of the window, Kijun bars ahead) — the full |
+//| parent check. On M5 and above the CURRENT cloud may be any value, |
+//| bullish or bearish; only the FUTURE cloud must be in the trade's  |
+//| direction. The gate applies to every tier (tier TF + the TF       |
+//| directly below it), exactly like the first iteration, which       |
+//| traded much better than the parent; the M1 strictness is the      |
+//| starting point for choking the smallest tier.                     |
+//| Lineage: future-cloud-bias (far-only on every TF) -> M1/M5 gate   |
+//| (strict on M1+M5, M15+ free) -> this build (M1 strict, M5+        |
+//| future-only). The production VPS file is untouched.               |
+//| The live VPS build (this fork's parent) is the VPS build since    |
+//| 2026-08-18. It replaces the former top-down alignment VPS build   |
+//| (dual-mode InpTopTF, H4->M1 / H1->M1, kijun-start filter, BE30);  |
+//| that file is archived as archives/                                |
+//| ichimoku-h4-m1-vps-ea-archived20260818.mq5 and is no longer       |
+//| deployed.                                                         |
 //| DIFFERENT MODEL: the top-down builds required every timeframe     |
 //| from the anchor down to M1 to agree before a single trade could   |
 //| open. This build is BOTTOM-UP — the stack is grown upward from    |
@@ -90,10 +98,11 @@
 //|        keep CPU/network use on a cheap VPS negligible. The        |
 //|        desktop counterpart ichimoku-h4-m1-mt5pc-ea.mq5 restores   |
 //|        the popups and the weekly equity reminder.                 |
-//| Magic: 20260858 — carried over from the experiment it was         |
-//|        promoted from, so positions it already opened keep being   |
-//|        managed. Distinct from the desktop twin (20260860) and     |
-//|        from the retired builds (20260850 VPS / 20260852 desktop). |
+//| Magic: 20260858 — carried over from the future-cloud-bias fork    |
+//|        it supersedes, so positions that version already opened    |
+//|        keep being managed. Never touches the live VPS build       |
+//|        (20260850), the desktop build (20260852) or any other      |
+//|        experiment's positions.                                    |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -191,7 +200,7 @@ double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chand
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-int MAGIC = 20260858;   // live VPS M1-strict build, carried over from the promoted experiment (desktop twin runs 20260860)
+int MAGIC = 20260858;   // m1-strict-cloud-bias fork, carried over from the superseded cloud-gate forks (live VPS = 20260850, desktop = 20260852)
 
 CTrade trade;
 

@@ -20,6 +20,15 @@ experimental builds until it has earned main-build status.
 > fork (section 21); the main builds are where changes to the live strategy
 > now belong.
 
+> **Promoted, 2026-08-20.** The **M1-strict cloud-bias build** (section 26) is
+> now the code behind both main builds, `ichimoku-h4-m1-vps-ea.mq5` (magic
+> `20260858`) and `ichimoku-h4-m1-mt5pc-ea.mq5` (magic `20260860`) — the most
+> profitable iteration of the cloud-bias experiment so far (user report
+> 2026-08-20, $100 → $14000 on Jan–Aug 2026 data). The bottom-up bias-stack
+> builds it replaced are in [`archives/`](../archives/) as the
+> `-archived20260820` pair. The experimental file stays here as the
+> reference copy.
+
 ---
 
 ## 1. H4-M1 PO3 Alignment EA
@@ -2726,13 +2735,17 @@ parent `.set` behaves as the new build with the M30 fallback enabled).
 
 ## 26. Bottom-Up Stack EA — M1-strict cloud bias (M1 current+future, M5+ future only)
 
+> **PROMOTED 2026-08-20** — this build is now the code behind the main VPS
+> and desktop EAs at the repo root (magics `20260858` / `20260860`); the
+> file here is the experimental reference.
+
 **File:** `experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5`
 **Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
 `20260850`), which is left untouched
 **Magic number:** `20260858` — carried over from the cloud-gate fork it
 supersedes (earlier iterations are documented below), so positions those
 versions already opened keep being managed. It never touches positions of
-the live builds (`20260850` VPS, `20260852` desktop) or any other fork
+the retired builds (`20260850` VPS, `20260852` desktop) or any other fork
 
 This is the **third iteration** of the cloud-bias experiment. The first
 iteration (far-end-only check on every timeframe) traded much better than

@@ -1,24 +1,10 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
-//| The live VPS build since 2026-08-20. Promoted from the            |
-//| experimental m1-strict-cloud-bias build — the MOST PROFITABLE     |
-//| iteration of the cloud-bias experiment (user report 2026-08-20;   |
-//| $100 -> $14000 on Jan-Aug 2026 data) — which stays at experiments/|
-//| experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-         |
-//| profitable.mq5 as the experimental reference. It replaces the     |
-//| previous bottom-up bias-stack VPS build (magic 20260850), which   |
-//| is archived as archives/ichimoku-h4-m1-vps-ea-archived20260820.   |
-//| mq5 and is no longer deployed.                                    |
-//| EXPERIMENTAL RULE — the only change vs the parent build: the      |
-//| cloud-bias gate (Span A vs Span B) requires M1 to be twisted the  |
-//| trade's way at BOTH the current bar (last closed bar) and the     |
-//| far end of the future cloud (Kijun bars ahead) — the full check.  |
-//| On M5 and above the CURRENT cloud may be any value, bullish or    |
-//| bearish; only the FUTURE cloud must be in the trade's direction.  |
-//| The gate applies to every tier (tier TF + the TF directly below   |
-//| it): the tier's own M5+ TF is checked future-only, and the M5     |
-//| tier additionally checks M1 with the full current+future rule —  |
-//| M1 is the only timeframe that must fully agree.                   |
+//| Ichimoku Bottom-Up Stack EA (H1 bias) — MT5 desktop build         |
+//| The live desktop build since 2026-08-18. It replaces the former   |
+//| top-down alignment desktop build (dual-mode InpTopTF, H4->M1 /    |
+//| H1->M1, kijun-start filter, BE30); that file is archived as       |
+//| archives/ichimoku-h4-m1-mt5pc-ea-archived20260818.mq5 and is no   |
+//| longer used.                                                      |
 //| DIFFERENT MODEL: the top-down builds required every timeframe     |
 //| from the anchor down to M1 to agree before a single trade could   |
 //| open. This build is BOTTOM-UP — the stack is grown upward from    |
@@ -36,11 +22,8 @@
 //|          Tier H4 : M1 ... H4 aligned            -> open trade     |
 //|        M1 alone never trades — it is only the start of the stack. |
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
-//|        TF and the TF directly below it: M1 must be twisted the     |
-//|        trade's way at both the current bar and the far end of the |
-//|        future cloud; M5 and above need only the far end — the     |
-//|        current cloud may be either direction. H4 is the bias for  |
-//|        the whole stack (H4 bullish -> buys only, bearish -> sells |
+//|        TF and the TF directly below it, H4 is the bias for the    |
+//|        whole stack (H4 bullish -> buys only, bearish -> sells     |
 //|        only, flat -> no trades), and the H4 tier itself is also   |
 //|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
 //|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades. |
@@ -84,16 +67,20 @@
 //|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
 //|        entry stop is attached). No multipliers, no streak         |
 //|        compounding.                                               |
-//| VPS:   no Alert() popups and no equity alert — every entry/exit   |
-//|        sends a SendNotification push and a journal Print, and all |
-//|        logic runs only on closed M1 bars (once per minute) to     |
-//|        keep CPU/network use on a cheap VPS negligible. The        |
-//|        desktop counterpart ichimoku-h4-m1-mt5pc-ea.mq5 restores   |
-//|        the popups and the weekly equity reminder.                 |
-//| Magic: 20260858 — carried over from the experiment it was         |
-//|        promoted from, so positions it already opened keep being   |
-//|        managed. Distinct from the desktop twin (20260860) and     |
-//|        from the retired builds (20260850 VPS / 20260852 desktop). |
+//| Desktop: identical trading logic to the VPS build                 |
+//|        ichimoku-h4-m1-vps-ea.mq5, with the desktop conveniences   |
+//|        restored — a terminal Alert() popup alongside the push and |
+//|        the journal line on every entry, kumo-touch exit,          |
+//|        rejection exit, supersede-close and failed order, plus the |
+//|        weekly EQUITY REMINDER: every InpCheckDay it compares      |
+//|        equity to a stored baseline and, once profit clears        |
+//|        InpMinProfitTrigger, alerts with a suggested withdrawal of |
+//|        InpWithdrawProfitPct% of that profit. Informational only — |
+//|        it never moves money. All logic still runs only on closed  |
+//|        M1 bars (once per minute), same as the VPS build.          |
+//| Magic: 20260852 — its own number, so this desktop build and the   |
+//|        VPS build (20260850) can trade the same account, even the  |
+//|        same symbol, without touching each other's positions.      |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -142,7 +129,7 @@ enum ENUM_H1_BIAS_MODE { H1BIAS_OFF = 0, H1BIAS_FLAT_H4 = 1, H1BIAS_ALWAYS = 2 }
 enum ENUM_H1_BIAS_TIER { H1TIER_M5 = 0, H1TIER_M15 = 1, H1TIER_M30 = 2, H1TIER_H1 = 3 };
 
 input group  "Entry Filters"
-input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1 current+future must agree; M5+ future cloud only
+input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias on the level TF + the TF below
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
@@ -167,12 +154,22 @@ input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the reject
 input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
 input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
+input group             "Equity Reminder (desktop only)"
+input double            InpMinProfitTrigger  = 5.0;        // Min profit over baseline to trigger the reminder
+input double            InpWithdrawProfitPct = 50.0;       // Percentage of the PROFIT to suggest withdrawing
+input ENUM_DAY_OF_WEEK  InpCheckDay          = FRIDAY;     // Day of the week to check
+input bool              InpResetBaseline     = false;      // Set to true to reset the baseline to current equity
+input bool              InpSendPush          = true;       // Also push the equity reminder to the MT5 mobile app
+
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
 #define LEVELS   5      // tradable levels: M5, M15, M30, H1, H4
 #define TFS      6      // stack: M1, M5, M15, M30, H1, H4
 #define IDX_H1   4      // index of H1 in tfs[] — the stand-in bias TF
 #define IDX_H4   5      // index of H4 in tfs[] — the primary bias TF
+
+#define GV_BASE_EQUITY    "EA_EquityAlert_Base_"    + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+#define GV_LAST_ALERT_DAY "EA_EquityAlert_Day_"     + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
 
 ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
@@ -183,6 +180,7 @@ int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock tra
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
+datetime lastEquityBar = 0;           // H4 bar gating for the weekly equity reminder
 int      state[MAX_SYMS][LEVELS];     // per level: 0 = flat, 1 = long, -1 = short
 int      lastMinuteKey = -1;
 
@@ -191,7 +189,7 @@ double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chand
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-int MAGIC = 20260858;   // live VPS M1-strict build, carried over from the promoted experiment (desktop twin runs 20260860)
+int MAGIC = 20260852;   // desktop bottom-up H1-bias build (VPS twin runs 20260850)
 
 CTrade trade;
 
@@ -255,7 +253,56 @@ int OnInit()
    trade.SetDeviationInPoints(Slippage);
    trade.SetExpertMagicNumber(MAGIC);
    SyncStateFromPositions();
+   InitEquityAlert();
    return(INIT_SUCCEEDED);
+}
+
+//==============================================================
+// Equity Reminder (desktop only): weekly profit-withdrawal nudge
+//
+// The baseline equity is stored in a terminal global variable keyed
+// by account login, so it survives restarts and recompiles. Once a
+// week (InpCheckDay) the EA compares live equity to that baseline
+// and, if the profit clears InpMinProfitTrigger, pops an Alert()
+// suggesting InpWithdrawProfitPct% of the profit be withdrawn. It
+// only ever tells you — it never withdraws anything itself. Flip
+// InpResetBaseline to true once to re-baseline on the current
+// equity (e.g. after a deposit or a withdrawal).
+//==============================================================
+
+void InitEquityAlert()
+{
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!GlobalVariableCheck(GV_BASE_EQUITY) || InpResetBaseline)
+      GlobalVariableSet(GV_BASE_EQUITY, currentEquity);
+   if(!GlobalVariableCheck(GV_LAST_ALERT_DAY))
+      GlobalVariableSet(GV_LAST_ALERT_DAY, 0);
+}
+
+void CheckEquityAlert()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+
+   if(dt.day_of_week != InpCheckDay) return;
+   if((int)GlobalVariableGet(GV_LAST_ALERT_DAY) == dt.day) return;   // one alert per day
+
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double baseEquity    = GlobalVariableGet(GV_BASE_EQUITY);
+   double profit        = currentEquity - baseEquity;
+
+   if(profit >= InpMinProfitTrigger)
+   {
+      double withdrawAmount = profit * (InpWithdrawProfitPct / 100.0);
+      string msg = StringFormat("Profit: %.2f. Suggest withdrawing: %.2f", profit, withdrawAmount);
+
+      Print(msg);
+      Alert(msg);
+      if(InpSendPush) SendNotification(msg);
+
+      GlobalVariableSet(GV_LAST_ALERT_DAY, (double)dt.day);
+      GlobalVariablesFlush();
+   }
 }
 
 void OnDeinit(const int reason)
@@ -472,12 +519,9 @@ int DailyAlign(int s)
 
 //==============================================================
 // Cloud Bias Filter: the cloud must carry the trade's bias
-// (Span A above Span B for a long, below for a short) at BOTH
-// the last closed bar (the immediate cloud where price sits)
-// and the far end of the future-cloud window. This is the
-// parent's full check — the strictest form. Used ONLY on the
-// M1 timeframe (see LevelCloudBiasOK). Unreadable values count
-// as blocking.
+// (Span A above Span B for a long, below for a short) at both
+// the last closed bar and the far end of the future-cloud
+// window. Unreadable values count as blocking.
 //==============================================================
 
 bool CloudBiasOK(int s, int tfIdx, int dir)
@@ -492,41 +536,13 @@ bool CloudBiasOK(int s, int tfIdx, int dir)
    return aNow[0] < bNow[0] && aFar[0] < bFar[0];
 }
 
-//==============================================================
-// Cloud Bias Filter — FUTURE-ONLY: the far end of the future-
-// cloud window (Kijun bars ahead of the last closed bar) must
-// carry the trade's bias; the immediate cloud where price sits
-// may be either direction. Used for every timeframe from M5 up
-// in the level gate, and for the H1 stand-in bias confirmation
-// (InpH1BiasCloudCheck).
-//==============================================================
-
-bool CloudBiasFarOK(int s, int tfIdx, int dir)
-{
-   double aFar[1], bFar[1];
-   if(CopyBuffer(ich[s][tfIdx], 2, 1 - Kijun, 1, aFar) <= 0) return false;
-   if(CopyBuffer(ich[s][tfIdx], 3, 1 - Kijun, 1, bFar) <= 0) return false;
-
-   if(dir == 1) return aFar[0] > bFar[0];
-   return aFar[0] < bFar[0];
-}
-
-//==============================================================
-// Level Cloud Bias Gate (EXPERIMENTAL CHANGE): applies to every
-// tier — the tier's TF (lvl+1, always M5 or above) needs only
-// the FUTURE cloud in the trade's direction; the TF directly
-// below it is M1 for the M5 tier (full check: current AND future
-// must agree with the trade) and M5 or above for the higher
-// tiers (future-only). So: M1 = both cloud values must agree;
-// M5 upwards = current cloud may be any value, future cloud must
-// be in the trade's direction.
-//==============================================================
-
+// The bias must hold on the level TF and the TF directly below it
+// (level lvl opens on TF lvl+1, so the pair is TF lvl and TF lvl+1).
 bool LevelCloudBiasOK(int s, int lvl, int dir)
 {
-   if(!CloudBiasFarOK(s, lvl + 1, dir)) return false;   // tier TF — always M5+ — future cloud only
-   if(lvl == 0) return CloudBiasOK(s, 0, dir);          // M1 (below the M5 tier) — current AND future
-   return CloudBiasFarOK(s, lvl, dir);                  // TF below (M5+) — future cloud only
+   if(!CloudBiasOK(s, lvl + 1, dir)) return false;
+   if(!CloudBiasOK(s, lvl, dir))     return false;
+   return true;
 }
 
 //==============================================================
@@ -555,11 +571,9 @@ bool H1BiasOK(int s, int dir)
    int h1 = CheckAlign(s, IDX_H1);
    if(h1 != dir) return false;      // H1 flat or opposed — nothing to stand in with
 
-   // Optional extra confirmation: the H1 kumo's far end (future
-   // cloud) must be twisted the trade's way — the same future-only
-   // rule that applies to every M5+ timeframe in the level gate.
-   // The immediate cloud is NOT required to match.
-   if(InpH1BiasCloudCheck && !CloudBiasFarOK(s, IDX_H1, dir)) return false;
+   // Optional extra confirmation: the H1 kumo itself must be twisted the
+   // trade's way, now and at the far end of the future cloud.
+   if(InpH1BiasCloudCheck && !CloudBiasOK(s, IDX_H1, dir)) return false;
 
    return true;
 }
@@ -771,7 +785,7 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
       string action = (dir == 1) ? "Buy" : "Sell";
       string msg = PCTime() + " | " + action + " " + sym + " " + tfName[lvl + 1] +
                    " @ " + DoubleToString(lots, 2) + " (bottom-up, bias " + via + ")";
-      Print(msg); SendNotification(msg);
+      Print(msg); Alert(msg); SendNotification(msg);
    }
    return ok;
 }
@@ -999,16 +1013,18 @@ bool ExitLevel(int s, int l, string reason)
    string side = (state[s][l] == 1) ? "Long" : "Short";
    string msg  = PCTime() + " | Close " + syms[s] + " " + side + " " +
                  tfName[l + 1] + " (" + reason + ")";
-   Print(msg); SendNotification(msg);
+   Print(msg); Alert(msg); SendNotification(msg);
 
    if(CloseLevelPositions(s, l))
    {
       state[s][l] = 0;
+      // Confirmation only — no second popup on top of the exit alert above.
       msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " level closed";
       Print(msg); SendNotification(msg);
       return true;
    }
-   Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry");
+   msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry";
+   Print(msg); Alert(msg);
    return false;
 }
 
@@ -1023,6 +1039,15 @@ void OnTick()
    int nowKey = (int)(TimeCurrent() / 60);
    if(nowKey == lastMinuteKey) return;
    lastMinuteKey = nowKey;
+
+   // Equity reminder: evaluated once per new H4 bar; CheckEquityAlert()
+   // self-guards on the day of week and fires at most once a day.
+   MqlRates h4eq[];
+   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H4, 0, 1, h4eq) > 0 && h4eq[0].time != lastEquityBar)
+   {
+      lastEquityBar = h4eq[0].time;
+      CheckEquityAlert();
+   }
 
    bool synced = false;
    for(int s = 0; s < symsCount; s++)
@@ -1099,7 +1124,7 @@ void OnTick()
             {
                string msg = PCTime() + " | Close " + syms[s] + " " + tfName[l + 1] +
                             " (superseded by " + tfName[topTier + 1] + ")";
-               Print(msg); SendNotification(msg);
+               Print(msg); Alert(msg); SendNotification(msg);
 
                if(CloseLevelPositions(s, l))
                   state[s][l] = 0;
@@ -1113,8 +1138,11 @@ void OnTick()
          CapLotsToMargin(syms[s], (topDir == 1), lots);
 
          if(!OpenLevel(s, topTier, topDir, lots, topVia))
-            Print(PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
-                  " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
+         {
+            string fail = PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
+                          " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode());
+            Print(fail); Alert(fail);
+         }
       }
    }
 }
