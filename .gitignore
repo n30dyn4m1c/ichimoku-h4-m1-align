@@ -27,3 +27,6 @@ __pycache__/
 
 # Local reference copies of copyrighted books (never commit)
 experiments/_OceanofPDF.com_*
+
+# Local OpenCode CLI state (sessions, plugins, node_modules)
+.opencode/
