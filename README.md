@@ -840,7 +840,31 @@ current+future agreement, M15 and above keep the future-only rule; the
 user reports it as the second most profitable iteration. A
 **M1/M5/M15-strict follow-up** (`experimental-bottomup-stack-m1m5m15-strict-cloud-bias-ea.mq5`,
 same magic) extends the full check to M15 too — M1/M5/M15 need
-current+future agreement, M30 and above keep the future-only rule. The
+current+future agreement, M30 and above keep the future-only rule. A
+**standard-account conversion of the live build**
+(`experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5`, magic
+`20260862`) forks the current VPS EA — not the retired H1-bias parent the
+earlier standard-account build came from — for a **full-size account
+funded with about $100**, replacing the XM Ultra Low Micro account the
+live build runs on. On a standard gold symbol 0.01 lot is 1 oz (about $1
+of P/L per $1 of gold), ten times the micro exposure and the smallest
+trade the broker accepts, which breaks two of the parent's assumptions at
+once: its risk table is overridden by the lot floor below roughly $10k of
+equity, and it attaches **no entry stop at all**. So this build adds a
+**hard stop at entry** (2 × ATR of the tier TF — the same distance the
+parent already used as its sizing reference, now real and attached),
+**prices risk against that stop** rather than a notional distance, caps
+**every** trade at 5% of equity and **skips** any entry whose minimum lot
+would exceed it (so the tiers unlock one at a time as equity grows —
+typically only M5 can trade at $100), re-cuts the risk ladder to
+1/1.5/2/2.5/3% with thresholds at $2000/$10000, and adds a **daily loss
+limit, a peak drawdown halt and a 60-minute post-loss cooldown** that all
+survive a VPS restart. It also tightens the entry gate to the
+**M1/M5/M15-strict cloud rule** above (via a new `InpStrictCloudUpTo`
+input) and prints a **live per-tier risk table** to the journal on the
+first M1 bar. The hard stop is an explicit trade-off, not a free win — it
+will sometimes fire where the kumo-touch exit would have let a trade
+recover; `InpUseHardStop = false` reproduces the parent exactly. The
 rest are
 newer and less battle-tested
 than the main builds; see
