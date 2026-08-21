@@ -10,13 +10,12 @@
 //| is archived as archives/ichimoku-h4-m1-vps-ea-archived20260820.   |
 //| mq5 and is no longer deployed.                                    |
 //| BTCUSD# TEST FORK (experiment) — identical logic to the live      |
-//| VPS build, but the Symbols input is preset to "BTCUSD#" so it     |
-//| can be tested on crypto. The live VPS build is NOT modified.      |
-//| Fresh magic 20260861 so this fork never touches the live build's  |
-//| positions (20260858 VPS / 20260860 desktop) — both can run on     |
-//| one account. BTCUSD# trades 24/7; the per-minute closed-M1 gating |
-//| and all sizing/stop math are symbol-dynamic (SymbolInfo*), so no  |
-//| other change was needed. Delete the fork when testing is done.    |
+//| VPS build, but: (1) Symbols preset to "BTCUSD#" for crypto        |
+//| testing, (2) InpMaxSpreadPoints = 0 — the 60-point cap tuned for  |
+//| GOLDm# blocked every BTCUSD# entry (2-digit BTC spreads are 100+  |
+//| points), (3) fresh magic 20260861 so it never touches the live    |
+//| build's positions (20260858 VPS / 20260860 desktop). The live     |
+//| VPS build is NOT modified. Delete the fork when testing is done.  |
 //| EXPERIMENTAL RULE — the only change vs the parent build: the      |
 //| cloud-bias gate (Span A vs Span B) requires M1 to be twisted the  |
 //| trade's way at BOTH the current bar (last closed bar) and the     |
@@ -155,7 +154,7 @@ input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1 current+future must agree; M5+ future cloud only
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
-input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
+input int    InpMaxSpreadPoints  = 0;      // BTCUSD# fork: 0 = disabled — the 60-point cap tuned for GOLDm# blocks crypto (2-digit BTC spread is typically 100+ points; set e.g. 500 after checking your broker's Digits/spread)
 
 input group  "H1 Bias (lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (H4 only), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
