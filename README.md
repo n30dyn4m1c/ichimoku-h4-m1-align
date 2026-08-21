@@ -842,29 +842,32 @@ user reports it as the second most profitable iteration. A
 same magic) extends the full check to M15 too — M1/M5/M15 need
 current+future agreement, M30 and above keep the future-only rule. A
 **standard-account conversion of the live build**
-(`experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5`, magic
+(`experimental-bottomup-stack-standard-account-v2-ea.mq5`, magic
 `20260862`) forks the current VPS EA — not the retired H1-bias parent the
 earlier standard-account build came from — for a **full-size account
 funded with about $100**, replacing the XM Ultra Low Micro account the
-live build runs on. On a standard gold symbol 0.01 lot is 1 oz (about $1
-of P/L per $1 of gold), ten times the micro exposure and the smallest
-trade the broker accepts, which breaks two of the parent's assumptions at
-once: its risk table is overridden by the lot floor below roughly $10k of
-equity, and it attaches **no entry stop at all**. So this build adds a
-**hard stop at entry** (2 × ATR of the tier TF — the same distance the
-parent already used as its sizing reference, now real and attached),
-**prices risk against that stop** rather than a notional distance, caps
-**every** trade at 5% of equity and **skips** any entry whose minimum lot
-would exceed it (so the tiers unlock one at a time as equity grows —
-typically only M5 can trade at $100), re-cuts the risk ladder to
-1/1.5/2/2.5/3% with thresholds at $2000/$10000, and adds a **daily loss
-limit, a peak drawdown halt and a 60-minute post-loss cooldown** that all
-survive a VPS restart. It also tightens the entry gate to the
-**M1/M5/M15-strict cloud rule** above (via a new `InpStrictCloudUpTo`
-input) and prints a **live per-tier risk table** to the journal on the
-first M1 bar. The hard stop is an explicit trade-off, not a free win — it
-will sometimes fire where the kumo-touch exit would have let a trade
-recover; `InpUseHardStop = false` reproduces the parent exactly. The
+live build runs on. **Its entry logic is the live build's, unchanged**;
+what differs is money management. On a standard gold symbol 0.01 lot is
+1 oz (about $1 of P/L per $1 of gold), ten times the micro exposure and
+the smallest trade the broker accepts, so the parent's
+`MathMax(lotMin, lots)` silently rounds nearly every order up and the risk
+table stops meaning anything below roughly $10k of equity. This build adds
+a **minimum-lot honesty gate** — it prices what 0.01 lot would really risk
+over the reference distance and **skips** the entry when that exceeds
+`InpMaxRiskPerTradePct` (12%), so tiers unlock one at a time as equity
+grows — plus a re-cut risk ladder, a **daily loss limit and a peak
+drawdown halt** that survive a VPS restart, an **optional hard stop** at
+entry (off by default, so the parent's let-it-run behaviour is preserved),
+a `InpStrictCloudUpTo` input that can tighten the cloud gate above the
+live build's M1 rule, and a **live per-tier risk table** printed to the
+journal on the first M1 bar. Note that with the hard stop off the ceiling
+bounds position *size*, not loss size. A first iteration of this build
+opened only 3 trades in an 8-month backtest; the cause was a bug in which
+a tier that failed the affordability gate vetoed the whole symbol rather
+than yielding to the next tier down — and because tier alignment is
+nested, the strongest setups were exactly the ones discarded. Fixed, and
+written up in **section 30** of the experimental notes.
+The
 rest are
 newer and less battle-tested
 than the main builds; see

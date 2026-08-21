@@ -1,127 +1,124 @@
 //+------------------------------------------------------------------+
-//| Ichimoku Bottom-Up Stack EA — STANDARD-ACCOUNT ($100) build      |
-//| M1+M5+M15 STRICT CLOUD BIAS + HARD STOP + CIRCUIT BREAKERS       |
-//| EXPERIMENTAL — NOT the live VPS build. Forked from the live      |
+//| Ichimoku Bottom-Up Stack EA - STANDARD-ACCOUNT ($100) build      |
+//| EXPERIMENTAL - NOT the live VPS build. Forked from the live      |
 //| ichimoku-h4-m1-vps-ea.mq5 (magic 20260858, the M1-strict         |
-//| cloud-bias build running on an XM Ultra Low MICRO account), for  |
-//| the same strategy on a STANDARD (full-size) account funded with  |
-//| about $100. The VPS and desktop files are untouched.             |
+//| cloud-bias build running on an XM Ultra Low MICRO account), to   |
+//| run the same strategy on a STANDARD (full-size) account funded   |
+//| with about $100. The VPS and desktop files are untouched.        |
 //|                                                                  |
-//| WHY A SEPARATE BUILD — the arithmetic that forces it             |
+//| WHY A SEPARATE BUILD - the arithmetic that forces it             |
 //| On a MICRO gold symbol one lot is 10 oz, so the 0.01 minimum is  |
 //| 0.1 oz and moves about $0.10 per $1 of gold. On a STANDARD gold  |
 //| symbol one lot is 100 oz: the same 0.01 minimum is 1 oz and      |
-//| moves about $1.00 per $1 of gold — TEN TIMES the exposure for    |
-//| the identical number in the volume box. Everything below follows |
-//| from that one fact.                                              |
-//| The parent hides it. Its sizing ends with MathMax(lotMin, lots), |
-//| so whenever the risk-correct size lands under the broker         |
-//| minimum the order is silently ROUNDED UP and the trade risks     |
-//| whatever 0.01 lot happens to risk — not what its tier asked for. |
-//| Harmless on a micro symbol; on a $100 standard account it is the |
-//| dominant risk. And the parent attaches NO ENTRY STOP AT ALL: the |
-//| trade runs until the kumo-touch exit, so a gap or a news spike   |
-//| is unbounded. On the micro account that is survivable. At 1 oz   |
-//| per 0.01 lot it is how a $100 account dies in one candle.        |
+//| moves about $1.00 per $1 of gold - TEN TIMES the exposure for    |
+//| the identical number in the volume box, and the smallest trade   |
+//| the broker will accept.                                          |
+//| The parent hides what that does. Its sizing ends with            |
+//| MathMax(lotMin, lots), so whenever the risk-correct size lands   |
+//| under the broker minimum the order is silently ROUNDED UP and    |
+//| the trade risks whatever 0.01 lot happens to risk - not what its |
+//| tier asked for. Below roughly $10k of equity that is EVERY       |
+//| trade, and the risk table becomes decoration.                    |
 //|                                                                  |
 //| WHAT CHANGED FROM THE PARENT                                     |
-//| Trade quality (fewer, better entries — the user asked for the    |
-//| M1-only cloud rule to be widened):                               |
-//|  1. STRICT CLOUD ON M1, M5 AND M15. The parent required the      |
-//|     cloud twist (Span A vs Span B) to agree at BOTH the current  |
-//|     bar and the far end of the future cloud on M1 only; M5 and   |
-//|     above were future-cloud-only. Here M1, M5 AND M15 all take   |
-//|     the full current+future check, M30 and above stay            |
-//|     future-only — the rule proven out in experiments/            |
-//|     experimental-bottomup-stack-m1m5m15-strict-cloud-bias-ea.mq5.|
-//|     The cut is the input InpStrictCloudUpTo, so it can be walked |
-//|     back to M5-only or M1-only without editing code.             |
-//|  2. Spread ceiling tightened from 60 to 35 points.               |
-//|  3. Post-loss cooldown (InpLossCooldownMin, 60 min). Required,   |
-//|     not cosmetic: once a hard stop exists the stack can be       |
-//|     stopped out and then re-enter the identical still-aligned    |
-//|     setup on the very next M1 bar, churning the account away in  |
-//|     an afternoon. After a LOSING close on a symbol that symbol   |
-//|     takes no new entry until the cooldown expires.               |
-//|                                                                  |
-//| Risk (the point of the build — survive, then compound):          |
-//|  4. HARD STOP LOSS AT ENTRY (InpStopLossATR, 2.0 x ATR of the    |
-//|     tier TF), floored at the broker's stops level. The single    |
-//|     most important change: the parent runs a trade with NO stop  |
-//|     at all until the kumo-touch exit, and that exit is only      |
-//|     evaluated on closed M1 bars. A news spike moving gold $25    |
-//|     inside one minute costs $25 at 0.01 STANDARD lot, a quarter  |
-//|     of the account, in a build that cannot size any smaller.     |
-//|     That is the hole this closes.                                |
-//|     2.0 x ATR is deliberately the SAME distance the parent       |
-//|     already used as its sizing "reference distance" - the room   |
-//|     it implicitly treated the trade as working within. This      |
-//|     build just makes that distance real and attaches it.         |
-//|     BE HONEST ABOUT THE COST: a stop at 2 x ATR will sometimes   |
-//|     fire where the kumo-touch exit would have let the trade      |
-//|     breathe and recover, so this is NOT a strictly better        |
-//|     build. It trades a slice of the parent's let-it-run edge     |
-//|     for a bounded worst case. On a $100 standard account that    |
-//|     is the right bargain, and it is why this is an experimental  |
-//|     file rather than a change to the live one. Widen             |
-//|     InpStopLossATR to interfere less (fewer tiers will then      |
-//|     clear item 6's ceiling), or set InpUseHardStop = false to    |
-//|     get the parent's behaviour back exactly. Break-even and the  |
-//|     chandelier only ever tighten this stop, never widen it.      |
-//|  5. RISK IS PRICED AGAINST THAT REAL STOP. The parent sized      |
-//|     against a notional reference distance (ATR x 2) that no      |
-//|     order ever carried; the number it called "risk" was not the  |
-//|     loss the trade could take. Here the sizing distance IS the   |
-//|     stop distance, so a tier's risk % is the money actually at   |
-//|     risk. InpRiskATRMult is gone — InpStopLossATR replaces it.   |
-//|  6. HARD PER-TRADE CEILING (InpMaxRiskPerTradePct, 5%). No       |
-//|     entry may risk more than this at its stop, whatever the      |
-//|     tier. When even the 0.01 minimum lot would exceed it the     |
-//|     trade is SKIPPED, not rounded up — so the tiers unlock       |
-//|     one by one as equity grows instead of all firing at          |
-//|     account-ending size on day one. With gold ATR near its       |
-//|     recent norms that means roughly: M5 tradable at $100, M15    |
-//|     from ~$180, M30 from ~$260, H1 from ~$440, H4 from ~$1100.   |
-//|     Those figures move with ATR — the EA prints the live table   |
-//|     to the journal on the first M1 bar (see item 10).            |
-//|  7. Risk ladder re-cut for a $100 standard start and for the     |
-//|     fact that it now means real money: tier 1 (M5 1%, M15 1.5%,  |
-//|     M30 2%, H1 2.5%, H4 3%), tier 2 half of that from $2000,     |
-//|     tier 3 half again from $10000. The parent's 1/1/5/10/20 was  |
-//|     sized against a distance nothing enforced; 20% of equity on  |
-//|     one H4 trade with a real stop is not survivable here.        |
-//|  8. CIRCUIT BREAKERS. Daily loss limit (InpDailyLossLimitPct,    |
-//|     10% of the day's opening equity) stops NEW entries for the   |
-//|     rest of the server day; peak-to-trough drawdown limit        |
-//|     (InpMaxDrawdownPct, 30%) stops new entries until equity      |
-//|     recovers. Both survive a VPS restart via terminal globals.   |
-//|     Neither ever abandons an open position — exits, break-even   |
-//|     and the trail keep running on whatever is already on.        |
-//|  9. No silent fixed-lot fallback (InpFixedLots defaults to 0),   |
+//|  1. MINIMUM-LOT HONESTY GATE. When the risk-correct size lands   |
+//|     below 0.01, SizedLots() prices what the minimum lot would    |
+//|     actually risk over the reference distance and SKIPS the      |
+//|     entry when it exceeds InpMaxRiskPerTradePct of equity (12%). |
+//|     Tiers therefore unlock one at a time as the account grows    |
+//|     rather than all firing at account-ending size on day one.    |
+//|     At $100 on gold that typically means M5 and M15 can trade,   |
+//|     M30 comes in around $150, H1 around $190 and H4 around $470  |
+//|     - but those move with ATR, so the EA prints the live table   |
+//|     to the journal on the first M1 bar (item 6).                 |
+//|  2. A BLOCKED TIER NO LONGER VETOES THE SYMBOL. This is the      |
+//|     important one and it is a BUG FIX, not a tuning change.      |
+//|     ChainAligned() is nested - the M30 tier requires M1+M5+M15+  |
+//|     M30 to agree - so whenever a high tier is aligned, every     |
+//|     tier below it is aligned too, by construction. The first     |
+//|     draft of this file picked the highest aligned tier, sized it |
+//|     once, and skipped the WHOLE SYMBOL when that size came back  |
+//|     zero. On a $100 account the high tiers are unaffordable      |
+//|     nearly always, so every time the market trended hard enough  |
+//|     to align M15/M30/H1 the EA chose that tier, could not pay    |
+//|     for it, and opened nothing - while an affordable M5 entry    |
+//|     sat right there aligned. It could only trade the narrow      |
+//|     case where M1+M5 agreed and M15 did not. An 8-month          |
+//|     backtest produced THREE trades. Now a tier that cannot be    |
+//|     sized loses its turn and the scan walks down to the next     |
+//|     one. No risk rule is relaxed by this - whatever opens has    |
+//|     passed the same ceiling.                                     |
+//|  3. Risk ladder re-cut for a $100 start: tier 1 (M5 1%, M15      |
+//|     1.5%, M30 2%, H1 2.5%, H4 3%), tier 2 half of that from      |
+//|     $2000, tier 3 half again from $10000. Note that below        |
+//|     roughly $300-$1200 of equity these percentages do not bind   |
+//|     at all - the lot floor does - so tune                        |
+//|     InpMaxRiskPerTradePct, not this table, while the account is  |
+//|     small.                                                       |
+//|  4. CIRCUIT BREAKERS. Daily loss limit (20% of the day's         |
+//|     opening equity) stops NEW entries for the rest of the        |
+//|     server day; peak-to-trough drawdown limit (45%) stops them   |
+//|     until equity recovers. Both survive a VPS restart via        |
+//|     terminal globals, so a restart mid-drawdown does not hand    |
+//|     the account a fresh budget. Neither ever abandons an open    |
+//|     position - exits, break-even and the trail keep running.     |
+//|     They are sized against the 4-12% per-trade risk the lot      |
+//|     floor forces here, not against the 1-3% the risk table       |
+//|     nominally asks for.                                          |
+//|  5. No silent fixed-lot fallback (InpFixedLots defaults to 0),   |
 //|     margin cap SKIPS instead of clamping back up to the          |
 //|     minimum, and sizing runs BEFORE the supersede-close so a     |
-//|     gated higher tier can no longer kill a running lower-tier    |
-//|     trade and then open nothing. Carried over from experiments/  |
-//|     experimental-bottomup-stack-standard-account-ea.mq5.         |
-//| 10. STARTUP RISK PREVIEW. On the first M1 bar the EA prints the  |
+//|     gated higher tier can never kill a running lower-tier trade  |
+//|     and then open nothing.                                       |
+//|  6. STARTUP RISK PREVIEW. On the first M1 bar the EA prints the  |
 //|     contract size, the minimum lot, and per tier the live ATR,   |
-//|     stop distance, what 0.01 lot would risk in money and in %    |
-//|     of equity, and whether that tier is tradable right now. Read |
-//|     it before leaving the EA alone — it is the fastest way to    |
-//|     catch a micro symbol left in the Symbols input.              |
+//|     the reference distance, what 0.01 lot would risk in money    |
+//|     and in % of equity, whether that tier is tradable right now  |
+//|     and roughly what equity it needs to unlock. Read it before   |
+//|     leaving the EA alone - it is the fastest way to catch a      |
+//|     micro symbol left in the Symbols input.                      |
+//|  7. OPTIONAL HARD STOP AT ENTRY (InpUseHardStop, InpStopLossATR  |
+//|     x ATR of the tier TF). DEFAULT OFF - see the warning below.  |
 //|                                                                  |
-//| SYMBOL — CHECK THIS FIRST. Symbols defaults to "GOLD#", the XM   |
+//| THE STOPLESS DEFAULT - UNDERSTAND THIS BEFORE DEPLOYING          |
+//| InpUseHardStop defaults to FALSE (user choice, 2026-08-21), so   |
+//| this build behaves like the live parent: NO entry stop, the      |
+//| trade runs to the kumo-touch exit, and the BE/chandelier layer   |
+//| is the only protection once it is green. That keeps the parent's |
+//| let-it-run edge - the edge behind the $100 -> $14000 micro       |
+//| result - fully intact, and a 2 x ATR stop would sometimes have   |
+//| fired where the parent let a trade breathe and recover.          |
+//| The cost is real and worth stating plainly: with no stop         |
+//| attached, InpMaxRiskPerTradePct bounds the SIZE OF THE POSITION, |
+//| not the size of the loss. The reference distance is a sizing     |
+//| basis that nothing enforces. A trade can lose more than 12% if   |
+//| price runs past it, the kumo exit is only evaluated on closed M1 |
+//| bars, and a gap or a news spike between those bars is unbounded  |
+//| - on a standard symbol at 1 oz per 0.01 lot, a $25 move in gold  |
+//| is $25, a quarter of a $100 account, with no smaller size to     |
+//| fall back on. The 45% drawdown halt is the only floor under      |
+//| that. Set InpUseHardStop = true to make the ceiling a genuine    |
+//| per-trade loss cap.                                              |
+//|                                                                  |
+//| SYMBOL - CHECK THIS FIRST. Symbols defaults to "GOLD#", the XM   |
 //| Ultra Low STANDARD gold symbol, not the micro "GOLDm#" the live  |
 //| VPS build trades. Confirm the exact name in Market Watch; if a   |
 //| micro symbol is left here every risk figure in this build is     |
 //| overstated tenfold and the account will simply under-trade.      |
 //|                                                                  |
-//| The parent's strategy description follows, unchanged except      |
-//| where the items above override it.                               |
+//| ENTRY LOGIC IS THE LIVE BUILD'S, UNCHANGED. InpStrictCloudUpTo   |
+//| defaults to STRICTCLOUD_M1 - the M1-strict cloud rule the live   |
+//| build runs and the most profitable one reported. It is exposed   |
+//| as an input so the full current+future check can be walked up    |
+//| to M5, M15 or M30 without editing code, but nothing above M1 is  |
+//| on by default. Spread ceiling and the H1/H4/D1 bias gates are    |
+//| the parent's values too.                                         |
+//|                                                                  |
+//| The parent's strategy description follows, unchanged.            |
 //| DIFFERENT MODEL: the top-down builds required every timeframe    |
 //| from the anchor down to M1 to agree before a single trade could  |
-//| open. This build is BOTTOM-UP — the stack is grown upward from   |
-//| M1 and each tier trades its own chain — with DIRECTION granted   |
+//| open. This build is BOTTOM-UP - the stack is grown upward from   |
+//| M1 and each tier trades its own chain - with DIRECTION granted   |
 //| by a bias timeframe (H4 primary, H1 stand-in) instead of by      |
 //| top-down agreement.                                              |
 //| Entry: per-TF alignment (price + chikou above/below tenkan,      |
@@ -133,56 +130,57 @@
 //|          Tier M30: M1 + M5 + M15 + M30 aligned  -> open trade    |
 //|          Tier H1 : M1 ... H1 aligned            -> open trade    |
 //|          Tier H4 : M1 ... H4 aligned            -> open trade    |
-//|        M1 alone never trades — it is only the start of the stack.|
-//|        The cloud bias gate applies to the tier TF and the TF     |
-//|        directly below it; per TF, M1/M5/M15 need current AND     |
-//|        future, M30+ need only the future cloud. H4 is the bias   |
-//|        for the whole stack (H4 bullish -> buys only, bearish ->  |
-//|        sells only, flat -> no trades), and the H4 tier itself is |
-//|        also gated by the D1 bias: D1 bullish -> only H4 buys, D1 |
-//|        bearish -> only H4 sells, D1 in the cloud -> no H4 trades.|
+//|        M1 alone never trades - it is only the start of the       |
+//|        stack. The cloud bias gate applies to the tier TF and the |
+//|        TF directly below it; at the M1 default, M1 needs current |
+//|        AND future cloud agreement and M5 upward need only the    |
+//|        future cloud. H4 is the bias for the whole stack (H4      |
+//|        bullish -> buys only, bearish -> sells only, flat -> no   |
+//|        trades), and the H4 tier itself is also gated by the D1   |
+//|        bias: D1 bullish -> only H4 buys, D1 bearish -> only H4   |
+//|        sells, D1 in the cloud -> no H4 trades.                   |
 //|        H1 BIAS: an unaligned H4 would otherwise freeze the whole |
-//|        stack, including M5. The lower tiers get a second, smaller|
-//|        bias to fall back on: when H4 carries no direction, a tier|
-//|        at or below InpH1BiasMaxTier may open provided H1 itself  |
-//|        is aligned (same price+chikou test) with the trade. H4    |
-//|        aligned WITH the trade is still the primary path; H4      |
-//|        aligned AGAINST the trade stays blocked unless            |
+//|        stack, including M5. The lower tiers get a second,        |
+//|        smaller bias to fall back on: when H4 carries no          |
+//|        direction, a tier at or below InpH1BiasMaxTier may open   |
+//|        provided H1 itself is aligned (same price+chikou test)    |
+//|        with the trade. H4 aligned WITH the trade is still the    |
+//|        primary path; H4 aligned AGAINST it stays blocked unless  |
 //|        InpH1BiasMode = H1BIAS_ALWAYS. The H4 tier never uses the |
-//|        stand-in, and the D1 filter on the H4 tier is untouched.  |
+//|        stand-in, and the D1 filter on it is untouched.           |
 //| Exit:  price TOUCHES the level TF's cloud edge (no wait for a    |
 //|        candle close inside the kumo). A long exits when the bid  |
 //|        touches the cloud's upper edge; a short when the ask      |
 //|        touches the lower edge. A very strong REJECTION candle    |
 //|        against the trade also closes it when InpRejectionExit is |
-//|        on. Unlike the parent there IS an entry stop loss here    |
-//|        (item 4), and the profit protection layer takes over once |
-//|        the trade turns green:                                    |
-//|          Break-even   : profit >= ATR threshold (tighter for the |
-//|                         H1/H4 levels) -> SL to entry + cover     |
-//|          Chandelier   : H1/H4 levels trail the stop behind the   |
-//|                         peak once profitable (InpTrailActivateATR);|
-//|                         M5/M15/M30 keep the spike-gated trail    |
-//|                         (InpSpikeLockATR), only ever tightening  |
+//|        on. The profit protection layer takes over once the trade |
+//|        turns green:                                              |
+//|          Break-even : profit >= ATR threshold (tighter for the   |
+//|                       H1/H4 levels) -> SL to entry + cover       |
+//|          Chandelier : H1/H4 levels trail the stop behind the     |
+//|                       peak once profitable                       |
+//|                       (InpTrailActivateATR); M5/M15/M30 keep the |
+//|                       spike-gated trail (InpSpikeLockATR), only  |
+//|                       ever tightening                            |
 //|        ATR comes from each level's own TF.                       |
 //| Risk:  single position per level per symbol, with consolidation: |
-//|        when several tiers align at once only the LARGEST opens,  |
-//|        and any smaller tier already running on the symbol is     |
-//|        closed first — so at most one position per symbol runs at |
-//|        a time (the highest aligned tier). See items 4-9 for how  |
-//|        the size of that one position is decided.                 |
-//| VPS:   no Alert() popups and no equity alert — every entry/exit  |
+//|        when several tiers align at once the LARGEST AFFORDABLE   |
+//|        one opens, and any smaller tier already running on the    |
+//|        symbol is closed first. See items 1-5 for how the size of |
+//|        that position is decided.                                 |
+//| VPS:   no Alert() popups and no equity alert - every entry/exit  |
 //|        sends a SendNotification push and a journal Print, and    |
 //|        all logic runs only on closed M1 bars (once per minute).  |
-//| Magic: 20260862 — FRESH. A standard-account instance must never  |
+//| Magic: 20260862 - FRESH. A standard-account instance must never  |
 //|        adopt or manage positions belonging to the live VPS build |
 //|        (20260858), the desktop twin (20260860), the earlier      |
 //|        standard-account fork (20260854) or anything archived.    |
 //|        Do not run this file and a micro-account build on the     |
 //|        same account.                                             |
-//| STATUS: NOT compiled and NOT backtested in this repo. Compile    |
-//|        and demo-test on a standard account before it touches     |
-//|        real money.                                               |
+//| STATUS: NOT compiled and NOT backtested in this repo. The only   |
+//|        recorded run is the user's 8-month backtest of the FIRST  |
+//|        draft, which produced 3 trades and led to items 2 and 7.  |
+//|        Compile and re-test before this touches real money.       |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -201,9 +199,9 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 input group  "Risk — hard stop and per-trade ceiling (READ THESE FIRST)"
-input bool   InpUseHardStop        = true;  // Attach a real stop loss at entry (false = parent's stopless behaviour)
-input double InpStopLossATR        = 1.2;   // Hard stop distance = ATR(tier TF) x this. Also the sizing distance.
-input double InpMaxRiskPerTradePct = 4.0;   // Hard ceiling: max % of equity ANY single trade may lose at its stop. Min-lot trades above this are SKIPPED.
+input bool   InpUseHardStop        = false; // Attach a real stop loss at entry. FALSE = the parent's stopless behaviour (user choice 2026-08-21) — see the warning in the header.
+input double InpStopLossATR        = 2.0;   // Reference distance = ATR(tier TF) x this. Always the SIZING distance; also the hard stop when InpUseHardStop is true.
+input double InpMaxRiskPerTradePct = 12.0;  // Ceiling: max % of equity a trade may risk over the reference distance. An entry whose MINIMUM lot exceeds it is skipped (that tier waits for more equity).
 input double InpMinLots            = 0.01;  // Smallest lot this account can trade (standard account minimum)
 input double InpFixedLots          = 0.0;   // Fallback lots when ATR/tick sizing data is unavailable (0 = skip the trade instead)
 
@@ -227,9 +225,9 @@ input double InpRiskPctH1_T3    = 0.625;  // H1   — tier 3
 input double InpRiskPctH4_T3    = 0.75;   // H4   — tier 3
 
 input group  "Circuit Breakers (block NEW entries; open trades keep being managed)"
-input double InpDailyLossLimitPct = 10.0; // Stop new entries once the day is down this % of its opening equity (0 = off)
-input double InpMaxDrawdownPct    = 30.0; // Stop new entries while equity is this % below its peak (0 = off)
-input int    InpLossCooldownMin   = 60;   // After a LOSING close, no new entry on that symbol for this many minutes (0 = off)
+input double InpDailyLossLimitPct = 20.0; // Stop new entries once the day is down this % of its opening equity (0 = off)
+input double InpMaxDrawdownPct    = 45.0; // Stop new entries while equity is this % below its peak (0 = off)
+input int    InpLossCooldownMin   = 0;    // After a LOSING close, no new entry on that symbol for this many minutes (0 = off, the default here)
 input bool   InpResetBreakers     = false;// Set true for ONE init to clear the stored equity peak and daily budget (use after a deposit, a reset, or moving the EA to another account), then set it back to false
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
@@ -260,10 +258,10 @@ enum ENUM_STRICT_CLOUD_TF
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require the Span A vs Span B cloud bias at all
-input ENUM_STRICT_CLOUD_TF InpStrictCloudUpTo = STRICTCLOUD_M15; // TFs needing current+future cloud agreement (above this: future cloud only)
+input ENUM_STRICT_CLOUD_TF InpStrictCloudUpTo = STRICTCLOUD_M1;  // TFs needing current+future cloud agreement (above this: future cloud only). M1 = the live build's proven rule.
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
-input int    InpMaxSpreadPoints  = 35;     // Max spread in points to allow entry (0 = no limit) — tighter than the parent's 60
+input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit) — same as the live build
 
 input group  "H1 Bias (lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (H4 only), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
@@ -661,15 +659,18 @@ bool CloudBiasFarOK(int s, int tfIdx, int dir)
 }
 
 //==============================================================
-// Per-TF cloud rule (THE TRADE-QUALITY CHANGE). Every timeframe
-// at or below InpStrictCloudUpTo takes the FULL check — current
-// AND future cloud must both be twisted the trade's way. Every
-// timeframe above it needs only the FUTURE cloud; its current
-// cloud may be any value.
+// Per-TF cloud rule, now a tunable rather than a hard-coded split.
+// Every timeframe at or below InpStrictCloudUpTo takes the FULL
+// check — current AND future cloud must both be twisted the
+// trade's way. Every timeframe above it needs only the FUTURE
+// cloud; its current cloud may be any value.
 //
-// Default InpStrictCloudUpTo = STRICTCLOUD_M15 (index 2), so M1,
-// M5 and M15 take the full check and M30/H1/H4 stay future-only.
-// The parent build had the cut at M1.
+// DEFAULT IS STRICTCLOUD_M1 — exactly the live VPS build's rule,
+// the most profitable one reported. An earlier draft of this file
+// shipped with the cut at M15, which (together with the tier bug
+// fixed in OnTick) is why an 8-month backtest produced 3 trades.
+// STRICTCLOUD_M5 and _M15 are the second- and third-strictest
+// settings if this proves to over-trade; nothing else changes.
 //==============================================================
 
 bool CloudBiasTFOK(int s, int tfIdx, int dir)
@@ -682,15 +683,16 @@ bool CloudBiasTFOK(int s, int tfIdx, int dir)
 // Level Cloud Bias Gate: unchanged in shape — the tier's own TF
 // (lvl+1) and the TF directly below it (lvl) must both pass —
 // but each is now judged by CloudBiasTFOK above rather than by a
-// hard-coded M1-versus-the-rest split. Per tier, with the M15
-// default:
-//   M5  tier : M1 current+future  + M5  current+future
-//   M15 tier : M5 current+future  + M15 current+future
-//   M30 tier : M15 current+future + M30 future
-//   H1  tier : M30 future         + H1  future
-//   H4  tier : H1 future          + H4  future
-// Note the M30 tier gets stricter too, through its M15-below
-// component — that is intended, not a side effect.
+// hard-coded M1-versus-the-rest split. Per tier, at the shipped
+// STRICTCLOUD_M1 default:
+//   M5  tier : M1 current+future + M5  future
+//   M15 tier : M5 future         + M15 future
+//   M30 tier : M15 future        + M30 future
+//   H1  tier : M30 future        + H1  future
+//   H4  tier : H1 future         + H4  future
+// Raising InpStrictCloudUpTo walks the full check up the stack one
+// timeframe at a time; each step also tightens the tier ABOVE the
+// one named, because every tier checks the TF directly below it.
 //==============================================================
 
 bool LevelCloudBiasOK(int s, int lvl, int dir)
@@ -1053,40 +1055,42 @@ bool CooldownActive(int s, int &minsLeft)
 //==============================================================
 // Risk Management (REBUILT for a $100 STANDARD account).
 //
-// THE PROBLEM THIS SOLVES. The parent sized every trade against a
-// "reference distance" of ATR(level TF) x 2 that no order ever
-// carried — there was no entry stop at all — and then ended with
+// THE PROBLEM THIS SOLVES. The parent sizes every trade against a
+// "reference distance" of ATR(level TF) x 2 and then ends with
 // MathMax(lotMin, lots), silently rounding any sub-minimum size UP
-// to 0.01. Two consequences, both invisible on a micro symbol and
-// both fatal on a $100 standard one: the number called "risk" was
-// not the money the trade could actually lose, and below roughly
-// $10k of equity EVERY trade was a minimum-lot trade whose real
-// risk was set by the broker's lot floor rather than by the risk
-// table.
+// to 0.01. On a micro symbol that rounding is harmless. On a
+// STANDARD gold symbol 0.01 lot is 1 oz — about $1 of P/L per $1
+// of gold — so below roughly $10k of equity EVERY trade is a
+// minimum-lot trade whose real exposure is set by the broker's lot
+// floor rather than by the risk table. The percentages become
+// decoration.
 //
-// WHAT THIS BUILD DOES INSTEAD.
-//   1. The sizing distance IS the stop distance — ATR(tier TF) x
-//      InpStopLossATR, floored at the broker's stops level — and
-//      that stop is really attached to the order (see OpenLevel).
-//      A tier's risk % is therefore the money genuinely at risk.
-//   2. When the risk-correct size lands below the minimum lot the
-//      trade is NOT silently inflated. SizedLots() prices what
-//      0.01 lot would actually lose at the stop and SKIPS the
-//      entry when that exceeds InpMaxRiskPerTradePct of equity.
-//      The tiers therefore unlock one at a time as the account
-//      grows — at $100 on gold typically only M5 can trade, and
-//      the higher tiers open up on their own as equity climbs.
-//      This is the intended behaviour, not a bug: the alternative
-//      is an H4 trade risking a third of the account.
-//   3. InpMaxRiskPerTradePct is a hard ceiling on EVERY path, not
-//      just the min-lot one. A risk-table size that would exceed
-//      it is cut back to it.
-//   4. No silent fixed-lot fallback (InpFixedLots defaults to 0)
-//      and the margin cap SKIPS rather than clamping back up to
-//      the minimum.
-// Skips are logged, throttled to one line per symbol/level per
-// hour so a tier that stays aligned and blocked all afternoon does
-// not flood the journal.
+// WHAT THIS BUILD DOES INSTEAD. When the risk-correct size lands
+// below the minimum lot the trade is not silently inflated:
+// SizedLots() prices what 0.01 lot would risk over the reference
+// distance and returns 0 — skip — when that exceeds
+// InpMaxRiskPerTradePct of equity. Tiers therefore unlock one at a
+// time as the account grows instead of all firing at
+// account-ending size on day one. A tier that returns 0 does NOT
+// veto the symbol: the entry scan in OnTick walks down to the next
+// affordable tier (see the long note there).
+//
+// READ THIS IF InpUseHardStop IS FALSE — it is, by default.
+// With no stop attached, the reference distance is a SIZING BASIS
+// ONLY. Nothing enforces it. InpMaxRiskPerTradePct then bounds the
+// size of the position, not the size of the loss: the trade runs
+// to the kumo-touch exit and can lose more than the ceiling names
+// if price runs past the reference distance, and a gap or a news
+// spike between closed M1 bars is unbounded. That is the live
+// build's behaviour and it was chosen deliberately here (user,
+// 2026-08-21) to keep the parent's let-it-run edge intact. Set
+// InpUseHardStop = true to make the ceiling a real loss cap.
+//
+// Also: no silent fixed-lot fallback (InpFixedLots defaults to 0)
+// and the margin cap SKIPS rather than clamping back up to the
+// minimum. Skips are logged, throttled to one line per
+// symbol/level per hour so the tiers that stay blocked all
+// afternoon do not flood the journal.
 //==============================================================
 
 double LevelRiskPct(int lvl)
@@ -1150,10 +1154,12 @@ void LogSizingSkip(int s, int lvl, string why)
    Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " entry skipped — " + why);
 }
 
-// The hard stop distance in PRICE for a tier: ATR(tier TF) x
-// InpStopLossATR, never inside the broker's minimum stop distance
-// (a stop the server would reject is worse than no stop, because the
-// whole order gets rejected with it). Returns 0 when ATR is unreadable.
+// The reference distance in PRICE for a tier: ATR(tier TF) x
+// InpStopLossATR. This is ALWAYS the sizing distance, and it is
+// additionally attached to the order as a real stop when
+// InpUseHardStop is true. Floored so a stop the server would reject
+// is never sent (a rejected stop takes the whole order with it).
+// Returns 0 when ATR is unreadable.
 double StopDistanceFor(int s, int lvl)
 {
    double a[1];
@@ -1245,8 +1251,9 @@ double SizedLots(int s, int lvl, bool quiet = false)
       {
          if(!quiet) LogSizingSkip(s, lvl, "min lot " + DoubleToString(lotMin, 2) + " would risk " +
                        DoubleToString(minLotRisk, 2) + " (" + DoubleToString(minLotPct, 1) +
-                       "% of equity) at a " + DoubleToString(stopDist, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)) +
-                       " stop, vs the " + DoubleToString(riskPct, 3) + "% this level asks for; ceiling is " +
+                       "% of equity) over a " + DoubleToString(stopDist, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)) +
+                       (InpUseHardStop ? " stop" : " reference distance") +
+                       ", vs the " + DoubleToString(riskPct, 3) + "% this level asks for; ceiling is " +
                        DoubleToString(InpMaxRiskPerTradePct, 1) + "%. This tier unlocks as equity grows.");
          return 0.0;
       }
@@ -1326,7 +1333,7 @@ void PrintRiskPreview(int s)
 
       Print("  ", tfName[l + 1],
             " | ATR ", DoubleToString(atrVal, digits),
-            " | stop ", DoubleToString(stopDist, digits),
+            (InpUseHardStop ? " | stop " : " | ref dist "), DoubleToString(stopDist, digits),
             " | risk% ", DoubleToString(LevelRiskPct(l), 3),
             " | min lot risks ", DoubleToString(minLotRisk, 2),
             " (", DoubleToString(minLotPct, 1), "% of equity)",
@@ -1364,13 +1371,17 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
 
-   // HARD STOP AT ENTRY — the change the parent does not have. The kumo
-   // touch is still the trade's normal exit and usually fires long before
-   // this; the stop is the backstop for the gap, the spike and the news
-   // print, which on a $100 standard account is the difference between a
-   // bad trade and no account. It is the same distance the position was
-   // sized against, so the loss it caps is the loss the risk table priced.
-   // The BE/chandelier layer only ever tightens it from here.
+   // OPTIONAL hard stop at entry — OFF by default in this build.
+   //
+   // When on, it sits at the same distance the position was sized against,
+   // so the loss it caps is the loss the risk table priced, and it is the
+   // backstop for the gap and the news spike that the once-a-minute kumo
+   // check cannot catch. When off (the default, user choice 2026-08-21)
+   // this build behaves exactly like the live parent: no entry stop, the
+   // trade runs to the kumo-touch exit, and the BE/chandelier layer is the
+   // only protection once it turns green. The trade-off is stated in the
+   // file header — a stop at 2 x ATR would sometimes fire where the parent
+   // would have let the trade breathe and recover.
    double sl = 0.0;
    if(InpUseHardStop)
    {
@@ -1727,13 +1738,15 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
       }
 
-      // Entry consolidation: when several tiers align at once, only the
-      // LARGEST one opens (highest TF wins). Any smaller tier already
-      // running on the symbol is closed first — e.g. M15 and M30 align
-      // together: the running M15 trade closes and only M30 opens.
+      // Entry consolidation: when several tiers align at once, the LARGEST
+      // AFFORDABLE one opens — highest TF that clears the risk ceiling,
+      // not simply the highest TF. Any smaller tier already running on the
+      // symbol is closed first: M15 and M30 align together and M30 can be
+      // paid for, so the running M15 trade closes and only M30 opens.
       int    topTier = -1;
       int    topDir  = 0;
       string topVia  = "--";
+      double topLots = 0.0;
 
       // Entry gates that apply to the whole symbol, checked before the
       // per-tier scan so a halted account does nothing but manage.
@@ -1764,23 +1777,43 @@ void OnTick()
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
 
+            // AFFORDABILITY IS PART OF TIER SELECTION, NOT A VETO ON THE
+            // SYMBOL. This is the fix for the 3-trades-in-8-months result.
+            //
+            // ChainAligned() is nested: the M30 tier requires M1+M5+M15+M30
+            // to agree, so whenever a HIGH tier is aligned every tier below
+            // it is aligned too, by construction. The build used to pick the
+            // highest aligned tier, size it once, and skip the whole symbol
+            // when that size came back 0. On a $100 account the high tiers
+            // are unaffordable almost always — so every time the market
+            // trended hard enough to align M15/M30/H1, the EA selected that
+            // tier, could not pay for it, and opened NOTHING, while a
+            // perfectly good M5 entry sat right there aligned and affordable.
+            // It could only ever trade the narrow case where M1+M5 agreed and
+            // M15 did not. The strongest setups were the ones discarded.
+            //
+            // Now a tier that cannot be sized simply loses its turn and the
+            // scan walks DOWN to the next one. No risk rule is relaxed by
+            // this: whatever finally opens has passed the same ceiling. As
+            // equity grows the bigger tiers become affordable and take over
+            // through the normal supersede path.
+            double lots = SizedLots(s, l);
+            if(lots <= 0) continue;
+
             topTier = l;
             topDir  = st;
             topVia  = via;
+            topLots = lots;
             break;
          }
       }
 
       if(topTier >= 0)
       {
-         // Size the trade BEFORE superseding anything. A size of 0 means
-         // this tier cannot be opened inside its risk budget (see
-         // SizedLots) — on a small standard account the higher tiers are
-         // blocked most of the time, and killing a running lower-tier
-         // trade for an entry that can never be sent would leave the
-         // symbol flat for no reason. So skip the whole consolidation.
-         double lots = SizedLots(s, topTier);
-         if(lots <= 0) continue;
+         // Sized during the scan above, BEFORE anything is superseded — so a
+         // tier that cannot be paid for never kills a running lower-tier
+         // trade on its way to opening nothing.
+         double lots = topLots;
 
          // Close any smaller (lower-tier) trades still running
          for(int l = 0; l < topTier; l++)

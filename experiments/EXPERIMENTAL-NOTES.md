@@ -3060,27 +3060,25 @@ the third-most-profitable parent load cleanly.**
 
 ---
 
-## 30. Bottom-Up Stack EA — STANDARD-ACCOUNT build ($100), M1/M5/M15-strict cloud + hard stop + circuit breakers
+## 30. Bottom-Up Stack EA — STANDARD-ACCOUNT build ($100 start)
 
-**File:**
-`experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5`
+**File:** `experimental-bottomup-stack-standard-account-v2-ea.mq5`
+(renamed from `...-m1m5m15-cloud-ea.mq5` once the M15 cloud rule was
+reverted — the name no longer described the build)
 **Forked from:** the LIVE VPS build `ichimoku-h4-m1-vps-ea.mq5` (magic
-`20260858`, the M1-strict cloud-bias build), which is untouched — as is the
+`20260858`, the M1-strict cloud-bias build), which is untouched, as is the
 desktop twin. This is the first standard-account fork taken from the
-current live logic; the earlier one (section 22, magic `20260854`) was
-forked from the retired H1-bias parent and does **not** carry the
-cloud-bias rule.
+current live logic; the earlier one (section 22, magic `20260854`) forked
+the retired H1-bias parent and does **not** carry the cloud-bias rule.
 **Magic number:** `20260862` — fresh, so a standard-account instance never
 adopts or manages positions belonging to the live VPS build (`20260858`),
-the desktop twin (`20260860`), the earlier standard-account fork
-(`20260854`) or anything else in the lineage.
+the desktop twin (`20260860`) or the earlier standard-account fork
+(`20260854`).
 
 The live strategy re-scaled for a **standard (full-size) account funded
 with about $100**, replacing the XM Ultra Low **Micro** account it runs on
-today. Unlike section 22 this is not a money-management-only fork: the
-entry gate is tightened as well, at the user's request, because the risk
-work below cuts the tradable universe down and the trades that survive
-should be the best ones available.
+today. **The entry logic is the live build's, unchanged.** Only money
+management, the affordability gate and the account-level breakers differ.
 
 ### Why a standard account changes everything
 
@@ -3088,167 +3086,128 @@ On a **micro** gold symbol one lot is 10 oz, so the 0.01 minimum is 0.1 oz
 and moves about **$0.10** per $1 of gold. On a **standard** gold symbol one
 lot is 100 oz: the same 0.01 minimum is 1 oz and moves about **$1.00** per
 $1 of gold — **ten times the exposure for the identical number in the
-volume box**, and the smallest trade the broker will accept.
+volume box**, and the smallest trade the broker accepts.
 
-Two consequences, both invisible on the micro account:
+The parent's sizing ends with `MathMax(lotMin, lots)`, so any risk-correct
+size below 0.01 is silently rounded **up**. Below roughly $10k of equity
+that is *every* trade: the real exposure is set by the broker's lot floor,
+not by the configured percentage, and the risk table becomes decoration.
 
-1. **The parent's risk table stops meaning anything.** Its sizing ends
-   with `MathMax(lotMin, lots)`, so any risk-correct size below 0.01 is
-   silently rounded **up**. Below roughly $10k of equity every single trade
-   is a minimum-lot trade whose real risk is set by the broker's lot floor,
-   not by the percentage configured.
-2. **The parent has no entry stop at all.** The trade runs to the
-   kumo-touch exit, and that exit is only evaluated on closed M1 bars. A
-   news spike moving gold $25 inside one minute costs $25 at 0.01 standard
-   lot — a quarter of a $100 account — and there is no smaller size to fall
-   back on.
+### Iteration 1 — and why it produced 3 trades in 8 months
 
-### What changed — trade quality
+The first draft (backtested by the user, 2026-08-21) added a 4% per-trade
+ceiling, a 1.2 × ATR hard stop, an M1+M5+M15 strict cloud gate, a 35-point
+spread ceiling, a 60-minute post-loss cooldown and 10%/30% breakers. **An
+8-month run opened three trades.** Three causes, in order of size:
 
-1. **Strict cloud on M1, M5 and M15.** The live build requires the cloud
-   twist (Span A vs Span B) to agree at **both** the current bar and the
-   far end of the future cloud on **M1 only**; M5 and above are
-   future-cloud-only. Here the full check reaches **M1, M5 and M15**, with
-   M30 upward left future-only — the rule from section 28. Per tier:
+**1. A blocked tier vetoed the whole symbol — the dominant cause, and a
+genuine bug.** `ChainAligned()` is nested: the M30 tier requires
+M1+M5+M15+M30 to agree. So **whenever a high tier is aligned, every tier
+below it is aligned too, by construction.** The entry scan picked the
+*highest* aligned tier, sized it once, and did:
 
-   | Tier | Cloud requirements |
-   |------|--------------------|
-   | M5   | M1 current+future **+** M5 current+future |
-   | M15  | M5 current+future **+** M15 current+future |
-   | M30  | M15 current+future **+** M30 future |
-   | H1   | M30 future + H1 future |
-   | H4   | H1 future + H4 future |
+```
+double lots = SizedLots(s, topTier);
+if(lots <= 0) continue;        // skips the ENTIRE symbol
+```
 
-   The cut is now an input, `InpStrictCloudUpTo` (`STRICTCLOUD_M1` /
-   `_M5` / `_M15` / `_M30`, default `_M15`), so it can be walked back to
-   the live build's rule without editing code. `CloudBiasTFOK()` replaces
-   the hard-coded M1-versus-the-rest split in `LevelCloudBiasOK()`.
-2. **Spread ceiling 60 → 35 points.**
-3. **Post-loss cooldown** (`InpLossCooldownMin`, 60 min). Not cosmetic —
-   see the hard stop below.
+At $100 the high tiers are unaffordable nearly always. So every time the
+market trended hard enough to align M15/M30/H1, the EA selected that tier,
+found it unaffordable, and **opened nothing** — while an affordable M5
+entry sat right there, aligned. It could only trade the narrow case where
+M1+M5 agreed and M15 did *not*. **The strongest setups were exactly the
+ones discarded.**
 
-### What changed — risk
+**2. The shipped defaults did not match this file's own header.** An edit
+that widened the stop aborted before writing the input block: the header
+documented 2.0 × ATR and a 5% ceiling while the actual inputs were
+`InpStopLossATR = 1.2` and `InpMaxRiskPerTradePct = 4.0`. The backtest ran
+a tighter build than the documentation described.
 
-4. **Hard stop loss at entry** (`InpUseHardStop`, `InpStopLossATR` = 2.0 ×
-   ATR of the tier TF, floored at 1.5 × the broker's stops level). The
-   single most important change. **2.0 × ATR is deliberately the same
-   distance the parent already used as its sizing "reference distance"** —
-   the room it implicitly treated the trade as working within. This build
-   makes that distance real and attaches it to the order.
-5. **Risk is priced against that real stop.** The sizing distance **is**
-   the stop distance, so a tier's risk % is money genuinely at risk rather
-   than a notional figure. `InpRiskATRMult` is gone; `InpStopLossATR`
-   replaces it.
-6. **Hard per-trade ceiling** (`InpMaxRiskPerTradePct`, 5%). No entry may
-   risk more than this at its stop. When even the 0.01 minimum lot would
-   exceed it, `SizedLots()` **skips** the entry instead of rounding up —
-   so tiers unlock one at a time as equity grows.
-7. **Risk ladder re-cut**, because the percentages now bind on real money:
+**3. The ceiling sat near the floor.** On standard gold 0.01 lot ≈ $1 per
+$1 of gold, so a trade's minimum possible risk *is* the reference distance
+in dollars. At 4% of $100 = $4 with a 1.2 × ATR stop, the M5 tier only
+cleared when ATR(M5) ≤ $3.33 — roughly half the session — and every other
+tier was permanently blocked.
 
-   | Regime | Equity | M5 | M15 | M30 | H1 | H4 |
-   |--------|--------|----|-----|-----|----|----|
-   | Tier 1 | < $2000 | 1% | 1.5% | 2% | 2.5% | 3% |
-   | Tier 2 | $2000–$10000 | 0.5% | 0.75% | 1% | 1.25% | 1.5% |
-   | Tier 3 | ≥ $10000 | 0.25% | 0.375% | 0.5% | 0.625% | 0.75% |
+### Iteration 2 — what it does now
 
-   The parent's 1/1/5/10/20 was sized against a distance nothing enforced;
-   20% of equity on one H4 trade **with a real stop** is not survivable at
-   this size.
-8. **Circuit breakers.** Daily loss limit (`InpDailyLossLimitPct`, 10% of
-   the day's opening equity) blocks new entries for the rest of the server
-   day; peak-to-trough drawdown limit (`InpMaxDrawdownPct`, 30%) blocks
-   them until equity recovers. Both references live in terminal global
-   variables keyed by the magic number, so a **VPS restart mid-drawdown
-   does not hand the account a fresh budget**. Neither ever abandons an
-   open position — exits, break-even and the trail keep running.
-   `InpResetBreakers` clears the stored state for one init.
-9. **Carried over from section 22:** no silent fixed-lot fallback
-   (`InpFixedLots` defaults to 0), the margin cap **skips** instead of
-   clamping back up to the minimum, and sizing runs **before** the
-   supersede-close so a gated higher tier cannot kill a running lower-tier
-   trade and then open nothing.
-10. **Startup risk preview.** On the first M1 bar the EA prints, per tier,
-    the live ATR, the stop distance, what 0.01 lot would risk in money and
-    in % of equity, whether the tier is tradable right now, and the
-    approximate equity each blocked tier needs to unlock. It also prints
-    the symbol's contract size — the fastest way to catch a micro symbol
-    left in the `Symbols` input.
+**The fix (not a tuning change): a tier that cannot be sized loses its
+turn and the scan walks DOWN to the next one**, instead of vetoing the
+symbol. `SizedLots()` moved inside the tier scan, its result carried out in
+`topLots`. No risk rule is relaxed — whatever finally opens has passed the
+same ceiling. As equity grows the bigger tiers become affordable and take
+over through the normal supersede path. This alone should move the trade
+count by orders of magnitude.
 
-### The cooldown is required, not optional
+**Tuning, per the user's choices (2026-08-21):**
 
-Adding a hard stop introduces a failure mode the stopless parent does not
-have: the stack can be stopped out and then find the **same setup still
-aligned** on the very next M1 bar, re-enter, and be stopped again. Every
-one of those trades is inside its risk budget, so no per-trade cap catches
-it — the account just bleeds. Hence the 60-minute post-loss cooldown per
-symbol.
+| Input | Iteration 1 | Now | Why |
+|-------|-------------|-----|-----|
+| `InpUseHardStop` | `true` | **`false`** | Keeps the parent's let-it-run edge intact |
+| `InpStopLossATR` | 1.2 | **2.0** | Matches the parent's own reference distance; sizing basis |
+| `InpMaxRiskPerTradePct` | 4% | **12%** | The lot floor forces 4–12% at $100; 4% sat below it |
+| `InpStrictCloudUpTo` | `_M15` | **`_M1`** | Reverts to the live build's proven rule |
+| `InpMaxSpreadPoints` | 35 | **60** | The live build's value |
+| `InpLossCooldownMin` | 60 | **0** | Off; the churn risk it guarded is stop-driven, and the stop is off |
+| `InpDailyLossLimitPct` | 10% | **20%** | At 4–12% per trade, 10% was one losing trade per day |
+| `InpMaxDrawdownPct` | 30% | **45%** | 30% was ~4 losses to a permanent halt |
 
-Loss times are read from the **deal history**, not from `ExitLevel()`,
-because a stop-out is executed by the server and never passes through the
-EA's exit path. Positions closed by the **supersede** rule are excluded
-via a ring of position IDs (`MarkLevelSuperseded()` / `WasSuperseded()`) —
-a tier closed because a bigger one took over is a position upgrade, not
-the losing trade the cooldown exists to follow.
-
-### What this actually does at $100 — read before deploying
+### What this does at $100
 
 Gold on a standard symbol: 0.01 lot ≈ $1 of P/L per $1 of gold, so the
-minimum lot's risk in dollars is simply the stop distance in dollars.
-With `InpStopLossATR` = 2.0 and the 5% ceiling:
+minimum lot's risk in dollars is simply the reference distance in dollars.
+With `InpStopLossATR` = 2.0 and the 12% ceiling ($12 at $100):
 
-| Tier | Typical ATR | Stop | 0.01 lot risks | Tradable at $100? | Unlocks near |
-|------|-------------|------|----------------|-------------------|--------------|
-| M5   | $2.0  | $4.00  | $4.00  | **yes** (4%) | — |
-| M15  | $4.5  | $9.00  | $9.00  | no (9%) | ~$180 |
-| M30  | $6.5  | $13.00 | $13.00 | no (13%) | ~$260 |
-| H1   | $11   | $22.00 | $22.00 | no (22%) | ~$440 |
-| H4   | $28   | $56.00 | $56.00 | no (56%) | ~$1100 |
+| Tier | Typical ATR | Ref distance | 0.01 lot risks | Tradable at $100? |
+|------|-------------|--------------|----------------|-------------------|
+| M5   | $2–4   | $4–8   | $4–8   | **yes** (4–8%) |
+| M15  | $4–6   | $8–12  | $8–12  | **usually** (8–12%) |
+| M30  | $6–9   | $12–18 | $12–18 | borderline; unlocks ~$150 |
+| H1   | ~$11   | ~$22   | ~$22   | no; unlocks ~$190 |
+| H4   | ~$28   | ~$56   | ~$56   | no; unlocks ~$470 |
 
-Those ATRs are illustrative — the real figures move daily, which is why
-item 10 prints the live table. Two things follow, and neither is a bug:
+Those ATRs are illustrative. The EA prints the **live** table on the first
+M1 bar, and the journal's `entry skipped — min lot ... would risk ...`
+lines carry the exact figures for any tier that is blocked.
 
-- **At $100 essentially only the M5 tier can trade**, and the higher tiers
-  unlock on their own as equity grows. That is the gate working. The
-  alternative is an H4 trade risking half the account.
-- **The risk percentages are not the binding constraint at this size.**
-  Below roughly $300 (M5) to $1200 (H4) every trade is 0.01 lot and what
-  governs risk is `InpMaxRiskPerTradePct` and the tier's ATR. **Tune that
-  input, not the risk table, while the account is small.**
-
-Combined worst case with the defaults: ≤5% per trade, ≤10% per day, and a
-hard halt at 30% off the peak.
+**The risk percentages are not the binding constraint at this size.**
+Below roughly $300 (M5) to $1200 (H4) every trade is 0.01 lot and what
+governs risk is `InpMaxRiskPerTradePct` and the tier's ATR. Tune that
+input, not the risk table, while the account is small.
 
 ### Status & caveats
 
-- **Not compiled, not backtested here.** No F7 compile or Strategy Tester
-  run is recorded in this repo. Compile and demo-test on a standard
-  account before this touches real money.
-- **The hard stop is not a strictly better build.** A stop at 2 × ATR will
-  sometimes fire where the kumo-touch exit would have let the trade
-  breathe and recover. It trades a slice of the parent's let-it-run edge —
-  the edge that produced the $100 → $14000 micro-account report — for a
-  bounded worst case. That is the intended bargain at this account size,
-  and it is the main thing a backtest should measure. `InpUseHardStop =
-  false` reproduces the parent exactly.
+- **Not compiled, not backtested here.** The only recorded run is the
+  user's 8-month test of iteration 1 (3 trades). Compile and re-test.
+- **`InpUseHardStop = false` means the ceiling bounds POSITION SIZE, not
+  loss size.** With no stop attached the reference distance is a sizing
+  basis nothing enforces: a trade can lose more than 12% if price runs past
+  it, the kumo exit is only evaluated on closed M1 bars, and a gap or news
+  spike between bars is unbounded — $25 of gold is $25 at 0.01 standard
+  lot. The 45% drawdown halt is the only floor under that. Set
+  `InpUseHardStop = true` to make the ceiling a genuine loss cap.
+- **12% per trade is large in absolute terms** and is a floor imposed by
+  the broker's minimum lot, not a preference. There is no setting that
+  makes a $100 standard gold account risk 2% per trade — the smallest
+  tradable position is what it is. The honest alternatives are more
+  starting equity, a smaller-contract instrument, or accepting this.
+- **Pre-existing in the live build, not introduced here:** the entry scan
+  skips a tier that already holds a position and keeps scanning *down*, so
+  a lower tier can open while a higher one is still running — the "at most
+  one position per symbol" claim in the parent's header is not enforced in
+  code. Left as the parent has it rather than silently changed, but it
+  matters more here, where two concurrent minimum-lot positions on a $100
+  account can be 20%+ of equity at once. Worth a decision.
 - **`Symbols` defaults to `"GOLD#"`, not `"GOLDm#"`.** Confirm the exact
-  standard-account symbol in Market Watch. A micro symbol left here makes
-  every risk figure tenfold conservative and the account will simply
-  under-trade.
-- **The tier thresholds ($2000 / $10000) are a judgement call.** They sit
-  deliberately above the point where the percentages start to bind
-  (~$300–$1200), so the account is not de-risked while the lot floor is
-  still doing the governing. Section 22 used $700/$1300 and its own notes
-  flag that as debatable for the same reason.
-- **The 30% drawdown breaker does not reset itself.** That is deliberate —
-  a 30% hole on a $100 account is a decision to make, not a limit to wait
-  out. Clear it with one init at `InpResetBreakers = true`, or set
-  `InpMaxDrawdownPct = 0` to disable it.
+  standard-account symbol in Market Watch.
+- **The 45% drawdown breaker does not reset itself** — deliberate. Clear it
+  with one init at `InpResetBreakers = true`, or set `InpMaxDrawdownPct`
+  to 0.
 - **Circuit-breaker globals are per-terminal, not per-account.** Run one
-  instance of this build per terminal, and use `InpResetBreakers` after
-  moving it to a different account or making a deposit.
-- **`.set` files from the parent will not load here** — `InpRiskATRMult`
-  is gone, `InpFixedLots` changed meaning, and the stop, ceiling, breaker
-  and strict-cloud inputs are new.
-- **Micro-account instances must not run this file, and vice versa.** The
-  magic numbers differ deliberately so the two never manage each other's
-  positions.
+  instance per terminal; use `InpResetBreakers` after moving accounts or
+  making a deposit.
+- **`.set` files from the parent will not load** — `InpRiskATRMult` is
+  gone, `InpFixedLots` changed meaning, and the ceiling, breaker and
+  strict-cloud inputs are new.
+- **Micro-account instances must not run this file, and vice versa.**
