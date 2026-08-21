@@ -9,11 +9,13 @@
 //| previous bottom-up bias-stack VPS build (magic 20260850), which   |
 //| is archived as archives/ichimoku-h4-m1-vps-ea-archived20260820.   |
 //| mq5 and is no longer deployed.                                    |
-//| BTCUSD# TEST FORK (experiment) — identical logic to the live      |
-//| VPS build, but: (1) Symbols preset to "BTCUSD#" for crypto        |
-//| testing, (2) InpMaxSpreadPoints = 0 — the 60-point cap tuned for  |
-//| GOLDm# blocked every BTCUSD# entry (2-digit BTC spreads are 100+  |
-//| points), (3) fresh magic 20260861 so it never touches the live    |
+//| BTCUSD# TEST FORK (experiment) — the live VPS logic extended for  |
+//| crypto testing: (1) Symbols preset to "BTCUSD#"; (2) spread gate  |
+//| disabled (InpMaxSpreadPoints = 0 — the 60-point cap tuned for     |
+//| GOLDm# blocked every BTCUSD# entry: 2-digit BTC spreads are 100+  |
+//| points); (3) M5 joins M1 in the FULL cloud-bias check (current    |
+//| AND future cloud must agree — the parent rule was M1-strict       |
+//| only); (4) fresh magic 20260861 so it never touches the live      |
 //| build's positions (20260858 VPS / 20260860 desktop). The live     |
 //| VPS build is NOT modified. Delete the fork when testing is done.  |
 //| EXPERIMENTAL RULE — the only change vs the parent build: the      |
@@ -26,6 +28,9 @@
 //| it): the tier's own M5+ TF is checked future-only, and the M5     |
 //| tier additionally checks M1 with the full current+future rule —  |
 //| M1 is the only timeframe that must fully agree.                   |
+//| THIS FORK ALSO: M5 gets the same full check as M1 — current AND   |
+//| future cloud must agree on M5 wherever the gate touches it (its   |
+//| own M5 tier, and as the TF directly below the M15 tier).          |
 //| DIFFERENT MODEL: the top-down builds required every timeframe     |
 //| from the anchor down to M1 to agree before a single trade could   |
 //| open. This build is BOTTOM-UP — the stack is grown upward from    |
@@ -45,8 +50,9 @@
 //|        The cloud bias gate (Span A vs Span B) applies to the tier |
 //|        TF and the TF directly below it: M1 must be twisted the     |
 //|        trade's way at both the current bar and the far end of the |
-//|        future cloud; M5 and above need only the far end — the     |
-//|        current cloud may be either direction. H4 is the bias for  |
+//|        future cloud; in this fork M5 gets the same full check;    |
+//|        M15 and above need only the far end — the current cloud    |
+//|        may be either direction. H4 is the bias for  |
 //|        the whole stack (H4 bullish -> buys only, bearish -> sells |
 //|        only, flat -> no trades), and the H4 tier itself is also   |
 //|        gated by the D1 bias: D1 bullish -> only H4 buys, D1       |
@@ -484,8 +490,8 @@ int DailyAlign(int s)
 // (Span A above Span B for a long, below for a short) at BOTH
 // the last closed bar (the immediate cloud where price sits)
 // and the far end of the future-cloud window. This is the
-// parent's full check — the strictest form. Used ONLY on the
-// M1 timeframe (see LevelCloudBiasOK). Unreadable values count
+// parent's full check — the strictest form. Used on M1 and (in this
+// fork) M5 (see LevelCloudBiasOK). Unreadable values count
 // as blocking.
 //==============================================================
 
@@ -521,21 +527,34 @@ bool CloudBiasFarOK(int s, int tfIdx, int dir)
 }
 
 //==============================================================
-// Level Cloud Bias Gate (EXPERIMENTAL CHANGE): applies to every
-// tier — the tier's TF (lvl+1, always M5 or above) needs only
-// the FUTURE cloud in the trade's direction; the TF directly
-// below it is M1 for the M5 tier (full check: current AND future
-// must agree with the trade) and M5 or above for the higher
-// tiers (future-only). So: M1 = both cloud values must agree;
-// M5 upwards = current cloud may be any value, future cloud must
-// be in the trade's direction.
+// Level Cloud Bias Gate (BTCUSD# FORK CHANGE): the M1-strict rule
+// now also covers M5. The gate applies to every tier (the tier's
+// own TF + the TF directly below it): M1 and M5 must be twisted
+// the trade's way at BOTH the current bar and the far end of the
+// future cloud (the full check); M15 and above need only the
+// future cloud. So: M1/M5 = both cloud values must agree;
+// M15 upwards = current cloud may be any value, future cloud
+// must be in the trade's direction.
 //==============================================================
 
 bool LevelCloudBiasOK(int s, int lvl, int dir)
 {
-   if(!CloudBiasFarOK(s, lvl + 1, dir)) return false;   // tier TF — always M5+ — future cloud only
-   if(lvl == 0) return CloudBiasOK(s, 0, dir);          // M1 (below the M5 tier) — current AND future
-   return CloudBiasFarOK(s, lvl, dir);                  // TF below (M5+) — future cloud only
+   // Tier's own TF: M5 (lvl 0) needs the FULL check like M1 —
+   // current AND future cloud twisted the trade's way. M15+ tiers
+   // keep the future-only rule.
+   if(lvl == 0)
+   {
+      if(!CloudBiasOK(s, lvl + 1, dir)) return false;
+   }
+   else
+   {
+      if(!CloudBiasFarOK(s, lvl + 1, dir)) return false;
+   }
+
+   // TF directly below the tier: M1 (lvl 0) and M5 (lvl 1) both get
+   // the full current+future check; M15+ below stays future-only.
+   if(lvl <= 1) return CloudBiasOK(s, lvl, dir);
+   return CloudBiasFarOK(s, lvl, dir);
 }
 
 //==============================================================
