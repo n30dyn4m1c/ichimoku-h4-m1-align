@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
-//| The live VPS build since 2026-08-23. The M1-strict cloud-bias     |
-//| trading logic is unchanged (promoted 2026-08-20 from the most     |
-//| profitable cloud-bias experiment, user report 2026-08-20;         |
-//| $100 -> $14000 on Jan-Aug 2026 data); what is new is the          |
-//| ROBUSTNESS PACK below — review recommendations R2-R6, built and   |
-//| verified as experiments/experimental-bottomup-stack-m1-strict-    |
-//| cloud-bias-robustness-vps-ea.mq5. It replaces the previous VPS    |
-//| build, archived as archives/ichimoku-h4-m1-vps-ea-archived        |
-//| 20260823.mq5 and no longer deployed.                              |
+//| The live VPS build since 2026-08-20. Promoted from the            |
+//| experimental m1-strict-cloud-bias build — the MOST PROFITABLE     |
+//| iteration of the cloud-bias experiment (user report 2026-08-20;   |
+//| $100 -> $14000 on Jan-Aug 2026 data) — which stays at experiments/|
+//| experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-         |
+//| profitable.mq5 as the experimental reference. It replaces the     |
+//| previous bottom-up bias-stack VPS build (magic 20260850), which   |
+//| is archived as archives/ichimoku-h4-m1-vps-ea-archived20260820.   |
+//| mq5 and is no longer deployed.                                    |
 //| EXPERIMENTAL RULE — the only change vs the parent build: the      |
 //| cloud-bias gate (Span A vs Span B) requires M1 to be twisted the  |
 //| trade's way at BOTH the current bar (last closed bar) and the     |
@@ -94,40 +94,6 @@
 //|        promoted from, so positions it already opened keep being   |
 //|        managed. Distinct from the desktop twin (20260860) and     |
 //|        from the retired builds (20260850 VPS / 20260852 desktop). |
-//|                                                                  |
-//| ROBUSTNESS PACK (live since 2026-08-23) — five hardening changes |
-//| (review recommendations R2-R6), promoted verbatim from the       |
-//| robustness experimental fork.                                    |
-//|   R2 UNKNOWN-POSITION GUARD: a magic-matching position whose     |
-//|      comment no longer names a level (brokers may rewrite or     |
-//|      truncate comments on partial fills / server events) used to |
-//|      be invisible — orphaned from BE/trail/cloud exits while the |
-//|      EA opened duplicates behind it. It is now logged once per   |
-//|      ticket and BLOCKS new entries on that symbol until it is    |
-//|      gone. Exits/protection for known levels still run.          |
-//|   R3 DISASTER STOP: every entry carries a wide hard SL of        |
-//|      ATR(level TF) x InpDisasterATRMult (default 8) so a gap or  |
-//|      a dead VPS/link cannot run unbounded. Break-even and the    |
-//|      chandelier still take over once green; a missing stop       |
-//|      self-heals in ManageLevelProtection().                      |
-//|   R4 PEAK REBUILD: after a restart mid-trade the chandelier      |
-//|      references are rebuilt from level-TF history since the      |
-//|      position's open time instead of collapsing to the open      |
-//|      price (which left the trail far looser than before).        |
-//|   R5 ORDER ROBUSTNESS: SetTypeFillingBySymbol() before every     |
-//|      order (the FOK default breaks on IOC-only brokers), and     |
-//|      the margin cap commits at most InpMarginUsePct % (default   |
-//|      80) of free margin per order instead of 100%.               |
-//|   R6 TWIN RULE: the desktop build ichimoku-h4-m1-mt5pc-ea.mq5    |
-//|      carries this exact pack; the only intended differences are  |
-//|      the magic number, the Alert() popups and the weekly equity  |
-//|      reminder (see AGENTS.md). Deliberately NOT implemented      |
-//|      (user decision): recommendation R1, the supersede invariant |
-//|      guard that would abort a new entry while an existing        |
-//|      higher-tier position survives its close attempt.            |
-//| Magic: 20260858 — carried over from the previous VPS build so    |
-//|        positions it already opened keep being managed. Distinct  |
-//|        from the desktop twin (20260860) and the retired builds.  |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -161,7 +127,6 @@ input double InpRiskPctM15_T3   = 0.1;    // M15  — tier 3
 input double InpRiskPctM30_T3   = 0.2;    // M30  — tier 3
 input double InpRiskPctH1_T3    = 1.0;    // H1   — tier 3
 input double InpRiskPctH4_T3    = 2.0;    // H4   — tier 3
-input double InpMarginUsePct     = 80.0;   // Max % of FREE margin one order may commit (R5; parent used 100%)
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
 // does not carry the trade.
@@ -196,10 +161,6 @@ input double InpSpikeLockATR      = 2.0;   // Chandelier trail arms once profit 
 input double InpTrailActivateATR  = 0.5;   // H1/H4 chandelier trail arms once profit >= this x ATR
 input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR (level TF)
 
-input group  "Disaster Stop (hard tail-risk stop)"
-input bool   InpDisasterStopEnabled = true;   // Attach a wide hard SL at entry (bounds gap/disconnect loss)
-input double InpDisasterATRMult     = 8.0;    // Disaster stop distance = ATR(level TF) x this
-
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
 input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the rejection candle must sweep
@@ -230,15 +191,7 @@ double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chand
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
-// R2: unknown-position guard. A position carrying our magic whose comment
-// no longer names a level cannot be managed (no BE/trail/cloud exit can
-// find it) — track it, block new entries on its symbol until it is gone,
-// and log it once per ticket (not once per minute).
-bool              symBlockedUnknown[MAX_SYMS];
-ulong             unknownLoggedTickets[64];
-int               unknownLoggedCount   = 0;
-
-int MAGIC = 20260858;   // live VPS M1-strict build + robustness pack (desktop twin runs 20260860)
+int MAGIC = 20260858;   // live VPS M1-strict build, carried over from the promoted experiment (desktop twin runs 20260860)
 
 CTrade trade;
 
@@ -274,7 +227,6 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       lastM1bar[s] = 0;
-      symBlockedUnknown[s] = false;
       for(int l = 0; l < LEVELS; l++)
       {
          state[s][l] = 0;
@@ -327,31 +279,15 @@ string LevelComment(int lvl, int dir)
    return (dir == 1 ? "Exp Buy " : "Exp Sell ") + tfName[lvl + 1];
 }
 
-// R2: log an unparseable magic position once per ticket — without the
-// ticket memory this would repeat every minute while the position lives.
-// After 64 distinct tickets the log goes quiet but the block stays on.
-void LogUnknownOnce(ulong ticket, string sym, string comm)
-{
-   for(int i = 0; i < unknownLoggedCount; i++)
-      if(unknownLoggedTickets[i] == ticket) return;
-   if(unknownLoggedCount < 64) unknownLoggedTickets[unknownLoggedCount++] = ticket;
-   Print(PCTime() + " | !! " + sym + " position #" + IntegerToString((long)ticket) +
-         " carries this EA's magic but its comment \"" + comm +
-         "\" names no level — BE/trail/cloud exits CANNOT manage it." +
-         " New entries on " + sym + " are blocked until it is closed.");
-}
-
 // Rebuild per-level state from the positions on the account so a restart
 // mid-trade resumes the correct levels. The position comment carries the
-// level (e.g. "Exp Buy M15"). Entry/peak/BE memory is rebuilt for a
-// restart mid-trade — the chandelier references from the level-TF history
-// since the position opened (R4) — and cleared when the level is flat.
+// level (e.g. "Exp Buy M15"). Entry/peak/BE memory is rebuilt from the
+// open price for a restart mid-trade and cleared when the level is flat.
 void SyncStateFromPositions()
 {
    bool hasPos[MAX_SYMS][LEVELS];
    for(int s = 0; s < symsCount; s++)
    {
-      symBlockedUnknown[s] = false;              // R2: re-evaluated every sync
       for(int l = 0; l < LEVELS; l++)
       {
          state[s][l] = 0;
@@ -376,50 +312,23 @@ void SyncStateFromPositions()
       for(int s = 0; s < symsCount; s++)
       {
          if(syms[s] != sym) continue;
-
-         // R2: resolve the level from the comment; an unmatched comment on
-         // a magic position means the identity is lost (broker rewrite,
-         // partial fill suffix, manual tampering) — block the symbol.
-         int lvlMatch = -1;
          for(int l = 0; l < LEVELS; l++)
+         {
             if(comm == LevelComment(l, 1) || comm == LevelComment(l, -1))
             {
-               lvlMatch = l;
+               state[s][l] = dir;
+               hasPos[s][l] = true;
+               // EA (re)started mid-trade — rebuild the peak reference from
+               // the open price and let it accumulate fresh extremes from here
+               if(entryPrice[s][l] == 0.0)
+               {
+                  entryPrice[s][l] = PositionGetDouble(POSITION_PRICE_OPEN);
+                  peakHigh[s][l]   = entryPrice[s][l];
+                  peakLow[s][l]    = entryPrice[s][l];
+               }
                break;
             }
-
-         if(lvlMatch < 0)
-         {
-            symBlockedUnknown[s] = true;
-            LogUnknownOnce(ticket, sym, comm);
-            continue;
          }
-
-         state[s][lvlMatch] = dir;
-         hasPos[s][lvlMatch] = true;
-
-         // EA (re)started mid-trade — rebuild the protection references.
-         // R4: peaks come from the level-TF bars since the position actually
-         // opened, so the chandelier resumes where it left off instead of
-         // restarting from the open price.
-         if(entryPrice[s][lvlMatch] == 0.0)
-         {
-            entryPrice[s][lvlMatch] = PositionGetDouble(POSITION_PRICE_OPEN);
-            double hi = entryPrice[s][lvlMatch];
-            double lo = entryPrice[s][lvlMatch];
-            MqlRates hist[];
-            int nb = CopyRates(sym, tfs[lvlMatch + 1],
-                               (datetime)PositionGetInteger(POSITION_TIME),
-                               TimeCurrent(), hist);
-            for(int b = 0; b < nb; b++)
-            {
-               if(hist[b].high > hi) hi = hist[b].high;
-               if(hist[b].low  < lo) lo = hist[b].low;
-            }
-            peakHigh[s][lvlMatch] = hi;
-            peakLow[s][lvlMatch]  = lo;
-         }
-         break;
       }
    }
 
@@ -815,9 +724,8 @@ double RiskLots(int s, int lvl)
    return (lots > 0) ? lots : InpFixedLots;
 }
 
-// Scale a single order down so it commits at most InpMarginUsePct % of the
-// free margin (R5: the parent committed up to 100%, leaving nothing against
-// floating drawdown). lots never drops below the broker minimum.
+// Scale a single order down to the free margin so it fills fully.
+// lots never drops below the broker minimum.
 void CapLotsToMargin(string sym, bool isBuy, double &lots)
 {
    if(lots <= 0) return;
@@ -827,8 +735,7 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
    if(!OrderCalcMargin(isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, sym, lots, price, marginOne))
       return;
    if(marginOne <= 0) return;
-   double budget  = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * (InpMarginUsePct / 100.0);
-   double maxLots = budget * lots / marginOne;
+   double maxLots = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * lots / marginOne;
    double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
    double lotMin  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
    if(lotStep > 0) maxLots = MathFloor(maxLots / lotStep) * lotStep;
@@ -850,39 +757,10 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
 
-   // R5: pick a filling mode this symbol actually supports — CTrade's FOK
-   // default gets retcode 10030 (invalid fill) on IOC-only brokers.
-   trade.SetTypeFillingBySymbol(sym);
-
-   // R3: disaster stop — a wide hard SL bounding gap/disconnect loss.
-   // Anchored at the entry price so the tail definition is fixed; the BE/
-   // chandelier layer takes it over once the trade turns green. If ATR or
-   // the broker distance check makes it invalid right now, the order goes
-   // out without it and ManageLevelProtection re-attaches next minute.
-   double sl = 0.0;
-   if(InpDisasterStopEnabled)
-   {
-      double a[1];
-      if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) > 0 && a[0] > 0)
-      {
-         double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
-         double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
-         int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-         double dist    = MathMax(a[0] * InpDisasterATRMult, minDist + point);
-         sl             = NormalizeDouble((dir == 1) ? price - dist : price + dist, digits);
-
-         // A long's SL triggers on the BID, a short's on the ASK — validate
-         // against the side that will actually trip it.
-         double bidNow  = SymbolInfoDouble(sym, SYMBOL_BID);
-         double askNow  = SymbolInfoDouble(sym, SYMBOL_ASK);
-         bool   slValid = (dir == 1) ? (sl > 0 && sl < bidNow - minDist)
-                                     : (sl > 0 && sl > askNow + minDist);
-         if(!slValid) sl = 0.0;
-      }
-   }
-
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, 0, comment)
-                        : trade.Sell(lots, sym, price, sl, 0, comment);
+   // No entry stop loss in this build — the trade runs until the
+   // cloud close; the BE/chandelier layer protects it once in profit.
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, 0, 0, comment)
+                        : trade.Sell(lots, sym, price, 0, 0, comment);
    if(ok)
    {
       state[s][lvl] = dir;
@@ -945,8 +823,7 @@ bool CloseLevelPositions(int s, int lvl)
 //     TF, including the bar still forming; it only ever tightens
 //     and never sits inside the broker minimum stop.
 // ATR comes from the level's own TF, so H4/H1 protection is sized
-// to those timeframes. The only hard stop is the wide R3 disaster
-// SL; if it ever goes missing, it is re-attached here.
+// to those timeframes. No entry stop loss in this build.
 //==============================================================
 
 bool LevelTicket(int s, int lvl, ulong &ticket)
@@ -998,28 +875,6 @@ void ManageLevelProtection(int s, int lvl)
 
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
-
-   // R3: self-heal a missing disaster stop (it was skipped at send time
-   // because it was invalid then, or stripped later). Anchored at the ENTRY
-   // price so the tail definition never drifts; only attaches while no
-   // other stop exists — BE/chandelier take over from there and only ever
-   // tighten.
-   if(InpDisasterStopEnabled && slCur == 0.0)
-   {
-      double dSl = NormalizeDouble(isLong ? entryPrice[s][lvl] - InpDisasterATRMult * atrVal
-                                          : entryPrice[s][lvl] + InpDisasterATRMult * atrVal,
-                                   digits);
-      bool okD = isLong ? (dSl > 0 && dSl < bid - minDist)
-                        : (dSl > ask + minDist);
-      if(okD)
-      {
-         if(trade.PositionModify(ticket, dSl, 0))
-            slCur = dSl;
-         else
-            Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " disaster SL attach failed, retcode " +
-                  IntegerToString(trade.ResultRetcode()));
-      }
-   }
 
    // Break-even: tighter arming threshold on the long-running H1/H4 levels
    double beATR = (lvl >= 3) ? InpBEProfitH1H4 : InpBEProfitATR;
@@ -1211,9 +1066,7 @@ void OnTick()
       int    topTier = -1;
       int    topDir  = 0;
       string topVia  = "--";
-      // R2: never add exposure while an unmanageable (unparseable-comment)
-      // magic position sits on this symbol; exits/protection still run.
-      if(!symBlockedUnknown[s] && SpreadOK(syms[s]))
+      if(SpreadOK(syms[s]))
       {
          for(int l = LEVELS - 1; l >= 0; l--)
          {
