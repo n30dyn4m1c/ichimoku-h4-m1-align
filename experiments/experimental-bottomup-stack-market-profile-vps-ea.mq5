@@ -51,9 +51,20 @@
 //|                           primary daily POC                       |
 //|                The active environment is journaled whenever it    |
 //|                changes.                                           |
-//|   Exits: InpMPExitVA (value-area edge) and InpMPExitOldPOC (next  |
-//|   old daily POC in the trade's direction); InpMPShapeBias blocks  |
-//|   entries against the multi-day shape read.                       |
+//|   STRATEGY AIM — RIDE TRENDS, CUT LOSSES. Trends are ridden by    |
+//|   design: stack/breakout continuations enter WITH the auction,    |
+//|   the chandelier trail locks in profits behind the peak, and the  |
+//|   kumo-touch exit lets a trend run to its cloud. To ride, keep    |
+//|   InpMPExitVA and InpMPExitOldPOC OFF (they are take-profits that |
+//|   cap winners at value/key levels — useful for magnet/balance     |
+//|   trades, wrong for trend rides). LOSSES ARE CUT: every entry     |
+//|   carries a protective stop at InpDisasterATRMult x ATR (default  |
+//|   2 — the same distance the risk sizing is measured against, so   |
+//|   the risked % is what is actually at stake; the live VPS uses an |
+//|   8x disaster tail instead), break-even and the trail then take   |
+//|   over once green, and InpCutTimeHours (default 0 = off) closes a |
+//|   trade that is still not green after N hours (a failed auction). |
+//|   InpMPShapeBias blocks entries against the multi-day shape read. |
 //|   The profile engine (all reference data): a TPO profile rebuilt  |
 //|   on every new M30 bar — each bar distributes one TPO across the  |
 //|   price buckets its [low, high] range covers (weighted by         |
@@ -158,7 +169,8 @@
 //|        logic runs only on closed M1 bars (once per minute) to     |
 //|        keep CPU/network use on a cheap VPS negligible.            |
 //| Robustness pack (inherited from the parent, live since           |
-//|        2026-08-23): R2 unknown-position guard, R3 disaster stop,  |
+//|        2026-08-23): R2 unknown-position guard, R3 stop (re-tuned  |
+//|        here from an 8x disaster tail to a 2x protective cut),     |
 //|        R4 peak rebuild after restart, R5 filling/margin          |
 //|        robustness, R6 desktop-twin rule (N/A here — experiment). |
 //| Author: Neo Malesa                                               |
@@ -229,9 +241,12 @@ input double InpSpikeLockATR      = 2.0;   // Chandelier trail arms once profit 
 input double InpTrailActivateATR  = 0.5;   // H1/H4 chandelier trail arms once profit >= this x ATR
 input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR (level TF)
 
-input group  "Disaster Stop (hard tail-risk stop)"
-input bool   InpDisasterStopEnabled = true;   // Attach a wide hard SL at entry (bounds gap/disconnect loss)
-input double InpDisasterATRMult     = 8.0;    // Disaster stop distance = ATR(level TF) x this
+input group  "Protective Stop (cut losses at entry)"
+input bool   InpDisasterStopEnabled = true;   // Attach a hard SL at entry (bounds the loss — CUT LOSSES; the live VPS uses an 8x disaster tail, this build cuts at 2x)
+input double InpDisasterATRMult     = 2.0;    // Stop distance = ATR(level TF) x this (2 = cut losses early; matches the risk-sizing reference InpRiskATRMult)
+
+input group  "Loss Cuts (EXPERIMENTAL)"
+input int    InpCutTimeHours   = 0;      // Cut a trade that is NOT green after this many hours (0 = off) — a failed auction should not linger
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
@@ -1119,11 +1134,14 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
    // default gets retcode 10030 (invalid fill) on IOC-only brokers.
    trade.SetTypeFillingBySymbol(sym);
 
-   // R3: disaster stop — a wide hard SL bounding gap/disconnect loss.
-   // Anchored at the entry price so the tail definition is fixed; the BE/
-   // chandelier layer takes it over once the trade turns green. If ATR or
-   // the broker distance check makes it invalid right now, the order goes
-   // out without it and ManageLevelProtection re-attaches next minute.
+   // R3: protective stop — a hard SL at entry bounding the loss (CUT
+   // LOSSES: default 2 x ATR instead of the VPS's 8x disaster tail; the
+   // distance matches the risk-sizing reference InpRiskATRMult, so the
+   // risked % is what is actually at stake). Anchored at the entry price;
+   // the BE/chandelier layer takes it over once the trade turns green. If
+   // ATR or the broker distance check makes it invalid right now, the
+   // order goes out without it and ManageLevelProtection re-attaches
+   // next minute.
    double sl = 0.0;
    if(InpDisasterStopEnabled)
    {
@@ -1264,9 +1282,23 @@ void ManageLevelProtection(int s, int lvl)
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
 
-   // R3: self-heal a missing disaster stop (it was skipped at send time
+   // Time cut (EXPERIMENTAL — cut losses): a trade that is still NOT
+   // green after InpCutTimeHours is a failed auction — the market is not
+   // paying the trade; close it instead of letting it linger (0 = off).
+   if(InpCutTimeHours > 0)
+   {
+      datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
+      if(TimeCurrent() - opened >= InpCutTimeHours * 3600 &&
+         PositionGetDouble(POSITION_PROFIT) <= 0.0)
+      {
+         ExitLevel(s, lvl, "time cut");
+         return;
+      }
+   }
+
+   // R3: self-heal a missing protective stop (it was skipped at send time
    // because it was invalid then, or stripped later). Anchored at the ENTRY
-   // price so the tail definition never drifts; only attaches while no
+   // price so the cut definition never drifts; only attaches while no
    // other stop exists — BE/chandelier take over from there and only ever
    // tighten.
    if(InpDisasterStopEnabled && slCur == 0.0)
