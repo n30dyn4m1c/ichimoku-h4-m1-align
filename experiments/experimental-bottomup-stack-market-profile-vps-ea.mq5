@@ -59,17 +59,39 @@
 //|   above the previous (Tokyo flat, London higher, New York         |
 //|   higher) — the auction is one-directional; the stack length and  |
 //|   direction are journaled at every session close.                 |
-//|   AUCTION ENTRY MODES (InpMPEntryMode):                           |
+//|   AUCTION ENTRY MODES (InpMPEntryMode — default 7 AUTO):         |
 //|     5 STACK      enter WITH a session stack on a pullback into    |
 //|                  the last session's value area                    |
 //|     6 OLD POC    enter when the last closed bar touched an old    |
 //|                  daily POC (a key level from days back — the      |
 //|                  magnet) and closed back on the near side: the    |
 //|                  level rejected price                             |
+//|     7 AUTO       (DEFAULT) the EA reads the auction and picks the |
+//|                  regime itself, in this order:                    |
+//|                    STACK    sessions stacking (>= InpMPStackMin)  |
+//|                             = one-directional auction -> trade    |
+//|                             WITH it on a pullback into the last   |
+//|                             session's value area                  |
+//|                    MAGNET   price within InpMPAutoNearATR x       |
+//|                             ATR(M1) of an old daily POC -> enter  |
+//|                             on the level's rejection              |
+//|                    BREAKOUT price exited the active profile's     |
+//|                             value area -> enter with the          |
+//|                             expansion                             |
+//|                    BALANCE  price inside value -> fade the value  |
+//|                             area edges, filtered to the multi-day |
+//|                             shape read when it has an opinion     |
+//|                    DAILY    fallback (or while the active profile |
+//|                             builds) -> trade with the primary     |
+//|                             daily POC                             |
+//|                  The active regime is journaled whenever it       |
+//|                  changes.                                         |
 //|   AUCTION EXITS: InpMPExitOldPOC — take profit when price reaches |
 //|   the next old daily POC in the trade's direction (the magnet     |
-//|   target). InpMPShapeBias — never enter against the multi-day     |
-//|   shape read.                                                     |
+//|   target). InpMPExitVA — take profit at the value-area edge       |
+//|   (auto-disabled in VA-breakout mode and in AUTO while the regime |
+//|   is BREAKOUT, where it would exit entries instantly).            |
+//|   InpMPShapeBias — never enter against the multi-day shape read.  |
 //|   InpMPEntryMode (default 0 — every filter OFF):                 |
 //|     0 OFF         engine builds and journals the profile only;   |
 //|                   the EA trades exactly like the parent build    |
@@ -92,6 +114,9 @@
 //|                   (a key level from a completed day) and closed   |
 //|                   back on the near side — the level rejected      |
 //|                   price (magnet reaction)                        |
+//|     7 AUTO        (default) the EA reads the auction and picks    |
+//|                   the regime itself: STACK -> MAGNET -> BREAKOUT  |
+//|                   -> BALANCE -> DAILY-POC fallback                |
 //|   InpMPExitVA (default false): a long closes when the bid        |
 //|      touches the VAH, a short when the ask touches the VAL — a   |
 //|      profile take-profit at the far edge of value. Deliberately  |
@@ -272,8 +297,24 @@ input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this 
 //   6 old POC     the last closed bar TOUCHED an old daily POC (a key level
 //                 from a completed day) and closed back on the near side —
 //                 the level rejected price (magnet reaction)
+//   7 AUTO        the EA reads the auction and picks the regime itself
+//                 (default): STACK -> MAGNET -> BREAKOUT -> BALANCE ->
+//                 daily-POC fallback. See the header block.
 enum ENUM_MP_MODE { MPMODE_OFF = 0, MPMODE_POC = 1, MPMODE_VA_OUT = 2, MPMODE_VA_REJECT = 3,
-                    MPMODE_DAILY_POC = 4, MPMODE_STACK = 5, MPMODE_OLDPOC = 6 };
+                    MPMODE_DAILY_POC = 4, MPMODE_STACK = 5, MPMODE_OLDPOC = 6, MPMODE_AUTO = 7 };
+
+// The auction regime AUTO mode selects between:
+//   STACK    consecutive sessions stacking = one-directional auction —
+//            enter WITH it on a pullback into the last session's VA
+//   MAGNET   price is within InpMPAutoNearATR x ATR(M1) of an old daily
+//            POC — the level is the magnet; enter on its rejection
+//   BREAKOUT price has exited the active profile's value area — enter
+//            in the direction of the expansion
+//   BALANCE  price is inside value — fade the value-area edges, but only
+//            with the multi-day shape read when it has an opinion
+//   DAILY    fallback when nothing else applies (or the active profile
+//            is not ready) — trade with the primary daily POC
+enum MP_REGIME { MPREG_DAILY = 0, MPREG_BALANCE = 1, MPREG_BREAK = 2, MPREG_MAGNET = 3, MPREG_STACK = 4 };
 
 // Completed-day profile shapes (the auction's fingerprint):
 //   NORMAL    one significant distribution — a balanced day
@@ -312,7 +353,8 @@ input int    InpMPStackMin     = 2;       // Consecutive sessions stacked in one
 input int    InpMPShapeDays    = 3;       // How many completed days of shapes feed the directional read (1..8)
 input bool   InpMPShapeBias    = false;   // Block entries against the multi-day shape read (day shapes + session stacking)
 input bool   InpMPExitOldPOC   = false;   // Take profit when price reaches the next old daily POC in the trade's direction
-input ENUM_MP_MODE InpMPEntryMode = MPMODE_OFF; // Entry filter: 0=off (log only), 1=POC side, 2=outside value area, 3=value-area edge rejection, 4=daily POC side, 5=stack continuation, 6=old-POC rejection
+input double InpMPAutoNearATR  = 1.5;     // AUTO mode: within this x ATR(M1) of an old daily POC = magnet regime
+input ENUM_MP_MODE InpMPEntryMode = MPMODE_AUTO; // Entry filter: 0=off (log only), 1=POC side, 2=outside value area, 3=value-area edge rejection, 4=daily POC side, 5=stack continuation, 6=old-POC rejection, 7=AUTO (regime auto-selection, default)
 input bool   InpMPExitVA       = false;   // Take profit: long closes when bid touches the VAH, short when ask touches the VAL (ignored with entry mode 2)
 input bool   InpMPLog          = true;    // Journal profile events: ready, movement (once per H4 bar max), price crossings of POC/VAH/VAL, day close, daily POC crossings
 
@@ -450,6 +492,11 @@ int        mpSessCount[MAX_SYMS];       // sessions actually stored
 bool       mpSessBackfilled[MAX_SYMS];  // startup backfill done
 int        mpShapeDays = 3;             // InpMPShapeDays clamped to 1..MP_MAX_DAYS
 
+// AUTO regime (EXPERIMENTAL): the regime selected on the last M1 bar by
+// MPAutoDetect() — MPREG_* (or -1 before the first detection). Cached so
+// the entry gate and the VA-exit guard share one decision per bar.
+int        mpAutoRegime[MAX_SYMS];
+
 int MAGIC = 20260864;   // MARKET PROFILE experiment — fresh, shares positions with nothing (VPS 20260858, desktop 20260860, robustness 20260863)
 
 CTrade trade;
@@ -521,9 +568,11 @@ int OnInit()
       mpDaysBackfilled[s] = false;
       mpSessCount[s] = 0;
       mpSessBackfilled[s] = false;
+      mpAutoRegime[s] = -1;          // no regime detected yet
    }
 
-   // Market profile: M1 ATR handle for the adaptive bucket size
+   // Market profile: M1 ATR handle — the adaptive bucket size AND the AUTO
+   // magnet-regime distance both need it, so it is always created.
    if(InpMPEnabled)
    {
       mpDaysKeep = MathMax(1, MathMin(MP_MAX_DAYS, (int)InpMPDays));
@@ -541,11 +590,8 @@ int OnInit()
          Print("MP warning: session starts must be ordered Tokyo < London < New York (server hours)");
       for(int s = 0; s < symsCount; s++)
       {
-         if(InpMPBucketPoints <= 0)
-         {
-            atrM1[s] = iATR(syms[s], PERIOD_M1, InpATRPeriod);
-            if(atrM1[s] == INVALID_HANDLE) return(INIT_FAILED);
-         }
+         atrM1[s] = iATR(syms[s], PERIOD_M1, InpATRPeriod);
+         if(atrM1[s] == INVALID_HANDLE) return(INIT_FAILED);
       }
    }
 
@@ -2241,6 +2287,29 @@ void UpdateMarketProfile(int s)
       if(InpMPProfileType == MP_PROFILE_SESSIONS) mp[s].ready = false;
    }
 
+   // AUTO regime (EXPERIMENTAL): detect the auction regime once per M1
+   // bar and journal every change. Runs before the profile build so a
+   // build failure never leaves the regime stale.
+   if(InpMPEntryMode == MPMODE_AUTO)
+   {
+      int reg = MPAutoDetect(s);
+      if(reg != mpAutoRegime[s])
+      {
+         if(mpAutoRegime[s] >= 0 && InpMPLog)
+         {
+            string extra = "";
+            if(reg == MPREG_STACK)
+            {
+               int stkCnt = 0;
+               int stk = MPSessionStack(s, stkCnt);
+               extra = " (" + IntegerToString(stkCnt) + " " + (stk == 1 ? "UP" : "DOWN") + ")";
+            }
+            Print(PCTime() + " | MP " + syms[s] + " auto regime: " + MPRegimeName(reg) + extra);
+         }
+         mpAutoRegime[s] = reg;
+      }
+   }
+
    MPData built;
    if(!BuildMarketProfile(s, built))
    {
@@ -2316,13 +2385,197 @@ void UpdateMarketProfile(int s)
             " VA " + DoubleToString(mp[s].val, digits) + ".." + DoubleToString(mp[s].vah, digits));
 }
 
+//==============================================================
+// ENTRY GATE + AUTO REGIME (EXPERIMENTAL)
+//==============================================================
+
+// 4 — daily POC side: the PRIMARY POC of the most recent COMPLETED day
+//     that has a significant area of interest is the key level — longs
+//     only at/above it, shorts only at/below it. Trend days (no
+//     significant POC) are skipped.
+bool MPDailyPocEntryOK(int s, int dir)
+{
+   for(int i = 0; i < mpDaysCount[s]; i++)
+   {
+      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
+      double lvl = mpDays[s][i].poc[0];
+      MqlRates m1[];
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return true;
+      ArraySetAsSeries(m1, true);
+      double c1 = m1[1].close;
+      return (dir == 1) ? (c1 >= lvl) : (c1 <= lvl);
+   }
+   return true;
+}
+
+// 5 — stack continuation: consecutive sessions stacking (each value area
+//     entirely above the previous) = a one-directional auction. Enter
+//     WITH the stack when the last closed bar pulled back into the most
+//     recent session's value area (upper half for a long, lower half for
+//     a short). No stack = no signal.
+bool MPStackEntryOK(int s, int dir)
+{
+   int stkCnt = 0;
+   int stk = MPSessionStack(s, stkCnt);
+   if(stk == 0 || stkCnt < InpMPStackMin) return false;
+   if(mpSessCount[s] <= 0 || !mpSess[s][0].valid) return false;
+
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return false;
+   ArraySetAsSeries(m1, true);
+   double c1 = m1[1].close;
+
+   if(stk ==  1 && dir ==  1) return (c1 >= mpSess[s][0].poc && c1 <= mpSess[s][0].vah);
+   if(stk == -1 && dir == -1) return (c1 <= mpSess[s][0].poc && c1 >= mpSess[s][0].val);
+   return false;
+}
+
+// 6 — old-POC reaction: the last closed bar TOUCHED an old daily POC
+//     (a key level from a completed day — the magnet) and closed back on
+//     the near side of it: the level rejected price. Long when a support
+//     POC was touched from above and held; short when a resistance POC
+//     was touched from below and held.
+bool MPOldPocEntryOK(int s, int dir)
+{
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) < 3) return false;
+   ArraySetAsSeries(m1, true);
+   double c1 = m1[1].close;
+   double c2 = m1[2].close;
+   double h1 = m1[1].high;
+   double l1 = m1[1].low;
+
+   for(int i = 0; i < mpDaysCount[s]; i++)
+   {
+      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
+      for(int p = 0; p < mpDays[s][i].peaks; p++)
+      {
+         double lvl = mpDays[s][i].poc[p];
+         if(dir ==  1 && l1 <= lvl && lvl <= h1 && c2 > lvl && c1 > lvl) return true;
+         if(dir == -1 && l1 <= lvl && lvl <= h1 && c2 < lvl && c1 < lvl) return true;
+      }
+   }
+   return false;
+}
+
+// 2 — VA breakout: the market expanded beyond value — enter in the
+//     direction of the expansion
+bool MPBreakEntryOK(int s, int dir)
+{
+   if(!mp[s].ready) return false;
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return false;
+   ArraySetAsSeries(m1, true);
+   double c1 = m1[1].close;
+   return (dir == 1) ? (c1 > mp[s].vah) : (c1 < mp[s].val);
+}
+
+// 3 — VA edge rejection: the last closed bar traded at/beyond the edge
+//     and closed back inside it — the edge rejected price
+bool MPRejectEntryOK(int s, int dir)
+{
+   if(!mp[s].ready) return false;
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) < 3) return false;
+   ArraySetAsSeries(m1, true);
+   double c1 = m1[1].close;
+   double c2 = m1[2].close;
+   if(dir == 1) return (c2 <= mp[s].val && c1 > mp[s].val);
+   return (c2 >= mp[s].vah && c1 < mp[s].vah);
+}
+
+// Is price within InpMPAutoNearATR x ATR(M1) of any old daily key level?
+bool MPNearOldPoc(int s)
+{
+   double a[1];
+   if(CopyBuffer(atrM1[s], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return false;
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return false;
+   ArraySetAsSeries(m1, true);
+   double c = m1[1].close;
+   double near = InpMPAutoNearATR * a[0];
+   for(int i = 0; i < mpDaysCount[s]; i++)
+   {
+      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
+      for(int p = 0; p < mpDays[s][i].peaks; p++)
+         if(MathAbs(c - mpDays[s][i].poc[p]) <= near) return true;
+   }
+   return false;
+}
+
+// AUTO regime selection — the auction is always in one of five states:
+//   1. STACK    — sessions stacking = one-directional auction (strongest)
+//   2. MAGNET   — price is within InpMPAutoNearATR x ATR(M1) of an old
+//                 daily POC — the magnet is in play
+//   3. BREAKOUT — price has exited the active profile's value area
+//   4. BALANCE  — price is inside value: fade the edges
+//   5. DAILY    — fallback (also while the active profile is building)
+// Called once per M1 bar; journals every regime change.
+int MPAutoDetect(int s)
+{
+   int stkCnt = 0;
+   int stk = MPSessionStack(s, stkCnt);
+   if(stk != 0 && stkCnt >= InpMPStackMin) return MPREG_STACK;
+
+   if(MPNearOldPoc(s)) return MPREG_MAGNET;
+
+   if(mp[s].ready)
+   {
+      MqlRates m1[];
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) >= 2)
+      {
+         ArraySetAsSeries(m1, true);
+         double c1 = m1[1].close;
+         if(c1 > mp[s].vah || c1 < mp[s].val) return MPREG_BREAK;
+      }
+      return MPREG_BALANCE;
+   }
+   return MPREG_DAILY;
+}
+
+string MPRegimeName(int r)
+{
+   if(r == MPREG_STACK)   return "STACK";
+   if(r == MPREG_MAGNET)  return "MAGNET";
+   if(r == MPREG_BREAK)   return "BREAKOUT";
+   if(r == MPREG_BALANCE) return "BALANCE";
+   return "DAILY-POC";
+}
+
+// 7 — AUTO: delegate to the entry logic of the regime selected on the
+//     last M1 bar. In BALANCE, a non-flat shape read filters the fade to
+//     its direction (trend-aware fading).
+bool MPAutoEntryOK(int s, int dir)
+{
+   int reg = mpAutoRegime[s];
+   if(reg == MPREG_STACK)   return MPStackEntryOK(s, dir);
+   if(reg == MPREG_MAGNET)  return MPOldPocEntryOK(s, dir);
+   if(reg == MPREG_BREAK)   return MPBreakEntryOK(s, dir);
+   if(reg == MPREG_BALANCE)
+   {
+      if(MPShapeBias(s) != 0 && MPShapeBias(s) != dir) return false;
+      return MPRejectEntryOK(s, dir);
+   }
+   return MPDailyPocEntryOK(s, dir);
+}
+
+// May the VA-edge take profit run in the current mode? Off in VA-breakout
+// mode and in AUTO while the regime is BREAKOUT — an entry beyond the
+// edge would close itself on the very next bar.
+bool MPExitVAAllowed(int s)
+{
+   if(InpMPEntryMode == MPMODE_VA_OUT) return false;
+   if(InpMPEntryMode == MPMODE_AUTO && mpAutoRegime[s] == MPREG_BREAK) return false;
+   return true;
+}
+
 // Market profile ENTRY gate (EXPERIMENTAL). Neutral (passes) while the
 // data it needs is not ready — the layer never blocks the parent logic
 // on its own. Modes 1-3 use the active profile (rolling/session); mode 4
-// uses the daily POC key levels and works even while the active profile
-// is still building (e.g. early in a session); modes 5-6 use the session
-// stack and the old daily key levels. InpMPShapeBias, when on, blocks
-// entries against the multi-day shape read in every mode.
+// uses the daily POC key levels; modes 5-6 use the session stack and the
+// old daily key levels; mode 7 (AUTO) picks the regime itself.
+// InpMPShapeBias, when on, blocks entries against the multi-day shape
+// read in every mode.
 bool MPEntryOK(int s, int dir)
 {
    if(InpMPEntryMode == MPMODE_OFF) return true;
@@ -2336,67 +2589,26 @@ bool MPEntryOK(int s, int dir)
       if(dir == -1 && bias > 0) return false;
    }
 
+   // Mode 4 — daily POC side
+   if(InpMPEntryMode == MPMODE_DAILY_POC) return MPDailyPocEntryOK(s, dir);
+
+   // Mode 5 — stack continuation
+   if(InpMPEntryMode == MPMODE_STACK)     return MPStackEntryOK(s, dir);
+
+   // Mode 6 — old-POC reaction
+   if(InpMPEntryMode == MPMODE_OLDPOC)    return MPOldPocEntryOK(s, dir);
+
+   // Mode 7 — AUTO regime selection
+   if(InpMPEntryMode == MPMODE_AUTO)      return MPAutoEntryOK(s, dir);
+
+   // Modes 1-3 use the active profile — neutral while it is not ready
+   if(!mp[s].ready) return true;
+
    MqlRates m1[];
    if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) < 3) return true;
    ArraySetAsSeries(m1, true);
    double c1 = m1[1].close;   // last closed bar
    double c2 = m1[2].close;   // bar before it
-   double h1 = m1[1].high;    // last closed bar's high
-   double l1 = m1[1].low;     // last closed bar's low
-
-   // 4 — daily POC side: the PRIMARY POC of the most recent COMPLETED day
-   //     that has a significant area of interest is the key level — longs
-   //     only at/above it, shorts only at/below it. Trend days (no
-   //     significant POC) are skipped.
-   if(InpMPEntryMode == MPMODE_DAILY_POC)
-   {
-      for(int i = 0; i < mpDaysCount[s]; i++)
-      {
-         if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-         double lvl = mpDays[s][i].poc[0];
-         return (dir == 1) ? (c1 >= lvl) : (c1 <= lvl);
-      }
-      return true;
-   }
-
-   // 5 — stack continuation: consecutive sessions stacking (each value
-   //     area entirely above the previous) = a one-directional auction.
-   //     Enter WITH the stack when the last closed bar pulled back into
-   //     the most recent session's value area (upper half for a long,
-   //     lower half for a short). No stack = no signal.
-   if(InpMPEntryMode == MPMODE_STACK)
-   {
-      int stkCnt = 0;
-      int stk = MPSessionStack(s, stkCnt);
-      if(stk == 0 || stkCnt < InpMPStackMin) return false;
-      if(mpSessCount[s] <= 0 || !mpSess[s][0].valid) return false;
-      if(stk ==  1 && dir ==  1) return (c1 >= mpSess[s][0].poc && c1 <= mpSess[s][0].vah);
-      if(stk == -1 && dir == -1) return (c1 <= mpSess[s][0].poc && c1 >= mpSess[s][0].val);
-      return false;
-   }
-
-   // 6 — old-POC reaction: the last closed bar TOUCHED an old daily POC
-   //     (a key level from a completed day — the magnet) and closed back
-   //     on the near side of it: the level rejected price. Long when a
-   //     support POC was touched from above and held; short when a
-   //     resistance POC was touched from below and held.
-   if(InpMPEntryMode == MPMODE_OLDPOC)
-   {
-      for(int i = 0; i < mpDaysCount[s]; i++)
-      {
-         if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-         for(int p = 0; p < mpDays[s][i].peaks; p++)
-         {
-            double lvl = mpDays[s][i].poc[p];
-            if(dir ==  1 && l1 <= lvl && lvl <= h1 && c2 > lvl && c1 > lvl) return true;
-            if(dir == -1 && l1 <= lvl && lvl <= h1 && c2 < lvl && c1 < lvl) return true;
-         }
-      }
-      return false;
-   }
-
-   // Modes 1-3 use the active profile — neutral while it is not ready
-   if(!mp[s].ready) return true;
 
    // 1 — POC side: trade with fair value
    if(InpMPEntryMode == MPMODE_POC)
@@ -2451,9 +2663,10 @@ void OnTick()
 
          // Market profile take-profit (EXPERIMENTAL): a long exits when the
          // bid touches the VA high, a short when the ask touches the VA low.
-         // Skipped in VA-breakout entry mode — an entry beyond the edge
-         // would close itself on the very next bar.
-         if(InpMPEnabled && InpMPExitVA && InpMPEntryMode != MPMODE_VA_OUT &&
+         // Skipped in VA-breakout mode and in AUTO while the regime is
+         // BREAKOUT — an entry beyond the edge would close itself on the
+         // very next bar.
+         if(InpMPEnabled && InpMPExitVA && MPExitVAAllowed(s) &&
             state[s][l] != 0 && mp[s].ready)
          {
             double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
