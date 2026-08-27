@@ -309,7 +309,7 @@ struct MPDayLevel
    double   close;            // last closed price of the day
    double   pocRatio;         // primary POC count / mean bucket count (trend-day metric)
    double   vaSpanRatio;      // (vah - val) / (high - low) (trend-day metric)
-   int      bars;             // M1 bars the profile was built from
+   int      bars;             // bars of the profile TF the profile was built from
    int      peaks;            // significant areas of interest (0 = trend day / none)
    int      shape;            // MP_SHAPE classification
    int      dir;              // directional read: 1 up, -1 down, 0 balance
@@ -328,7 +328,7 @@ struct MPSessionLevel
    double   val;              // the session's value area low
    double   high;             // the session's high
    double   low;              // the session's low
-   int      bars;             // M1 bars the profile was built from
+   int      bars;             // bars of the profile TF the profile was built from
    bool     valid;            // profile built successfully
 };
 
@@ -2287,7 +2287,8 @@ void OnTick()
       lastM1bar[s] = m1[1].time;
 
       // Market profile (EXPERIMENTAL, reference only): measure the TPO
-      // profile on the M30/H1 track(s) on each new closed M1 bar.
+      // profile on the M30/H1 track(s). M1 is only the EA's overall
+      // cadence (once per closed M1 bar) — no M1 profile data is used.
       if(InpMPEnabled)
          for(int ptf = 0; ptf < mpTfCount; ptf++)
             UpdateMarketProfile(ptf, s);
