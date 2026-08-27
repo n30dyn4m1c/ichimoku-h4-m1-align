@@ -5,130 +5,51 @@
 //| bias, robustness pack R2-R6) with a MARKET PROFILE layer added.  |
 //| The production VPS file is untouched.                            |
 //|                                                                  |
-//| MARKET PROFILE LAYER — a TPO (time-price-opportunity) profile     |
-//| rebuilt on every new M1 bar: each bar distributes one TPO-minute  |
-//| across the price buckets its [low, high] range covers (weighted   |
-//| by coverage), so a bar that spends its minute across several      |
-//| buckets spreads its single TPO between them. The POC is the       |
-//| bucket with the most TPOs (fair value) and the VALUE AREA is the  |
-//| tightest range around it holding InpMPValuePct % of all TPOs      |
-//| (VAH = top, VAL = bottom). Bucket height: fixed points via        |
-//| InpMPBucketPoints, or adaptive ATR(M1)/10 when 0, clamped so the  |
-//| profile always spans 8..2000 buckets.                             |
-//|   Profile window (InpMPProfileType):                              |
-//|     0 ROLLING  the last InpMPBars closed M1 bars (default 1440 =  |
-//|                 one day)                                          |
-//|     1 SESSIONS the CURRENT session's profile, the three standard  |
-//|                 sessions measured in server time (matching the    |
-//|                 MT5 market profile indicator): Tokyo from         |
-//|                 InpMPTokyoStart (default 00:00), London from      |
-//|                 InpMPLondonStart (default 10:00), New York from   |
-//|                 InpMPNYStart (default 16:00) until midnight.      |
-//|                 The session that is running right now builds its  |
-//|                 profile from its start (filters stay neutral      |
-//|                 until InpMPMinBars); when the next session opens, |
-//|                 the finished session's final profile is journaled |
-//|                 and the new session starts fresh.                 |
-//|   DAILY POC KEY LEVELS (always on while InpMPEnabled): the last   |
-//|   InpMPDays (default 8, max 8) COMPLETED days' profiles are kept  |
-//|   per symbol — each day built from the whole calendar day in      |
-//|   server time (00:00-24:00, i.e. all three sessions combined).    |
-//|   A day can yield SEVERAL key levels: the significant areas of    |
-//|   interest are found by PEAK PROMINENCE analysis (up to 3 — a     |
-//|   multi-distribution day, e.g. a morning range and an afternoon   |
-//|   range with different POCs); each area's POC is a key level.     |
-//|   TREND DAYS are rejected: when the primary POC does not stand    |
-//|   out from the distribution — TPO count < InpMPPocMinRatio x the  |
-//|   mean bucket count, or the value area spans > InpMPVaMaxSpan of  |
-//|   the day's range — the day yields NO key level (journaled as     |
-//|   "no sig. POC" with the metrics). Dead days (weekends/holidays,  |
-//|   < 60 bars) are skipped entirely. Levels are backfilled at       |
-//|   startup, finalized at every server-day rollover, journaled when |
-//|   price crosses one, and usable as an entry gate via entry mode   |
-//|   4 (daily POC side: longs only at/above the primary POC of the   |
-//|   most recent day WITH a significant POC, shorts only at/below    |
-//|   it).                                                            |
-//|   SHAPE READ (always on): every completed day is classified       |
-//|   [N] normal, [2D] double distribution, [TU]/[TD] trend up/down   |
-//|   (a one-timeframe market: no significant POC and the close       |
-//|   exited value). The days' directions plus the session stack      |
-//|   feed a directional read (MPShapeBias).                          |
-//|   SESSION STACKING (always on): the last 8 completed sessions     |
-//|   (Tokyo/London/New York) are kept per symbol. When consecutive   |
-//|   sessions' value areas pile up in one direction — each entirely  |
-//|   above the previous (Tokyo flat, London higher, New York         |
-//|   higher) — the auction is one-directional; the stack length and  |
-//|   direction are journaled at every session close.                 |
-//|   AUCTION ENTRY MODES (InpMPEntryMode — default 7 AUTO):         |
-//|     5 STACK      enter WITH a session stack on a pullback into    |
-//|                  the last session's value area                    |
-//|     6 OLD POC    enter when the last closed bar touched an old    |
-//|                  daily POC (a key level from days back — the      |
-//|                  magnet) and closed back on the near side: the    |
-//|                  level rejected price                             |
-//|     7 AUTO       (DEFAULT) the EA reads the auction and picks the |
-//|                  regime itself, in this order:                    |
-//|                    STACK    sessions stacking (>= InpMPStackMin)  |
-//|                             = one-directional auction -> trade    |
-//|                             WITH it on a pullback into the last   |
-//|                             session's value area                  |
-//|                    MAGNET   price within InpMPAutoNearATR x       |
-//|                             ATR(M1) of an old daily POC -> enter  |
-//|                             on the level's rejection              |
-//|                    BREAKOUT price exited the active profile's     |
-//|                             value area -> enter with the          |
-//|                             expansion                             |
-//|                    BALANCE  price inside value -> fade the value  |
-//|                             area edges, filtered to the multi-day |
-//|                             shape read when it has an opinion     |
-//|                    DAILY    fallback (or while the active profile |
-//|                             builds) -> trade with the primary     |
-//|                             daily POC                             |
-//|                  The active regime is journaled whenever it       |
-//|                  changes.                                         |
-//|   AUCTION EXITS: InpMPExitOldPOC — take profit when price reaches |
-//|   the next old daily POC in the trade's direction (the magnet     |
-//|   target). InpMPExitVA — take profit at the value-area edge       |
-//|   (auto-disabled in VA-breakout mode and in AUTO while the regime |
-//|   is BREAKOUT, where it would exit entries instantly).            |
-//|   InpMPShapeBias — never enter against the multi-day shape read.  |
-//|   InpMPEntryMode (default 0 — every filter OFF):                 |
-//|     0 OFF         engine builds and journals the profile only;   |
-//|                   the EA trades exactly like the parent build    |
-//|     1 POC side    longs only at/above the POC, shorts only       |
-//|                   at/below it (trade WITH fair value)            |
-//|     2 VA breakout longs only above the VAH, shorts only below    |
-//|                   the VAL (expansion / trend mode)               |
-//|     3 VA reject   long when the last closed M1 bar traded at/    |
-//|                   below the VAL and closed back above it (the    |
-//|                   value-area edge rejected price); short         |
-//|                   mirrored at the VAH                            |
-//|     4 daily POC   the primary POC of the most recent completed   |
-//|                   day WITH a significant POC is the key level:   |
-//|                   longs at/above it, shorts at/below it          |
-//|     5 stack       consecutive sessions stacking (each value area |
-//|                   above the previous) = a one-directional auction:|
-//|                   enter WITH it on a pullback into the last       |
-//|                   session's value area                           |
-//|     6 old POC     the last closed bar TOUCHED an old daily POC    |
-//|                   (a key level from a completed day) and closed   |
-//|                   back on the near side — the level rejected      |
-//|                   price (magnet reaction)                        |
-//|     7 AUTO        (default) the EA reads the auction and picks    |
-//|                   the regime itself: STACK -> MAGNET -> BREAKOUT  |
-//|                   -> BALANCE -> DAILY-POC fallback                |
-//|   InpMPExitVA (default false): a long closes when the bid        |
-//|      touches the VAH, a short when the ask touches the VAL — a   |
-//|      profile take-profit at the far edge of value. Deliberately  |
-//|      ignored in VA-breakout entry mode: an entry beyond the edge |
-//|      would exit itself on the very next bar.                     |
-//|   While the profile is not ready (fewer than InpMPMinBars in the |
-//|   window, or unreadable history) every MP filter PASSES — the    |
-//|   layer is neutral and never blocks the parent logic.            |
-//|   Validation flow: first run with the defaults (filters OFF) and |
-//|   compare the journaled POC/VAH/VAL against a market profile     |
-//|   indicator on the chart; then flip InpMPEntryMode and/or        |
-//|   InpMPExitVA on for backtests.                                  |
+//| MARKET PROFILE LAYER — REFERENCE ONLY, MEASURED ON M30 AND H1.   |
+//| The market profile is measured on the HIGHER timeframes          |
+//| (InpMPProfileTF: M30, H1, or both — default both) and is used    |
+//| ONLY for reference: it never gates, filters or exits any trade.  |
+//| The EA's trading is exactly the parent's Ichimoku bottom-up      |
+//| stack; the profile layer observes and journals the auction:      |
+//|   - a TPO (time-price-opportunity) profile rebuilt on every new  |
+//|     bar of the profile TF: each bar distributes one TPO across   |
+//|     the price buckets its [low, high] range covers (weighted by  |
+//|     coverage). The POC is the bucket with the most TPOs (fair    |
+//|     value) and the VALUE AREA is the tightest range around it    |
+//|     holding InpMPValuePct % of all TPOs (VAH = top, VAL =        |
+//|     bottom). Bucket height: fixed points via InpMPBucketPoints,  |
+//|     or adaptive ATR(profile TF)/10 when 0, clamped so the        |
+//|     profile always spans 8..2000 buckets.                        |
+//|   - Profile window (InpMPProfileType): 0 ROLLING = the last      |
+//|     InpMPBars bars of the profile TF (default 48 = one M30 day   |
+//|     or two H1 days); 1 SESSIONS = the current session's bars     |
+//|     (Tokyo from InpMPTokyoStart 00:00, London from               |
+//|     InpMPLondonStart 10:00, New York from InpMPNYStart 16:00,    |
+//|     server time — matching the MT5 market profile indicator).    |
+//|   - DAILY POC KEY LEVELS (reference): the last InpMPDays         |
+//|     (default 8) COMPLETED days' profiles per TF — each day       |
+//|     built from the whole calendar day in server time. A day can  |
+//|     yield up to 3 significant areas of interest (peak-prominence |
+//|     analysis — multi-distribution days); each area's POC is a    |
+//|     key level. TREND DAYS (no significant POC: TPO count <       |
+//|     InpMPPocMinRatio x the mean bucket count, or value area >    |
+//|     InpMPVaMaxSpan of the day's range) yield none. Dead days     |
+//|     (weekends/holidays) are skipped. Levels are backfilled at    |
+//|     startup, finalized at every server-day rollover, and         |
+//|     journaled when price crosses one.                            |
+//|   - SHAPE READ: every completed day is classified [N] normal,    |
+//|     [2D] double distribution, [TU]/[TD] trend up/down; the       |
+//|     days' directions plus the session stack feed a directional   |
+//|     read (journaled with the day close).                         |
+//|   - SESSION STACKING: the last 8 completed sessions per TF.      |
+//|     When consecutive sessions' value areas pile up in one        |
+//|     direction — each entirely above the previous (Tokyo flat,    |
+//|     London higher, New York higher) — the auction is             |
+//|     one-directional; the stack is journaled at every session     |
+//|     close.                                                       |
+//|   All of it is reference material for the journal — nothing      |
+//|   trades on it. Compare the journaled POC/VAH/VAL and key levels |
+//|   against a market profile indicator on the chart.               |
 //| Magic: 20260864 — fresh, shares positions with nothing (live VPS |
 //|        20260858, desktop 20260860, robustness fork 20260863).    |
 //+------------------------------------------------------------------+
@@ -283,38 +204,10 @@ input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the reject
 input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
 input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
-// Market profile entry modes (EXPERIMENTAL) — see the header block.
-//   0 OFF         engine + journal only, trading unchanged
-//   1 POC side    trade with fair value: longs at/above POC, shorts at/below
-//   2 VA breakout trade the expansion: longs above VAH, shorts below VAL
-//   3 VA reject   trade the edge rejection: closed M1 bar reclaims the VAL
-//                 (long) or the VAH (short) after trading beyond it
-//   4 daily POC   the most recent completed day WITH a significant POC:
-//                 longs at/above its primary POC, shorts at/below it
-//   5 stack       consecutive sessions stacking (each value area above the
-//                 previous) = a one-directional auction: enter WITH it on a
-//                 pullback into the last session's value area
-//   6 old POC     the last closed bar TOUCHED an old daily POC (a key level
-//                 from a completed day) and closed back on the near side —
-//                 the level rejected price (magnet reaction)
-//   7 AUTO        the EA reads the auction and picks the regime itself
-//                 (default): STACK -> MAGNET -> BREAKOUT -> BALANCE ->
-//                 daily-POC fallback. See the header block.
-enum ENUM_MP_MODE { MPMODE_OFF = 0, MPMODE_POC = 1, MPMODE_VA_OUT = 2, MPMODE_VA_REJECT = 3,
-                    MPMODE_DAILY_POC = 4, MPMODE_STACK = 5, MPMODE_OLDPOC = 6, MPMODE_AUTO = 7 };
-
-// The auction regime AUTO mode selects between:
-//   STACK    consecutive sessions stacking = one-directional auction —
-//            enter WITH it on a pullback into the last session's VA
-//   MAGNET   price is within InpMPAutoNearATR x ATR(M1) of an old daily
-//            POC — the level is the magnet; enter on its rejection
-//   BREAKOUT price has exited the active profile's value area — enter
-//            in the direction of the expansion
-//   BALANCE  price is inside value — fade the value-area edges, but only
-//            with the multi-day shape read when it has an opinion
-//   DAILY    fallback when nothing else applies (or the active profile
-//            is not ready) — trade with the primary daily POC
-enum MP_REGIME { MPREG_DAILY = 0, MPREG_BALANCE = 1, MPREG_BREAK = 2, MPREG_MAGNET = 3, MPREG_STACK = 4 };
+// Market profile measurement timeframe (EXPERIMENTAL): the profile is
+// measured on the HIGHER timeframes and used ONLY for reference —
+// 0 = M30, 1 = H1, 2 = both (two independent reference tracks).
+enum ENUM_MP_TF { MPTF_M30 = 0, MPTF_H1 = 1, MPTF_BOTH = 2 };
 
 // Completed-day profile shapes (the auction's fingerprint):
 //   NORMAL    one significant distribution — a balanced day
@@ -328,35 +221,30 @@ enum MP_SHAPE { MPSHAPE_NONE = 0, MPSHAPE_NORMAL = 1, MPSHAPE_DOUBLE = 2,
                 MPSHAPE_TREND_UP = 3, MPSHAPE_TREND_DOWN = 4 };
 
 // Profile window (EXPERIMENTAL):
-//   0 ROLLING  the last InpMPBars closed M1 bars
+//   0 ROLLING  the last InpMPBars bars of the profile TF
 //   1 SESSIONS the current session's bars since its start — Tokyo
 //              (InpMPTokyoStart), London (InpMPLondonStart), New York
 //              (InpMPNYStart), in server time; the finished session's
 //              final profile is journaled when the next one opens
 enum ENUM_MP_PROFILE { MP_PROFILE_ROLLING = 0, MP_PROFILE_SESSIONS = 1 };
 
-input group  "Market Profile (EXPERIMENTAL)"
-input bool   InpMPEnabled      = true;    // Master switch: build + journal the TPO profile every M1 bar (filters below default OFF)
-input ENUM_MP_PROFILE InpMPProfileType = MP_PROFILE_ROLLING; // 0=rolling window (InpMPBars M1 bars), 1=current session (Tokyo/London/New York)
-input int    InpMPBars         = 1440;    // Rolling profile window in M1 bars (1440 = one day; rolling mode only — sessions mode ignores it)
+input group  "Market Profile (EXPERIMENTAL — reference only)"
+input bool   InpMPEnabled      = true;    // Master switch: measure + journal the TPO profile (never trades)
+input ENUM_MP_TF InpMPProfileTF = MPTF_BOTH; // Measure on: 0=M30, 1=H1, 2=both (default) — reference only
+input ENUM_MP_PROFILE InpMPProfileType = MP_PROFILE_ROLLING; // 0=rolling window (InpMPBars bars of the TF), 1=current session (Tokyo/London/New York)
+input int    InpMPBars         = 48;      // Rolling profile window in bars of the profile TF (48 M30 bars = 1 day; 24 H1 bars = 1 day; rolling mode only)
 input int    InpMPTokyoStart   = 0;       // Tokyo session start — hour, SERVER time (sessions mode)
 input int    InpMPLondonStart  = 10;      // London session start — hour, SERVER time (sessions mode)
 input int    InpMPNYStart      = 16;      // New York session start — hour, SERVER time (sessions mode)
-input int    InpMPMinBars      = 240;     // Minimum window bars before the profile is READY (session mode: minutes into the current session); filters stay neutral below this
-input int    InpMPBucketPoints = 0;       // TPO bucket height in points; 0 = adaptive ATR(M1)/10 (profile clamped to 8..2000 buckets)
+input int    InpMPMinBars      = 48;      // Bars of the profile TF before the active profile is journaled as READY (rolling mode; sessions use a smaller per-TF minimum)
+input int    InpMPBucketPoints = 0;       // TPO bucket height in points; 0 = adaptive ATR(profile TF)/10 (profile clamped to 8..2000 buckets)
 input double InpMPValuePct     = 70.0;    // % of TPOs the value area must contain (classic 70)
 input int    InpMPDays         = 8;       // Keep this many COMPLETED days of market profiles (1..8); each day's areas of interest yield key levels
 input double InpMPPocMinRatio  = 2.0;     // A day's POC is significant only when its TPO count >= this x the mean bucket count (trend-day filter)
 input double InpMPVaMaxSpan    = 0.75;    // A day's POC is also rejected when the value area spans > this fraction of the day's range (trend-day filter)
 input double InpMPPeakMinPct   = 25.0;    // A secondary area of interest must stand out by >= this % of the main POC's count (prominence)
-input int    InpMPStackMin     = 2;       // Consecutive sessions stacked in one direction required for entry mode 5 (stack continuation)
-input int    InpMPShapeDays    = 3;       // How many completed days of shapes feed the directional read (1..8)
-input bool   InpMPShapeBias    = false;   // Block entries against the multi-day shape read (day shapes + session stacking)
-input bool   InpMPExitOldPOC   = false;   // Take profit when price reaches the next old daily POC in the trade's direction
-input double InpMPAutoNearATR  = 1.5;     // AUTO mode: within this x ATR(M1) of an old daily POC = magnet regime
-input ENUM_MP_MODE InpMPEntryMode = MPMODE_AUTO; // Entry filter: 0=off (log only), 1=POC side, 2=outside value area, 3=value-area edge rejection, 4=daily POC side, 5=stack continuation, 6=old-POC rejection, 7=AUTO (regime auto-selection, default)
-input bool   InpMPExitVA       = false;   // Take profit: long closes when bid touches the VAH, short when ask touches the VAL (ignored with entry mode 2)
-input bool   InpMPLog          = true;    // Journal profile events: ready, movement (once per H4 bar max), price crossings of POC/VAH/VAL, day close, daily POC crossings
+input int    InpMPShapeDays    = 3;       // How many completed days of shapes feed the directional read journaled at day close (1..8)
+input bool   InpMPLog          = true;    // Journal profile events: ready, movement (once per H4 bar max), price crossings of POC/VAH/VAL, day close, session close + stack
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -380,13 +268,12 @@ input bool   InpMPLog          = true;    // Journal profile events: ready, move
 // sessions (2 full days = 6 sessions, plus headroom).
 #define MP_MAX_SESS 8
 
-// A day profile needs at least this many M1 bars to count as a level —
-// filters out dead days (weekends, exchange holidays) that have no
-// meaningful TPO distribution.
-#define MP_MIN_DAY_BARS 60
+// The market profile is measured on these higher timeframes (reference
+// only). M30 and H1; 'both' runs two independent reference tracks.
+#define MP_TFS 2
 
 // Result of one profile rebuild — a value struct, assigned wholesale into
-// the per-symbol mp[] slot.
+// the per-TF per-symbol mp[][] slot.
 struct MPData
 {
    double bucketSize;     // height of one TPO bucket in price
@@ -448,10 +335,20 @@ struct MPSessionLevel
 ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
 
+// Market profile measurement tracks (reference only)
+ENUM_TIMEFRAMES mpTfs[MP_TFS] = { PERIOD_M30, PERIOD_H1 };
+string          mpTfName[MP_TFS] = { "M30", "H1" };
+int             mpTfCount = MP_TFS;         // 1 or 2 — set in OnInit from InpMPProfileTF
+// Minimum bars a completed day / session needs per track before it
+// counts (a full day = 48 M30 bars / 24 H1 bars; sessions are 6-20 M30
+// bars). Filters out dead days and hollow sessions.
+int             mpMinDayBars[MP_TFS]  = { 24, 12 };
+int             mpMinSessBars[MP_TFS] = { 8, 4 };
+
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — H4-tier bias filter
 int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock trail sizing
-int      atrM1[MAX_SYMS];             // ATR(M1) — market profile adaptive bucket size
+int      atrMp[MP_TFS][MAX_SYMS];     // ATR(profile TF) — adaptive bucket size
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -471,31 +368,28 @@ bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-// Market profile state per symbol (EXPERIMENTAL)
-MPData   mp[MAX_SYMS];
-int      mpSession[MAX_SYMS];       // session the stored profile belongs to (-2 none, -1 rolling, 0 Tokyo, 1 London, 2 New York)
-datetime mpLastMoveLog[MAX_SYMS];   // H4 bar of the last "profile moved" journal line (max ~6/hour)
+// Market profile state per symbol per track (EXPERIMENTAL, reference only)
+MPData   mp[MP_TFS][MAX_SYMS];
+int      mpSession[MP_TFS][MAX_SYMS];  // session the stored profile belongs to (-2 none, -1 rolling, 0 Tokyo, 1 London, 2 New York)
+datetime mpLastMoveLog[MP_TFS][MAX_SYMS]; // H4 bar of the last "profile moved" journal line (max ~6/hour)
 
-// Daily POC key levels (EXPERIMENTAL): the last InpMPDays COMPLETED days,
-// index 0 = most recent. Each day's areas of interest yield key levels.
-MPDayLevel mpDays[MAX_SYMS][MP_MAX_DAYS];
-int        mpDaysCount[MAX_SYMS];       // days actually stored for the symbol
+// Daily POC key levels (EXPERIMENTAL): the last InpMPDays COMPLETED days
+// per track, index 0 = most recent. Each day's areas of interest yield
+// key levels.
+MPDayLevel mpDays[MP_TFS][MAX_SYMS][MP_MAX_DAYS];
+int        mpDaysCount[MP_TFS][MAX_SYMS];  // days actually stored for the track
 int        mpDaysKeep = MP_MAX_DAYS;    // InpMPDays clamped to 1..MP_MAX_DAYS
-int        mpDayKey[MAX_SYMS];          // server date key (YYYYMMDD) of the last seen day — rollover detection
-bool       mpDaysBackfilled[MAX_SYMS];  // startup backfill done
+int        mpDayKey[MP_TFS][MAX_SYMS];  // server date key (YYYYMMDD) of the last seen day — rollover detection
+bool       mpDaysBackfilled[MP_TFS][MAX_SYMS]; // startup backfill done
 
-// Session stacking (EXPERIMENTAL): the last COMPLETED sessions, index 0 =
-// most recent. Consecutive value areas piling in one direction = a
-// one-directional auction (e.g. Tokyo flat, London higher, New York higher).
-MPSessionLevel mpSess[MAX_SYMS][MP_MAX_SESS];
-int        mpSessCount[MAX_SYMS];       // sessions actually stored
-bool       mpSessBackfilled[MAX_SYMS];  // startup backfill done
+// Session stacking (EXPERIMENTAL): the last COMPLETED sessions per track,
+// index 0 = most recent. Consecutive value areas piling in one direction
+// = a one-directional auction (e.g. Tokyo flat, London higher, New York
+// higher).
+MPSessionLevel mpSess[MP_TFS][MAX_SYMS][MP_MAX_SESS];
+int        mpSessCount[MP_TFS][MAX_SYMS];   // sessions actually stored
+bool       mpSessBackfilled[MP_TFS][MAX_SYMS]; // startup backfill done
 int        mpShapeDays = 3;             // InpMPShapeDays clamped to 1..MP_MAX_DAYS
-
-// AUTO regime (EXPERIMENTAL): the regime selected on the last M1 bar by
-// MPAutoDetect() — MPREG_* (or -1 before the first detection). Cached so
-// the entry gate and the VA-exit guard share one decision per bar.
-int        mpAutoRegime[MAX_SYMS];
 
 int MAGIC = 20260864;   // MARKET PROFILE experiment — fresh, shares positions with nothing (VPS 20260858, desktop 20260860, robustness 20260863)
 
@@ -558,23 +452,25 @@ int OnInit()
          if(atr[s][l] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
-      // Market profile state (EXPERIMENTAL)
-      atrM1[s] = INVALID_HANDLE;
-      mp[s].ready = false;
-      mpSession[s] = -2;             // no profile stored yet
-      mpLastMoveLog[s] = 0;
-      mpDaysCount[s] = 0;
-      mpDayKey[s] = 0;               // no day seen yet — first tick backfills
-      mpDaysBackfilled[s] = false;
-      mpSessCount[s] = 0;
-      mpSessBackfilled[s] = false;
-      mpAutoRegime[s] = -1;          // no regime detected yet
+      // Market profile state (EXPERIMENTAL, reference only)
+      for(int ptf = 0; ptf < MP_TFS; ptf++)
+      {
+         atrMp[ptf][s] = INVALID_HANDLE;
+         mp[ptf][s].ready = false;
+         mpSession[ptf][s] = -2;          // no profile stored yet
+         mpLastMoveLog[ptf][s] = 0;
+         mpDaysCount[ptf][s] = 0;
+         mpDayKey[ptf][s] = 0;            // no day seen yet — first tick backfills
+         mpDaysBackfilled[ptf][s] = false;
+         mpSessCount[ptf][s] = 0;
+         mpSessBackfilled[ptf][s] = false;
+      }
    }
 
-   // Market profile: M1 ATR handle — the adaptive bucket size AND the AUTO
-   // magnet-regime distance both need it, so it is always created.
+   // Market profile (EXPERIMENTAL, reference only)
    if(InpMPEnabled)
    {
+      mpTfCount = (InpMPProfileTF == MPTF_BOTH) ? MP_TFS : 1;
       mpDaysKeep = MathMax(1, MathMin(MP_MAX_DAYS, (int)InpMPDays));
       if((int)InpMPDays != mpDaysKeep)
          Print("MP warning: InpMPDays clamped to " + IntegerToString(mpDaysKeep) +
@@ -588,10 +484,13 @@ int OnInit()
       if(InpMPProfileType == MP_PROFILE_SESSIONS &&
          (InpMPTokyoStart >= InpMPLondonStart || InpMPLondonStart >= InpMPNYStart))
          Print("MP warning: session starts must be ordered Tokyo < London < New York (server hours)");
-      for(int s = 0; s < symsCount; s++)
+      for(int ptf = 0; ptf < mpTfCount; ptf++)
       {
-         atrM1[s] = iATR(syms[s], PERIOD_M1, InpATRPeriod);
-         if(atrM1[s] == INVALID_HANDLE) return(INIT_FAILED);
+         for(int s = 0; s < symsCount; s++)
+         {
+            atrMp[ptf][s] = iATR(syms[s], mpTfs[ptf], InpATRPeriod);
+            if(atrMp[ptf][s] == INVALID_HANDLE) return(INIT_FAILED);
+         }
       }
    }
 
@@ -610,7 +509,8 @@ void OnDeinit(const int reason)
       if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
       for(int l = 0; l < LEVELS; l++)
          if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
-      if(atrM1[s] != INVALID_HANDLE) IndicatorRelease(atrM1[s]);
+      for(int ptf = 0; ptf < mpTfCount; ptf++)
+         if(atrMp[ptf][s] != INVALID_HANDLE) IndicatorRelease(atrMp[ptf][s]);
    }
 }
 
@@ -1454,10 +1354,12 @@ bool ExitLevel(int s, int l, string reason)
 }
 
 //==============================================================
-// MARKET PROFILE LAYER (EXPERIMENT)
-// A TPO (time-price-opportunity) profile rebuilt on every new M1
-// bar over either window:
-//   ROLLING  — the last InpMPBars closed M1 bars;
+// MARKET PROFILE LAYER (EXPERIMENT, REFERENCE ONLY)
+// A TPO (time-price-opportunity) profile measured on the M30 and/or
+// H1 track (mpTfs[ptf]) and used ONLY for reference — nothing here
+// trades. Rebuilt on every new bar of the profile TF over either
+// window:
+//   ROLLING  — the last InpMPBars closed bars of the TF;
 //   SESSIONS — the CURRENT session's closed bars since its start,
 //              where the sessions are Tokyo (InpMPTokyoStart),
 //              London (InpMPLondonStart) and New York
@@ -1465,11 +1367,10 @@ bool ExitLevel(int s, int l, string reason)
 //              three-session split the MT5 market profile
 //              indicator measures.
 // In both modes:
-//   - each M1 bar distributes ONE TPO-minute across the price
-//     buckets its [low, high] range covers, weighted by coverage,
-//     so a bar that trades across several buckets spreads its
-//     single TPO between them (a flat bar puts it in the bucket
-//     of its close)
+//   - each bar distributes ONE TPO across the price buckets its
+//     [low, high] range covers, weighted by coverage, so a bar
+//     that trades across several buckets spreads its single TPO
+//     between them (a flat bar puts it in the bucket of its close)
 //   - POC = bucket with the most TPOs (fair value); ties widen to
 //     the whole plateau and take the middle bucket
 //   - VALUE AREA = the tightest range around the POC holding
@@ -1478,7 +1379,8 @@ bool ExitLevel(int s, int l, string reason)
 //     the adjacent bucket with the higher count (farther from the
 //     POC on a tie), the classic rule.
 // Bucket height: fixed points (InpMPBucketPoints) or adaptive
-// ATR(M1)/10 (clamped to >= 2 points and to 8..2000 buckets).
+// ATR(profile TF)/10 (clamped to >= 2 points and to 8..2000
+// buckets).
 //==============================================================
 
 // Session id for a server-time instant: 0 = Tokyo, 1 = London,
@@ -1516,15 +1418,16 @@ string MPSessionName(int sid)
 }
 
 // Bucket height for a profile over the given price range: fixed points via
-// InpMPBucketPoints, or adaptive ATR(M1)/10 when 0, clamped to >= 2 points
-// and to 8..MP_MAX_BUCKETS buckets across the range. 0 = unusable.
-double MPBucketSize(int s, double point, double lo, double hi)
+// InpMPBucketPoints, or adaptive ATR(profile TF)/10 when 0, clamped to
+// >= 2 points and to 8..MP_MAX_BUCKETS buckets across the range.
+// 0 = unusable.
+double MPBucketSize(int ptf, int s, double point, double lo, double hi)
 {
    double bs = (InpMPBucketPoints > 0) ? InpMPBucketPoints * point : 0.0;
    if(bs <= 0.0)
    {
       double a[1];
-      if(CopyBuffer(atrM1[s], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return 0.0;
+      if(CopyBuffer(atrMp[ptf][s], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return 0.0;
       bs = a[0] / 10.0;
       if(bs < 2.0 * point) bs = 2.0 * point;
    }
@@ -1538,12 +1441,12 @@ double MPBucketSize(int s, double point, double lo, double hi)
 // Count TPOs over 'count' closed bars of 'r' (as-series, index 0 newest,
 // first bar used = fromIdx) into a histogram of nb buckets of height bs,
 // based at 'base' = lo. Returns false when the histogram cannot be built.
-bool MPCountTPO(int s, MqlRates &r[], int fromIdx, int count,
+bool MPCountTPO(int ptf, int s, MqlRates &r[], int fromIdx, int count,
                 double lo, double hi, double &counts[], int &nb,
                 double &base, double &bs, double &total)
 {
    double point = SymbolInfoDouble(syms[s], SYMBOL_POINT);
-   bs = MPBucketSize(s, point, lo, hi);
+   bs = MPBucketSize(ptf, s, point, lo, hi);
    if(bs <= 0.0) return false;
 
    nb   = (int)MathCeil((hi - lo) / bs) + 1;
@@ -1733,10 +1636,10 @@ bool MPDayPocSignificant(double mainCount, double total, int nb,
    return true;
 }
 
-// Rebuild the profile for one symbol into 'out'. Returns false when the
-// history is unreadable or the window is too thin — the caller keeps the
-// old values and treats every MP filter as neutral.
-bool BuildMarketProfile(int s, MPData &out)
+// Rebuild the active profile for one track into 'out'. Returns false when
+// the history is unreadable or the window is too thin — the caller keeps
+// the old values (reference only, nothing blocks on this).
+bool BuildMarketProfile(int ptf, int s, MPData &out)
 {
    out.ready       = false;
    out.bucketSize  = 0.0;
@@ -1757,17 +1660,19 @@ bool BuildMarketProfile(int s, MPData &out)
    {
       int sid = MPSessionId(TimeCurrent());
       datetime from = MPSessionStart(TimeCurrent(), sid);
-      if(CopyRates(syms[s], PERIOD_M1, from, TimeCurrent(), r) <= 0) return false;
+      if(CopyRates(syms[s], mpTfs[ptf], from, TimeCurrent(), r) <= 0) return false;
       out.sessionId = sid;
    }
    else
    {
       int need = InpMPBars + 1;                    // +1: index 0 is the bar still forming
-      if(CopyRates(syms[s], PERIOD_M1, 0, need, r) <= 0) return false;
+      if(CopyRates(syms[s], mpTfs[ptf], 0, need, r) <= 0) return false;
    }
    ArraySetAsSeries(r, true);
    int bars = ArraySize(r) - 1;                    // closed bars in the window
-   if(bars < InpMPMinBars) return false;
+   int minBars = (InpMPProfileType == MP_PROFILE_SESSIONS) ? mpMinSessBars[ptf]
+                                                           : InpMPMinBars;
+   if(bars < minBars) return false;
 
    // Pass 1: the window's price range
    double lo = DBL_MAX, hi = -DBL_MAX;
@@ -1781,25 +1686,25 @@ bool BuildMarketProfile(int s, MPData &out)
    double counts[];
    int    nb;
    double base, bs, total;
-   if(!MPCountTPO(s, r, 1, bars, lo, hi, counts, nb, base, bs, total)) return false;
+   if(!MPCountTPO(ptf, s, r, 1, bars, lo, hi, counts, nb, base, bs, total)) return false;
    MPPocVA(counts, nb, base, bs, total, lo, hi, out);
    out.bars = bars;
    return true;
 }
 
 //==============================================================
-// DAILY POC KEY LEVELS (EXPERIMENTAL)
-// The last InpMPDays COMPLETED days' profiles are kept per symbol
+// DAILY POC KEY LEVELS (EXPERIMENTAL, REFERENCE ONLY)
+// The last InpMPDays COMPLETED days' profiles are kept per track
 // (index 0 = most recent), each built from the whole calendar day
 // in server time (00:00-24:00, i.e. Tokyo + London + New York
-// combined). A day yields 0-3 key levels: the significant areas of
-// interest found by peak-prominence analysis (multi-distribution
-// days) — each area's POC is a key level. Trend days (flat,
-// stretched distribution — no significant POC) yield none and are
-// journaled with their metrics. Backfilled at startup for the days
-// before today, finalized at each server-day rollover. Dead days
-// (weekends, holidays — fewer than MP_MIN_DAY_BARS bars) are
-// skipped.
+// combined) on the track's TF. A day yields 0-3 key levels: the
+// significant areas of interest found by peak-prominence analysis
+// (multi-distribution days) — each area's POC is a key level. Trend
+// days (flat, stretched distribution — no significant POC) yield
+// none and are journaled with their metrics. Backfilled at startup
+// for the days before today, finalized at each server-day rollover.
+// Dead days (weekends, holidays — fewer than mpMinDayBars bars) are
+// skipped. All reference only.
 //==============================================================
 
 // YYYYMMDD key of a server-time instant (day rollover detection)
@@ -1821,22 +1726,16 @@ datetime MPDayStart(datetime t)
    return StructToTime(dt);
 }
 
-// Build one completed day's profile (dayStart = 00:00 server time of that
-// day). Only bars with an open time inside [dayStart, dayStart + 86400)
-// are used; the day is skipped when it has fewer than MP_MIN_DAY_BARS.
-// The day's areas of interest are detected by prominence: 1-3 significant
-// peaks (multi-distribution days) or none at all (trend days — the POC
-// does not stand out from the distribution).
-// Shared range-profile builder: all closed M1 bars with an open time in
-// [from, to). Fills the range, bar count, the range's last closed price,
-// a built MPData (POC + value area) and the raw TPO histogram (for the
-// multi-distribution / shape analysis).
-bool MPRangeProfile(int s, datetime from, datetime to, int minBars,
+// Shared range-profile builder: all closed bars of the track's TF with an
+// open time in [from, to). Fills the range, bar count, the range's last
+// closed price, a built MPData (POC + value area) and the raw TPO
+// histogram (for the multi-distribution / shape analysis).
+bool MPRangeProfile(int ptf, int s, datetime from, datetime to, int minBars,
                     double &lo, double &hi, int &bars, double &closePrice, MPData &d,
                     double &counts[], int &nb, double &base, double &bs, double &tpo)
 {
    MqlRates r[];
-   if(CopyRates(syms[s], PERIOD_M1, from, to, r) <= 0) return false;
+   if(CopyRates(syms[s], mpTfs[ptf], from, to, r) <= 0) return false;
    ArraySetAsSeries(r, true);
    int total = ArraySize(r);
    if(total <= 0) return false;
@@ -1861,22 +1760,22 @@ bool MPRangeProfile(int s, datetime from, datetime to, int minBars,
    if(hi - lo <= 0.0) return false;
    closePrice = r[fromIdx].close;
 
-   if(!MPCountTPO(s, r, fromIdx, bars, lo, hi, counts, nb, base, bs, tpo)) return false;
+   if(!MPCountTPO(ptf, s, r, fromIdx, bars, lo, hi, counts, nb, base, bs, tpo)) return false;
    MPPocVA(counts, nb, base, bs, tpo, lo, hi, d);
    return true;
 }
 
 // Build one completed day's profile (dayStart = 00:00 server time of that
 // day; the day = all three sessions combined). The day is skipped when it
-// has fewer than MP_MIN_DAY_BARS. The day's areas of interest are found by
-// prominence (1-3 significant peaks or none on trend days) and the day is
-// classified by SHAPE with a directional read:
+// has fewer than mpMinDayBars[ptf]. The day's areas of interest are found
+// by prominence (1-3 significant peaks or none on trend days) and the day
+// is classified by SHAPE with a directional read:
 //   TREND_UP/DOWN  — no significant POC AND the close exited value to the
 //                    upside/downside (one-timeframe market)
 //   DOUBLE         — 2-3 areas; dir = where the auction ended up vs where
 //                    it started (last area POC vs first)
 //   NORMAL         — one balanced distribution, no directional read
-bool BuildDayProfile(int s, datetime dayStart, MPDayLevel &out)
+bool BuildDayProfile(int ptf, int s, datetime dayStart, MPDayLevel &out)
 {
    out.valid = false;
    out.day   = dayStart;
@@ -1904,7 +1803,7 @@ bool BuildDayProfile(int s, datetime dayStart, MPDayLevel &out)
    double counts[];
    int    nb;
    double base, bs, tpo;
-   if(!MPRangeProfile(s, dayStart, dayStart + 86400, MP_MIN_DAY_BARS,
+   if(!MPRangeProfile(ptf, s, dayStart, dayStart + 86400, mpMinDayBars[ptf],
                       lo, hi, bars, closePrice, d, counts, nb, base, bs, tpo)) return false;
 
    double dayPocs[MP_MAX_PEAKS], dayCounts[MP_MAX_PEAKS];
@@ -1956,12 +1855,12 @@ bool BuildDayProfile(int s, datetime dayStart, MPDayLevel &out)
 
 // Insert a finished day at the front of the ring (most recent first),
 // dropping the oldest beyond mpDaysKeep.
-void MPPushDayLevel(int s, MPDayLevel &dl)
+void MPPushDayLevel(int ptf, int s, MPDayLevel &dl)
 {
-   for(int j = (int)MathMin(mpDaysCount[s], mpDaysKeep - 1); j > 0; j--)
-      mpDays[s][j] = mpDays[s][j - 1];
-   mpDays[s][0] = dl;
-   if(mpDaysCount[s] < mpDaysKeep) mpDaysCount[s]++;
+   for(int j = (int)MathMin(mpDaysCount[ptf][s], mpDaysKeep - 1); j > 0; j--)
+      mpDays[ptf][s][j] = mpDays[ptf][s][j - 1];
+   mpDays[ptf][s][0] = dl;
+   if(mpDaysCount[ptf][s] < mpDaysKeep) mpDaysCount[ptf][s]++;
 }
 
 // One journal line listing the stored daily key levels, most recent
@@ -1969,48 +1868,48 @@ void MPPushDayLevel(int s, MPDayLevel &dl)
 // [TU]/[TD] trend days): "2026.08.22 [N] POCs 2654.10/2671.30 (VA
 // 2648.2..2662.4)" or "2026.08.22 [TU] no sig. POC (max/mean 1.4x, VA span
 // 81%)" for a trend day.
-string MPDaysList(int s)
+string MPDaysList(int ptf, int s)
 {
    string res = "";
    int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
-   for(int i = 0; i < mpDaysCount[s]; i++)
+   for(int i = 0; i < mpDaysCount[ptf][s]; i++)
    {
       if(i > 0) res += " | ";
-      res += TimeToString(mpDays[s][i].day, TIME_DATE) + " [" +
-             MPShapeCode(mpDays[s][i].shape) + "]";
-      if(mpDays[s][i].peaks <= 0)
+      res += TimeToString(mpDays[ptf][s][i].day, TIME_DATE) + " [" +
+             MPShapeCode(mpDays[ptf][s][i].shape) + "]";
+      if(mpDays[ptf][s][i].peaks <= 0)
       {
-         res += " no sig. POC (max/mean " + DoubleToString(mpDays[s][i].pocRatio, 1) +
-                "x, VA span " + DoubleToString(100.0 * mpDays[s][i].vaSpanRatio, 0) + "%)";
+         res += " no sig. POC (max/mean " + DoubleToString(mpDays[ptf][s][i].pocRatio, 1) +
+                "x, VA span " + DoubleToString(100.0 * mpDays[ptf][s][i].vaSpanRatio, 0) + "%)";
          continue;
       }
-      res += " POC" + (mpDays[s][i].peaks > 1 ? "s" : "") + " ";
-      for(int p = 0; p < mpDays[s][i].peaks; p++)
+      res += " POC" + (mpDays[ptf][s][i].peaks > 1 ? "s" : "") + " ";
+      for(int p = 0; p < mpDays[ptf][s][i].peaks; p++)
       {
          if(p > 0) res += "/";
-         res += DoubleToString(mpDays[s][i].poc[p], digits);
+         res += DoubleToString(mpDays[ptf][s][i].poc[p], digits);
       }
-      res += " (VA " + DoubleToString(mpDays[s][i].val, digits) +
-             ".." + DoubleToString(mpDays[s][i].vah, digits) + ")";
+      res += " (VA " + DoubleToString(mpDays[ptf][s][i].val, digits) +
+             ".." + DoubleToString(mpDays[ptf][s][i].vah, digits) + ")";
    }
    return res;
 }
 
 // Startup: build the profiles of the last mpDaysKeep COMPLETED days
 // (yesterday back), most recent first.
-void MPBackfillDays(int s)
+void MPBackfillDays(int ptf, int s)
 {
-   mpDaysCount[s] = 0;
+   mpDaysCount[ptf][s] = 0;
    datetime today = MPDayStart(TimeCurrent());
    for(int k = 1; k <= mpDaysKeep; k++)
    {
       MPDayLevel dl;
-      if(BuildDayProfile(s, today - k * 86400, dl))
-         MPPushDayLevel(s, dl);
+      if(BuildDayProfile(ptf, s, today - k * 86400, dl))
+         MPPushDayLevel(ptf, s, dl);
    }
-   if(InpMPLog && mpDaysCount[s] > 0)
-      Print(PCTime() + " | MP " + syms[s] + " daily POC key levels (backfill, " +
-            IntegerToString(mpDaysCount[s]) + " day(s)): " + MPDaysList(s));
+   if(InpMPLog && mpDaysCount[ptf][s] > 0)
+      Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] daily POC key levels (backfill, " +
+            IntegerToString(mpDaysCount[ptf][s]) + " day(s)): " + MPDaysList(ptf, s));
 }
 
 //==============================================================
@@ -2043,7 +1942,7 @@ void MPSessionBounds(datetime dayStart, int sid, datetime &from, datetime &to)
 }
 
 // Build one completed session's profile
-bool BuildSessionProfile(int s, int sid, datetime from, datetime to, MPSessionLevel &out)
+bool BuildSessionProfile(int ptf, int s, int sid, datetime from, datetime to, MPSessionLevel &out)
 {
    out.valid     = false;
    out.start     = from;
@@ -2062,7 +1961,7 @@ bool BuildSessionProfile(int s, int sid, datetime from, datetime to, MPSessionLe
    double counts[];
    int    nb;
    double base, bs, tpo;
-   if(!MPRangeProfile(s, from, to, MP_MIN_DAY_BARS, lo, hi, bars, closePrice, d,
+   if(!MPRangeProfile(ptf, s, from, to, mpMinSessBars[ptf], lo, hi, bars, closePrice, d,
                       counts, nb, base, bs, tpo)) return false;
 
    out.poc  = d.poc;
@@ -2076,19 +1975,19 @@ bool BuildSessionProfile(int s, int sid, datetime from, datetime to, MPSessionLe
 }
 
 // Insert a finished session at the front of the ring (most recent first)
-void MPPushSessionLevel(int s, MPSessionLevel &sl)
+void MPPushSessionLevel(int ptf, int s, MPSessionLevel &sl)
 {
-   for(int j = (int)MathMin(mpSessCount[s], MP_MAX_SESS - 1); j > 0; j--)
-      mpSess[s][j] = mpSess[s][j - 1];
-   mpSess[s][0] = sl;
-   if(mpSessCount[s] < MP_MAX_SESS) mpSessCount[s]++;
+   for(int j = (int)MathMin(mpSessCount[ptf][s], MP_MAX_SESS - 1); j > 0; j--)
+      mpSess[ptf][s][j] = mpSess[ptf][s][j - 1];
+   mpSess[ptf][s][0] = sl;
+   if(mpSessCount[ptf][s] < MP_MAX_SESS) mpSessCount[ptf][s]++;
 }
 
 // Startup: build the sessions of the two completed days before today
 // (most recent first), so the stack read works from the first tick.
-void MPBackfillSessions(int s)
+void MPBackfillSessions(int ptf, int s)
 {
-   mpSessCount[s] = 0;
+   mpSessCount[ptf][s] = 0;
    datetime today = MPDayStart(TimeCurrent());
    for(int d = 2; d >= 1; d--)           // older day first, so the newest ends up at index 0
    {
@@ -2098,8 +1997,8 @@ void MPBackfillSessions(int s)
          MPSessionBounds(today - d * 86400, sid, from, to);
          if(to > TimeCurrent()) continue;   // session still forming — skip
          MPSessionLevel sl;
-         if(BuildSessionProfile(s, sid, from, to, sl))
-            MPPushSessionLevel(s, sl);
+         if(BuildSessionProfile(ptf, s, sid, from, to, sl))
+            MPPushSessionLevel(ptf, s, sl);
       }
    }
 }
@@ -2107,39 +2006,39 @@ void MPBackfillSessions(int s)
 // Session stack: 1 = the recent sessions' value areas are piling UP (each
 // entirely above the previous), -1 DOWN, 0 none. 'count' = consecutive
 // stacked sessions ending at the most recent one.
-int MPSessionStack(int s, int &count)
+int MPSessionStack(int ptf, int s, int &count)
 {
    count = 0;
-   if(mpSessCount[s] < 2) return 0;
+   if(mpSessCount[ptf][s] < 2) return 0;
    int dir = 0;
-   if(mpSess[s][0].val > mpSess[s][1].vah)      dir =  1;
-   else if(mpSess[s][0].vah < mpSess[s][1].val) dir = -1;
+   if(mpSess[ptf][s][0].val > mpSess[ptf][s][1].vah)      dir =  1;
+   else if(mpSess[ptf][s][0].vah < mpSess[ptf][s][1].val) dir = -1;
    if(dir == 0) return 0;
    count = 1;
-   for(int i = 0; i + 1 < mpSessCount[s]; i++)
+   for(int i = 0; i + 1 < mpSessCount[ptf][s]; i++)
    {
-      bool stacked = (dir ==  1) ? (mpSess[s][i].val > mpSess[s][i + 1].vah)
-                                 : (mpSess[s][i].vah < mpSess[s][i + 1].val);
+      bool stacked = (dir ==  1) ? (mpSess[ptf][s][i].val > mpSess[ptf][s][i + 1].vah)
+                                 : (mpSess[ptf][s][i].vah < mpSess[ptf][s][i + 1].val);
       if(!stacked) break;
       count++;
    }
    return dir;
 }
 
-// The multi-day shape read: sum of the last mpShapeDays completed days'
-// directions (+/-1 each), plus up to +/-1.5 from the session stack
-// (0.5 x stack length, capped at 3). Returns 1 bullish, -1 bearish,
-// 0 flat/no data.
-int MPShapeBias(int s)
+// The multi-day shape read (reference): sum of the last mpShapeDays
+// completed days' directions (+/-1 each), plus up to +/-1.5 from the
+// session stack (0.5 x stack length, capped at 3). Returns 1 bullish,
+// -1 bearish, 0 flat/no data.
+int MPShapeBias(int ptf, int s)
 {
    double score = 0.0;
-   for(int i = 0; i < mpDaysCount[s] && i < mpShapeDays; i++)
+   for(int i = 0; i < mpDaysCount[ptf][s] && i < mpShapeDays; i++)
    {
-      if(!mpDays[s][i].valid) continue;
-      score += mpDays[s][i].dir;
+      if(!mpDays[ptf][s][i].valid) continue;
+      score += mpDays[ptf][s][i].dir;
    }
    int stkCnt = 0;
-   int stk = MPSessionStack(s, stkCnt);
+   int stk = MPSessionStack(ptf, s, stkCnt);
    score += stk * 0.5 * MathMin(stkCnt, 3);
    if(score >  0.25) return  1;
    if(score < -0.25) return -1;
@@ -2166,187 +2065,167 @@ string MPShapeCode(int shape)
 
 // Has a new H4 bar closed since the last "profile moved" journal line?
 // Caps movement logging at ~6 lines per hour per symbol.
-bool MPNewH4Bar(int s)
+bool MPNewH4Bar(int ptf, int s)
 {
    MqlRates h4[];
    if(CopyRates(syms[s], PERIOD_H4, 0, 2, h4) < 2) return false;
    ArraySetAsSeries(h4, true);
-   if(h4[1].time == mpLastMoveLog[s]) return false;
-   mpLastMoveLog[s] = h4[1].time;
+   if(h4[1].time == mpLastMoveLog[ptf][s]) return false;
+   mpLastMoveLog[ptf][s] = h4[1].time;
    return true;
 }
 
-// Rebuild the profile for one symbol and journal the interesting events:
-// first readiness, POC/VA movement (max once per H4 bar), price crossings
-// of the POC / VAH / VAL since the previous M1 bar, and — in sessions
-// mode — the finished session's final profile when the next session opens.
-// Also maintains the daily POC key levels: backfilled at startup, one new
-// level per server-day rollover, and journaled when price crosses one.
-void UpdateMarketProfile(int s)
+// Rebuild one track's profile and journal the interesting events: first
+// readiness, POC/VA movement (max once per H4 bar), price crossings of
+// the POC / VAH / VAL, and — in sessions mode — the finished session's
+// final profile (stored into the stacking ring) when the next session
+// opens. Also maintains the daily POC key levels: backfilled at startup,
+// one new level per server-day rollover, journaled when price crosses
+// one. Reference only — nothing here trades.
+void UpdateMarketProfile(int ptf, int s)
 {
    // The active session — tracked in BOTH profile modes: the session ring
    // (stacking read) must keep receiving completed sessions even when the
    // active profile is a rolling window.
    int sid = MPSessionId(TimeCurrent());
 
-   // Session stacking (EXPERIMENTAL): backfill the completed sessions once
-   // so the stack read works from the first tick.
-   if(!mpSessBackfilled[s])
+   // Session stacking (EXPERIMENTAL, reference): backfill the completed
+   // sessions once so the stack read works from the first tick.
+   if(!mpSessBackfilled[ptf][s])
    {
-      MPBackfillSessions(s);
-      mpSessBackfilled[s] = true;
+      MPBackfillSessions(ptf, s);
+      mpSessBackfilled[ptf][s] = true;
    }
 
-   // Daily POC key levels (EXPERIMENTAL): backfill the completed days once,
-   // then finalize each day when the server date rolls over.
-   if(!mpDaysBackfilled[s])
+   // Daily POC key levels (EXPERIMENTAL, reference): backfill the
+   // completed days once, then finalize each day at the server-day
+   // rollover.
+   if(!mpDaysBackfilled[ptf][s])
    {
-      MPBackfillDays(s);
-      mpDaysBackfilled[s] = true;
+      MPBackfillDays(ptf, s);
+      mpDaysBackfilled[ptf][s] = true;
    }
    int dayKey = MPDateKey(TimeCurrent());
-   if(dayKey != mpDayKey[s])
+   if(dayKey != mpDayKey[ptf][s])
    {
-      if(mpDayKey[s] > 0)                    // a full day just ended — finalize it
+      if(mpDayKey[ptf][s] > 0)               // a full day just ended — finalize it
       {
          MPDayLevel dl;
-         if(BuildDayProfile(s, MPDayStart(TimeCurrent()) - 86400, dl))
+         if(BuildDayProfile(ptf, s, MPDayStart(TimeCurrent()) - 86400, dl))
          {
-            MPPushDayLevel(s, dl);
+            MPPushDayLevel(ptf, s, dl);
             if(InpMPLog)
             {
-               int bias = MPShapeBias(s);
+               int bias = MPShapeBias(ptf, s);
                string biasS = (bias > 0) ? "up" : (bias < 0) ? "down" : "flat";
-               if(mpDays[s][0].peaks > 0)
+               if(mpDays[ptf][s][0].peaks > 0)
                {
                   string lv = "";
-                  for(int p = 0; p < mpDays[s][0].peaks; p++)
+                  for(int p = 0; p < mpDays[ptf][s][0].peaks; p++)
                   {
                      if(p > 0) lv += "/";
-                     lv += DoubleToString(mpDays[s][0].poc[p],
+                     lv += DoubleToString(mpDays[ptf][s][0].poc[p],
                                           (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS));
                   }
-                  Print(PCTime() + " | MP " + syms[s] + " day closed " +
-                        TimeToString(dl.day, TIME_DATE) + " [" + MPShapeCode(mpDays[s][0].shape) +
-                        "] — POC" + (mpDays[s][0].peaks > 1 ? "s" : "") + " " + lv +
-                        " added as key level(s) (" + IntegerToString(mpDaysCount[s]) + "/" +
+                  Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] day closed " +
+                        TimeToString(dl.day, TIME_DATE) + " [" + MPShapeCode(mpDays[ptf][s][0].shape) +
+                        "] — POC" + (mpDays[ptf][s][0].peaks > 1 ? "s" : "") + " " + lv +
+                        " added as key level(s) (" + IntegerToString(mpDaysCount[ptf][s]) + "/" +
                         IntegerToString(mpDaysKeep) + " kept) | shape read: " + biasS);
                }
                else
-                  Print(PCTime() + " | MP " + syms[s] + " day closed " +
-                        TimeToString(dl.day, TIME_DATE) + " [" + MPShapeCode(mpDays[s][0].shape) +
+                  Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] day closed " +
+                        TimeToString(dl.day, TIME_DATE) + " [" + MPShapeCode(mpDays[ptf][s][0].shape) +
                         "] — NO significant POC (max/mean " +
-                        DoubleToString(mpDays[s][0].pocRatio, 1) + "x, VA span " +
-                        DoubleToString(100.0 * mpDays[s][0].vaSpanRatio, 0) +
+                        DoubleToString(mpDays[ptf][s][0].pocRatio, 1) + "x, VA span " +
+                        DoubleToString(100.0 * mpDays[ptf][s][0].vaSpanRatio, 0) +
                         "%) — no key level added | shape read: " + biasS);
             }
          }
       }
-      mpDayKey[s] = dayKey;
+      mpDayKey[ptf][s] = dayKey;
    }
 
-   // Sessions mode: the active session just changed — store the finished
-   // session's final profile into the stacking ring (mp[s] still holds its
-   // last build), journal it with the current stack, and start the new
-   // session fresh: its profile stays neutral until it has collected
-   // InpMPMinBars minutes of its own.
-   if(sid != mpSession[s])
+   // The active session just changed — store the finished session's final
+   // profile into the stacking ring (mp[ptf][s] still holds its last
+   // build), journal it with the current stack, and start the new session
+   // fresh (in sessions mode).
+   if(sid != mpSession[ptf][s])
    {
-      if(mpSession[s] >= 0 && mp[s].ready)
+      if(mpSession[ptf][s] >= 0 && mp[ptf][s].ready)
       {
          MPSessionLevel sl;
-         sl.start = MPSessionStart(TimeCurrent(), mpSession[s]);
+         sl.start = MPSessionStart(TimeCurrent(), mpSession[ptf][s]);
          if(sl.start > TimeCurrent()) sl.start -= 86400;   // NY closing at midnight
-         sl.sessionId = mpSession[s];
-         sl.poc  = mp[s].poc;
-         sl.vah  = mp[s].vah;
-         sl.val  = mp[s].val;
-         sl.high = mp[s].profileHigh;
-         sl.low  = mp[s].profileLow;
-         sl.bars = mp[s].bars;
+         sl.sessionId = mpSession[ptf][s];
+         sl.poc  = mp[ptf][s].poc;
+         sl.vah  = mp[ptf][s].vah;
+         sl.val  = mp[ptf][s].val;
+         sl.high = mp[ptf][s].profileHigh;
+         sl.low  = mp[ptf][s].profileLow;
+         sl.bars = mp[ptf][s].bars;
          sl.valid = true;
-         MPPushSessionLevel(s, sl);
+         MPPushSessionLevel(ptf, s, sl);
 
          if(InpMPLog)
          {
             int stkCnt = 0;
-            int stk = MPSessionStack(s, stkCnt);
-            Print(PCTime() + " | MP " + syms[s] + " " + MPSessionName(mpSession[s]) +
-                  " session CLOSED (" + IntegerToString(mp[s].bars) + " bars, " +
-                  IntegerToString(mp[s].totalTpo) + " TPO): POC " +
-                  DoubleToString(mp[s].poc, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
-                  " VA " + DoubleToString(mp[s].val, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
-                  ".." + DoubleToString(mp[s].vah, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
-                  " range " + DoubleToString(mp[s].profileLow, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
-                  ".." + DoubleToString(mp[s].profileHigh, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
+            int stk = MPSessionStack(ptf, s, stkCnt);
+            Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] " +
+                  MPSessionName(mpSession[ptf][s]) +
+                  " session CLOSED (" + IntegerToString(mp[ptf][s].bars) + " bars, " +
+                  IntegerToString(mp[ptf][s].totalTpo) + " TPO): POC " +
+                  DoubleToString(mp[ptf][s].poc, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
+                  " VA " + DoubleToString(mp[ptf][s].val, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
+                  ".." + DoubleToString(mp[ptf][s].vah, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
+                  " range " + DoubleToString(mp[ptf][s].profileLow, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
+                  ".." + DoubleToString(mp[ptf][s].profileHigh, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
                   (stk != 0 ? " | stack: " + IntegerToString(stkCnt) + " " + (stk == 1 ? "UP" : "DOWN")
                             : " | stack: flat"));
          }
       }
-      mpSession[s] = sid;
-      if(InpMPProfileType == MP_PROFILE_SESSIONS) mp[s].ready = false;
-   }
-
-   // AUTO regime (EXPERIMENTAL): detect the auction regime once per M1
-   // bar and journal every change. Runs before the profile build so a
-   // build failure never leaves the regime stale.
-   if(InpMPEntryMode == MPMODE_AUTO)
-   {
-      int reg = MPAutoDetect(s);
-      if(reg != mpAutoRegime[s])
-      {
-         if(mpAutoRegime[s] >= 0 && InpMPLog)
-         {
-            string extra = "";
-            if(reg == MPREG_STACK)
-            {
-               int stkCnt = 0;
-               int stk = MPSessionStack(s, stkCnt);
-               extra = " (" + IntegerToString(stkCnt) + " " + (stk == 1 ? "UP" : "DOWN") + ")";
-            }
-            Print(PCTime() + " | MP " + syms[s] + " auto regime: " + MPRegimeName(reg) + extra);
-         }
-         mpAutoRegime[s] = reg;
-      }
+      mpSession[ptf][s] = sid;
+      if(InpMPProfileType == MP_PROFILE_SESSIONS) mp[ptf][s].ready = false;
    }
 
    MPData built;
-   if(!BuildMarketProfile(s, built))
+   if(!BuildMarketProfile(ptf, s, built))
    {
-      if(mp[s].ready)
-         Print(PCTime() + " | MP " + syms[s] + " profile unavailable — filters neutral");
-      mp[s].ready = false;
+      if(mp[ptf][s].ready)
+         Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] profile unavailable");
+      mp[ptf][s].ready = false;
       return;
    }
 
-   bool wasReady = mp[s].ready;
+   bool wasReady = mp[ptf][s].ready;
 
    int digits = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
    string fmt = DoubleToString(built.bucketSize / SymbolInfoDouble(syms[s], SYMBOL_POINT), 1);
 
    if(!wasReady)
    {
-      mp[s] = built;
+      mp[ptf][s] = built;
       if(InpMPLog)
-         Print(PCTime() + " | MP " + syms[s] + " profile READY (" +
+         Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] profile READY (" +
                (InpMPProfileType == MP_PROFILE_SESSIONS ? MPSessionName(built.sessionId) + " session, " : "") +
-               IntegerToString(built.bars) + " M1 bars, " + IntegerToString(built.buckets) +
+               IntegerToString(built.bars) + " " + mpTfName[ptf] + " bars, " + IntegerToString(built.buckets) +
                " buckets of " + fmt + " pts): POC " + DoubleToString(built.poc, digits) +
                " VA " + DoubleToString(built.val, digits) + ".." + DoubleToString(built.vah, digits) +
                " (" + DoubleToString(100.0 * built.pocCount / built.totalTpo, 0) + "% POC share)");
       return;
    }
 
-   bool moved = (MathAbs(built.poc - mp[s].poc) >= 0.5 * built.bucketSize) ||
-                (MathAbs(built.vah - mp[s].vah) >= 0.5 * built.bucketSize) ||
-                (MathAbs(built.val - mp[s].val) >= 0.5 * built.bucketSize);
-   mp[s] = built;
+   bool moved = (MathAbs(built.poc - mp[ptf][s].poc) >= 0.5 * built.bucketSize) ||
+                (MathAbs(built.vah - mp[ptf][s].vah) >= 0.5 * built.bucketSize) ||
+                (MathAbs(built.val - mp[ptf][s].val) >= 0.5 * built.bucketSize);
+   mp[ptf][s] = built;
 
-   // Price crossing a profile level between the two last closed M1 bars
+   // Price crossing a profile level between the two last closed bars of
+   // the profile TF
    string crossed = "";
    double c1 = 0.0, c2 = 0.0;
    MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) >= 3)
+   if(CopyRates(syms[s], mpTfs[ptf], 0, 3, m1) >= 3)
    {
       ArraySetAsSeries(m1, true);
       c1 = m1[1].close;
@@ -2354,274 +2233,35 @@ void UpdateMarketProfile(int s)
    }
    if(c2 != 0.0 && c1 != 0.0)
    {
-      if((c2 - mp[s].poc) * (c1 - mp[s].poc) <= 0.0) crossed = " POC";
-      if((c2 - mp[s].vah) * (c1 - mp[s].vah) <= 0.0) crossed += " VAH";
-      if((c2 - mp[s].val) * (c1 - mp[s].val) <= 0.0) crossed += " VAL";
+      if((c2 - mp[ptf][s].poc) * (c1 - mp[ptf][s].poc) <= 0.0) crossed = " POC";
+      if((c2 - mp[ptf][s].vah) * (c1 - mp[ptf][s].vah) <= 0.0) crossed += " VAH";
+      if((c2 - mp[ptf][s].val) * (c1 - mp[ptf][s].val) <= 0.0) crossed += " VAL";
    }
 
    // Price crossing a stored daily key level (any area of interest of any
-   // stored day) between the two last closed M1 bars
+   // stored day)
    string dayCross = "";
-   for(int i = 0; i < mpDaysCount[s]; i++)
+   for(int i = 0; i < mpDaysCount[ptf][s]; i++)
    {
-      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-      for(int p = 0; p < mpDays[s][i].peaks; p++)
+      if(!mpDays[ptf][s][i].valid || mpDays[ptf][s][i].peaks <= 0) continue;
+      for(int p = 0; p < mpDays[ptf][s][i].peaks; p++)
       {
-         double lvl = mpDays[s][i].poc[p];
+         double lvl = mpDays[ptf][s][i].poc[p];
          if((c2 - lvl) * (c1 - lvl) <= 0.0)
             dayCross += (dayCross == "" ? "" : " ; ") +
-                        TimeToString(mpDays[s][i].day, TIME_DATE) +
-                        (mpDays[s][i].peaks > 1 ? " #" + IntegerToString(p + 1) : "") +
+                        TimeToString(mpDays[ptf][s][i].day, TIME_DATE) +
+                        (mpDays[ptf][s][i].peaks > 1 ? " #" + IntegerToString(p + 1) : "") +
                         " (" + DoubleToString(lvl, digits) + ")";
       }
    }
    if(InpMPLog && dayCross != "")
-      Print(PCTime() + " | MP " + syms[s] + " price crossed daily key level(s): " + dayCross);
+      Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "] price crossed daily key level(s): " + dayCross);
 
-   if(InpMPLog && (crossed != "" || (moved && MPNewH4Bar(s))))
-      Print(PCTime() + " | MP " + syms[s] + (moved ? " moved" : "") +
+   if(InpMPLog && (crossed != "" || (moved && MPNewH4Bar(ptf, s))))
+      Print(PCTime() + " | MP " + syms[s] + "[" + mpTfName[ptf] + "]" + (moved ? " moved" : "") +
             (crossed != "" ? " — price crossed:" + crossed : "") +
-            " — POC " + DoubleToString(mp[s].poc, digits) +
-            " VA " + DoubleToString(mp[s].val, digits) + ".." + DoubleToString(mp[s].vah, digits));
-}
-
-//==============================================================
-// ENTRY GATE + AUTO REGIME (EXPERIMENTAL)
-//==============================================================
-
-// 4 — daily POC side: the PRIMARY POC of the most recent COMPLETED day
-//     that has a significant area of interest is the key level — longs
-//     only at/above it, shorts only at/below it. Trend days (no
-//     significant POC) are skipped.
-bool MPDailyPocEntryOK(int s, int dir)
-{
-   for(int i = 0; i < mpDaysCount[s]; i++)
-   {
-      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-      double lvl = mpDays[s][i].poc[0];
-      MqlRates m1[];
-      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return true;
-      ArraySetAsSeries(m1, true);
-      double c1 = m1[1].close;
-      return (dir == 1) ? (c1 >= lvl) : (c1 <= lvl);
-   }
-   return true;
-}
-
-// 5 — stack continuation: consecutive sessions stacking (each value area
-//     entirely above the previous) = a one-directional auction. Enter
-//     WITH the stack when the last closed bar pulled back into the most
-//     recent session's value area (upper half for a long, lower half for
-//     a short). No stack = no signal.
-bool MPStackEntryOK(int s, int dir)
-{
-   int stkCnt = 0;
-   int stk = MPSessionStack(s, stkCnt);
-   if(stk == 0 || stkCnt < InpMPStackMin) return false;
-   if(mpSessCount[s] <= 0 || !mpSess[s][0].valid) return false;
-
-   MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return false;
-   ArraySetAsSeries(m1, true);
-   double c1 = m1[1].close;
-
-   if(stk ==  1 && dir ==  1) return (c1 >= mpSess[s][0].poc && c1 <= mpSess[s][0].vah);
-   if(stk == -1 && dir == -1) return (c1 <= mpSess[s][0].poc && c1 >= mpSess[s][0].val);
-   return false;
-}
-
-// 6 — old-POC reaction: the last closed bar TOUCHED an old daily POC
-//     (a key level from a completed day — the magnet) and closed back on
-//     the near side of it: the level rejected price. Long when a support
-//     POC was touched from above and held; short when a resistance POC
-//     was touched from below and held.
-bool MPOldPocEntryOK(int s, int dir)
-{
-   MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) < 3) return false;
-   ArraySetAsSeries(m1, true);
-   double c1 = m1[1].close;
-   double c2 = m1[2].close;
-   double h1 = m1[1].high;
-   double l1 = m1[1].low;
-
-   for(int i = 0; i < mpDaysCount[s]; i++)
-   {
-      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-      for(int p = 0; p < mpDays[s][i].peaks; p++)
-      {
-         double lvl = mpDays[s][i].poc[p];
-         if(dir ==  1 && l1 <= lvl && lvl <= h1 && c2 > lvl && c1 > lvl) return true;
-         if(dir == -1 && l1 <= lvl && lvl <= h1 && c2 < lvl && c1 < lvl) return true;
-      }
-   }
-   return false;
-}
-
-// 2 — VA breakout: the market expanded beyond value — enter in the
-//     direction of the expansion
-bool MPBreakEntryOK(int s, int dir)
-{
-   if(!mp[s].ready) return false;
-   MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return false;
-   ArraySetAsSeries(m1, true);
-   double c1 = m1[1].close;
-   return (dir == 1) ? (c1 > mp[s].vah) : (c1 < mp[s].val);
-}
-
-// 3 — VA edge rejection: the last closed bar traded at/beyond the edge
-//     and closed back inside it — the edge rejected price
-bool MPRejectEntryOK(int s, int dir)
-{
-   if(!mp[s].ready) return false;
-   MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) < 3) return false;
-   ArraySetAsSeries(m1, true);
-   double c1 = m1[1].close;
-   double c2 = m1[2].close;
-   if(dir == 1) return (c2 <= mp[s].val && c1 > mp[s].val);
-   return (c2 >= mp[s].vah && c1 < mp[s].vah);
-}
-
-// Is price within InpMPAutoNearATR x ATR(M1) of any old daily key level?
-bool MPNearOldPoc(int s)
-{
-   double a[1];
-   if(CopyBuffer(atrM1[s], 0, 1, 1, a) <= 0 || a[0] <= 0.0) return false;
-   MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) return false;
-   ArraySetAsSeries(m1, true);
-   double c = m1[1].close;
-   double near = InpMPAutoNearATR * a[0];
-   for(int i = 0; i < mpDaysCount[s]; i++)
-   {
-      if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-      for(int p = 0; p < mpDays[s][i].peaks; p++)
-         if(MathAbs(c - mpDays[s][i].poc[p]) <= near) return true;
-   }
-   return false;
-}
-
-// AUTO regime selection — the auction is always in one of five states:
-//   1. STACK    — sessions stacking = one-directional auction (strongest)
-//   2. MAGNET   — price is within InpMPAutoNearATR x ATR(M1) of an old
-//                 daily POC — the magnet is in play
-//   3. BREAKOUT — price has exited the active profile's value area
-//   4. BALANCE  — price is inside value: fade the edges
-//   5. DAILY    — fallback (also while the active profile is building)
-// Called once per M1 bar; journals every regime change.
-int MPAutoDetect(int s)
-{
-   int stkCnt = 0;
-   int stk = MPSessionStack(s, stkCnt);
-   if(stk != 0 && stkCnt >= InpMPStackMin) return MPREG_STACK;
-
-   if(MPNearOldPoc(s)) return MPREG_MAGNET;
-
-   if(mp[s].ready)
-   {
-      MqlRates m1[];
-      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) >= 2)
-      {
-         ArraySetAsSeries(m1, true);
-         double c1 = m1[1].close;
-         if(c1 > mp[s].vah || c1 < mp[s].val) return MPREG_BREAK;
-      }
-      return MPREG_BALANCE;
-   }
-   return MPREG_DAILY;
-}
-
-string MPRegimeName(int r)
-{
-   if(r == MPREG_STACK)   return "STACK";
-   if(r == MPREG_MAGNET)  return "MAGNET";
-   if(r == MPREG_BREAK)   return "BREAKOUT";
-   if(r == MPREG_BALANCE) return "BALANCE";
-   return "DAILY-POC";
-}
-
-// 7 — AUTO: delegate to the entry logic of the regime selected on the
-//     last M1 bar. In BALANCE, a non-flat shape read filters the fade to
-//     its direction (trend-aware fading).
-bool MPAutoEntryOK(int s, int dir)
-{
-   int reg = mpAutoRegime[s];
-   if(reg == MPREG_STACK)   return MPStackEntryOK(s, dir);
-   if(reg == MPREG_MAGNET)  return MPOldPocEntryOK(s, dir);
-   if(reg == MPREG_BREAK)   return MPBreakEntryOK(s, dir);
-   if(reg == MPREG_BALANCE)
-   {
-      if(MPShapeBias(s) != 0 && MPShapeBias(s) != dir) return false;
-      return MPRejectEntryOK(s, dir);
-   }
-   return MPDailyPocEntryOK(s, dir);
-}
-
-// May the VA-edge take profit run in the current mode? Off in VA-breakout
-// mode and in AUTO while the regime is BREAKOUT — an entry beyond the
-// edge would close itself on the very next bar.
-bool MPExitVAAllowed(int s)
-{
-   if(InpMPEntryMode == MPMODE_VA_OUT) return false;
-   if(InpMPEntryMode == MPMODE_AUTO && mpAutoRegime[s] == MPREG_BREAK) return false;
-   return true;
-}
-
-// Market profile ENTRY gate (EXPERIMENTAL). Neutral (passes) while the
-// data it needs is not ready — the layer never blocks the parent logic
-// on its own. Modes 1-3 use the active profile (rolling/session); mode 4
-// uses the daily POC key levels; modes 5-6 use the session stack and the
-// old daily key levels; mode 7 (AUTO) picks the regime itself.
-// InpMPShapeBias, when on, blocks entries against the multi-day shape
-// read in every mode.
-bool MPEntryOK(int s, int dir)
-{
-   if(InpMPEntryMode == MPMODE_OFF) return true;
-
-   // Shape-bias gate: never trade against the multi-day shape read
-   // (day shapes + session stacking)
-   if(InpMPShapeBias)
-   {
-      int bias = MPShapeBias(s);
-      if(dir ==  1 && bias < 0) return false;
-      if(dir == -1 && bias > 0) return false;
-   }
-
-   // Mode 4 — daily POC side
-   if(InpMPEntryMode == MPMODE_DAILY_POC) return MPDailyPocEntryOK(s, dir);
-
-   // Mode 5 — stack continuation
-   if(InpMPEntryMode == MPMODE_STACK)     return MPStackEntryOK(s, dir);
-
-   // Mode 6 — old-POC reaction
-   if(InpMPEntryMode == MPMODE_OLDPOC)    return MPOldPocEntryOK(s, dir);
-
-   // Mode 7 — AUTO regime selection
-   if(InpMPEntryMode == MPMODE_AUTO)      return MPAutoEntryOK(s, dir);
-
-   // Modes 1-3 use the active profile — neutral while it is not ready
-   if(!mp[s].ready) return true;
-
-   MqlRates m1[];
-   if(CopyRates(syms[s], PERIOD_M1, 0, 3, m1) < 3) return true;
-   ArraySetAsSeries(m1, true);
-   double c1 = m1[1].close;   // last closed bar
-   double c2 = m1[2].close;   // bar before it
-
-   // 1 — POC side: trade with fair value
-   if(InpMPEntryMode == MPMODE_POC)
-      return (dir == 1) ? (c1 >= mp[s].poc) : (c1 <= mp[s].poc);
-
-   // 2 — VA breakout: the market expanded beyond value
-   if(InpMPEntryMode == MPMODE_VA_OUT)
-      return (dir == 1) ? (c1 > mp[s].vah) : (c1 < mp[s].val);
-
-   // 3 — VA edge rejection: the last closed bar traded at/beyond the
-   //     edge and closed back inside it — the edge rejected price
-   if(dir == 1) return (c2 <= mp[s].val && c1 > mp[s].val);
-   return (c2 >= mp[s].vah && c1 < mp[s].vah);
+            " — POC " + DoubleToString(mp[ptf][s].poc, digits) +
+            " VA " + DoubleToString(mp[ptf][s].val, digits) + ".." + DoubleToString(mp[ptf][s].vah, digits));
 }
 
 //==============================================================
@@ -2646,9 +2286,11 @@ void OnTick()
       if(m1[1].time == lastM1bar[s]) continue;
       lastM1bar[s] = m1[1].time;
 
-      // Market profile (EXPERIMENTAL): rebuild the rolling TPO profile on
-      // each new closed M1 bar — the same cadence as every other check.
-      if(InpMPEnabled) UpdateMarketProfile(s);
+      // Market profile (EXPERIMENTAL, reference only): measure the TPO
+      // profile on the M30/H1 track(s) on each new closed M1 bar.
+      if(InpMPEnabled)
+         for(int ptf = 0; ptf < mpTfCount; ptf++)
+            UpdateMarketProfile(ptf, s);
 
       // Sync position state once per tick on the first new M1 bar instead of
       // rebuilding it on every single tick.
@@ -2660,61 +2302,6 @@ void OnTick()
          // Exit check: price touched the level TF's cloud edge
          if(state[s][l] != 0 && InCloudTouch(s, l + 1, state[s][l]))
             ExitLevel(s, l, "kumo touch");
-
-         // Market profile take-profit (EXPERIMENTAL): a long exits when the
-         // bid touches the VA high, a short when the ask touches the VA low.
-         // Skipped in VA-breakout mode and in AUTO while the regime is
-         // BREAKOUT — an entry beyond the edge would close itself on the
-         // very next bar.
-         if(InpMPEnabled && InpMPExitVA && MPExitVAAllowed(s) &&
-            state[s][l] != 0 && mp[s].ready)
-         {
-            double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
-            double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
-            if(state[s][l] == 1 && bid >= mp[s].vah)
-               ExitLevel(s, l, "VA high");
-            else if(state[s][l] == -1 && ask <= mp[s].val)
-               ExitLevel(s, l, "VA low");
-         }
-
-         // Old-POC take profit (EXPERIMENTAL): price gravitates toward old
-         // daily POCs (the magnet) — a long exits when the bid reaches the
-         // next stored key level ABOVE the current price, a short when the
-         // ask reaches the next stored key level BELOW it.
-         if(InpMPEnabled && InpMPExitOldPOC && state[s][l] != 0)
-         {
-            double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
-            double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
-            double best = 0.0;
-            if(state[s][l] == 1)
-            {
-               best = DBL_MAX;
-               for(int i = 0; i < mpDaysCount[s]; i++)
-               {
-                  if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-                  for(int p = 0; p < mpDays[s][i].peaks; p++)
-                  {
-                     double lvl = mpDays[s][i].poc[p];
-                     if(lvl > bid && lvl < best) best = lvl;
-                  }
-               }
-               if(best != DBL_MAX && bid >= best) ExitLevel(s, l, "old POC");
-            }
-            else
-            {
-               best = 0.0;
-               for(int i = 0; i < mpDaysCount[s]; i++)
-               {
-                  if(!mpDays[s][i].valid || mpDays[s][i].peaks <= 0) continue;
-                  for(int p = 0; p < mpDays[s][i].peaks; p++)
-                  {
-                     double lvl = mpDays[s][i].poc[p];
-                     if(lvl < ask && lvl > best) best = lvl;
-                  }
-               }
-               if(best > 0.0 && ask <= best) ExitLevel(s, l, "old POC");
-            }
-         }
 
          // Rejection exit: a very strong rejection candle formed on
          // the tier TF against the trade (bearish kills a long,
@@ -2747,10 +2334,6 @@ void OnTick()
             int st = ChainAligned(s, l + 1);
             if(st == 0) continue;
             if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
-
-            // Market profile gate (EXPERIMENTAL): POC side / VA breakout /
-            // VA edge rejection. Neutral while the profile is not ready.
-            if(InpMPEnabled && !MPEntryOK(s, st)) continue;
 
             // Directional bias: H4 as before, with the new H1 stand-in for
             // the lower tiers when H4 has no direction of its own.
