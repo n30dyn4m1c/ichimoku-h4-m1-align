@@ -9,7 +9,7 @@ TELEGRAM_CHAT_ID env vars). Only notifies on a *change* (state is kept in
 state/state.json), so a rare signal that persists for weeks won't spam you
 daily.
 
-Run locally:   python monitor/monitor.py [--heartbeat] [--state-dir state]
+Run locally:   python utilities/monitor/monitor.py [--heartbeat] [--state-dir state]
 Run on CI:     see .github/workflows/ms-w1-d1-monitor.yml (artifact-backed
                state so dedupe works across ephemeral runners).
 """

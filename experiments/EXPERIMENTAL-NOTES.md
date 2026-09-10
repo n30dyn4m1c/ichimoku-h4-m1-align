@@ -11,14 +11,12 @@ tell apart from the two main builds at a glance. The MS-W1-D1 build (section
 unbacktested, so it's documented and tracked here alongside the
 experimental builds until it has earned main-build status.
 
-> **Promoted, 2026-08-18.** The **H1-bias bottom-up stack** (section 20) is no
-> longer only an experiment — it is now the code behind both main builds,
-> `ichimoku-h4-m1-vps-ea.mq5` (magic `20260850`) and
-> `ichimoku-h4-m1-mt5pc-ea.mq5` (magic `20260852`). The top-down alignment
-> builds it replaced are in [`archives/`](../archives/). The experimental
-> file stays here as the reference copy and as the parent of the D1-ladder
-> fork (section 21); the main builds are where changes to the live strategy
-> now belong.
+> **Promoted, 2026-08-18 — since superseded.** The **H1-bias bottom-up
+> stack** (section 20) became the code behind both main builds (magics
+> `20260850` / `20260852`), replacing the top-down alignment builds now in
+> [`archives/`](../archives/). It was itself replaced two days later by the
+> M1-strict cloud-bias build below. The experimental file stays here as the
+> reference copy and as the parent of the D1-ladder fork (section 21).
 
 > **Promoted, 2026-08-20.** The **M1-strict cloud-bias build** (section 26) is
 > now the code behind both main builds, `ichimoku-h4-m1-vps-ea.mq5` (magic
@@ -28,6 +26,12 @@ experimental builds until it has earned main-build status.
 > builds it replaced are in [`archives/`](../archives/) as the
 > `-archived20260820` pair. The experimental file stays here as the
 > reference copy.
+
+> **Promoted, 2026-08-23.** The **robustness pack** (section 36) — five
+> hardening changes, R2 through R6, with no change to the trading logic — is
+> now carried by both main builds. The pre-pack versions are in
+> [`archives/`](../archives/) as the `-archived20260823` pair. The main
+> builds, not the experiments, are where changes to the live strategy belong.
 
 ---
 
@@ -711,7 +715,9 @@ All other inputs are identical to the main H4-M1 EA (see
 
 ## 8. H4-M1 BE30 Alignment EA (break-even stop experiment)
 
-**File:** `experimental-h4-m1-be30-ea.mq5`
+**Files:** `experimental-h4-m1-be30-ea.mq5` (Magic `20260811`), and its H1-anchored
+sibling `experimental-h1-m1-be30-ea.mq5` (Magic `20260813`), which applies the
+identical BE30 rule to the H1-M1 build and differs in nothing else.
 
 A fork of the main H4-M1 Alignment EA that adds one exit-management
 experiment: if price reaches a profitable position within `InpBE30Minutes`
@@ -3252,3 +3258,315 @@ hard halt at 30% off the peak.
 - **Micro-account instances must not run this file, and vice versa.** The
   magic numbers differ deliberately so the two never manage each other's
   positions.
+
+---
+
+## 31. H4-H1 and D1-H4 swing alignment builds
+
+**Files:**
+- `experimental-h4-h1-align-ea.mq5` — H4 anchor, H1 management (Magic `20260817`)
+- `experimental-d1-h4-align-ea.mq5` — the same stack one scale up, D1 → H4 (Magic `20260816`)
+
+Top-down alignment on a swing scale: only two timeframes have to agree, so
+the trade count is a fraction of the full M1 stack's and each position is
+held for days rather than hours. `experimental-h4-h1-align-ea.mq5` is the
+baseline the [Ignition EA](#10-h4-h1-ignition-ea-equivalence-aware-compressionbreakout)
+(section 10) is measured against — running the two side by side isolates
+exactly what the ignition entry engine adds.
+
+The D1-H4 fork changes nothing but the two timeframes and the magic number.
+Its reason for existing is the equivalence argument in
+[section 11](#11-h4-m1-alignment-filter-experiments-timeframe-pruning): D1
+and H4 are not an exact 2× pair, so neither slot is redundant, and the D1
+kijun and cloud edges are levels other participants actually trade.
+
+Both are symbol-agnostic — the earlier per-symbol US30 / Silver / BTCUSD
+tunings were removed in favour of passing any symbol through `Symbols`.
+
+### Status & caveats
+
+- Far fewer trades than anything else in the repo. Judge them over a year of
+  data, not a month.
+- The swing scale makes the M15-based ATR stop of the parent builds
+  meaningless; both use their own timeframe's ATR.
+- Neither has been forward-tested.
+
+---
+
+## 32. Bottom-Up Stack EA — hardening forks of the "very profitable" snapshot
+
+**Files:**
+- `experimental-bottomup-stack-ea-very-profitable-windows-laptop.mq5` (Magic `20260850` ⚠️)
+- `experimental-bottomup-stack-ea-very-profitable-windows-laptop-minimal.mq5` (Magic `20260852`)
+- `experimental-bottomup-stack-ea-very-profitable-windows-laptop-overextension-protection.mq5` (Magic `20260851` ⚠️)
+- `experimental-bottomup-stack-office-pc-v2.mq5` (Magic `20260849`)
+
+Four attempts to make the aggressive "very profitable" snapshot
+(section 19, magic `20260848`) survivable without giving up the runners that
+made it profitable. They are worth reading as a set, because the answer they
+converged on is *less* filtering, not more.
+
+| Build | What it adds | Verdict |
+|---|---|---|
+| **windows-laptop** | Multi-level positions restored (a running H4 no longer blocks the lower tiers), a 4 × ATR disaster stop, and a 30-minute per-tier re-entry cooldown | Fewer trades, lower profit factor than the snapshot |
+| **overextension-protection** | The windows-laptop build plus an H4 pullback guard: a turtle-soup sweep check (price runs the recent swing and closes back inside) and a lower-timeframe rejection-candle check, applied to **every** tier | Worse still — the guard cut the entries during stretched moves that produced the biggest winners |
+| **minimal** | Written *because* of those two results. Keeps the snapshot's exact trading logic and adds only structural fixes: one position per symbol enforced in both directions, a 4 × ATR disaster stop that can only tighten, and a per-tick kumo-touch exit | The one to A/B against the snapshot |
+| **office-pc-v2** | A money-management layer rather than an entry filter: a real SL at entry (`ATR × InpRiskATRMult`), a hard per-trade risk ceiling (`InpMaxRiskPct`, 2%), risk percentages cut to ~1.8% at H4 instead of 20%, equity tiers relative to *starting* equity, drawdown-aware sizing, and a daily-loss circuit breaker | The conservative end of the family |
+
+The lesson the `minimal` build's own header records: **the edge is in trend
+continuation.** Entries during stretched moves are where the runners come
+from, so an overextension gate that blocks them removes more profit than
+drawdown it saves.
+
+⚠️ `windows-laptop` shares magic `20260850` with the H1-bias build
+(section 20), and `overextension-protection` shares `20260851` with the
+D1-ladder build (section 21). Do not run either pair on one account.
+
+### Status & caveats
+
+- Backtested, not forward-tested, and only on gold.
+- `office-pc-v2` supersedes an earlier `experimental-bottomup-stack-office-pc.mq5`
+  that was never more than a truncated placeholder; it was deleted from the
+  repo rather than left to look like a build.
+- The disaster-stop distances here (4 × ATR) predate the production
+  robustness pack (section 36), which settled on 8 × ATR.
+
+---
+
+## 33. Bottom-Up Stack EA — intrabar alignment variant
+
+**File:** `experimental-bottomup-stack-ea-very-profitable-intrabar.mq5`
+**Magic number:** `20260853`
+
+The "very profitable" snapshot with exactly one change: on **M30, H1, H4 and
+D1** the price + chikou alignment is evaluated against the **forming**
+candle — current price, tenkan, kijun, cloud and chikou all update intrabar,
+sampled once per newly closed M1 bar. M1, M5 and M15 are untouched and still
+wait for their candle to close.
+
+The point is latency. A slow timeframe that turns in the first hour of an H4
+candle would otherwise not be recognised until the candle closes, by which
+time the move it signalled has often already run.
+
+**The fakeout guard is what makes it usable.** A first pass with pure
+intrabar evaluation traded blips: live price wicking through the kijun or the
+cloud opened positions that the eventual close contradicted. With
+`InpIntrabarConfirmClose = true` (the default) the forming candle must
+**agree with the last closed candle** of that timeframe, so an intrabar read
+can only ever confirm a committed direction, never invent one. Setting it to
+`false` restores the blip-prone behaviour.
+
+Everything else — the bottom-up stack, the cloud bias gate, the H4 + D1
+bias, kumo-touch exits, break-even, chandelier, the three risk regimes and
+entry consolidation — is byte-for-byte the snapshot.
+
+### Status & caveats
+
+- The variable it isolates is clean, which makes it a good A/B, but the
+  sampling is still once a minute — this is not a tick-level build.
+- Intrabar reads make Strategy Tester results sensitive to the modelling
+  mode. Compare against the snapshot under the *same* mode, ideally real
+  ticks.
+- Untested on anything but gold.
+
+---
+
+## 34. Bottom-Up Stack EA — news blackout
+
+**File:** `experimental-bottomup-stack-news-blackout-vps-ea.mq5`
+**Magic number:** `20260854` ⚠️
+
+A fork of the live VPS build that flattens and stands aside around
+high-impact releases, using the terminal's **built-in MQL5 Economic
+Calendar** — no `WebRequest`, no DLL, no scraping, nothing to keep updated.
+
+- High-impact ("red folder") events on the symbol's own currencies. `GOLDm#`
+  picks up USD automatically through its profit currency; add more with
+  `InpNewsCurrencies`.
+- Open positions on the affected symbol are closed `InpNewsBlockBeforeMin`
+  minutes before the release, and no entry is taken until
+  `InpNewsBlockAfterMin` minutes after it.
+- Medium-impact (orange) events are optional via `InpNewsIncludeMedium`.
+- It **fails open**: if the calendar cannot be read, one warning is logged
+  and trading continues normally rather than freezing the EA.
+- VPS style is preserved — `Print` + `SendNotification`, no `Alert()` popups.
+
+⚠️ It shares magic `20260854` with the standard-account build (section 22).
+Do not run both on one account.
+
+### Status & caveats
+
+- **The calendar is empty in the Strategy Tester**, so a backtest of this
+  build trades exactly like its parent. The blackout can only be evaluated
+  forward, on a demo account. This is the single most important caveat here:
+  a backtest cannot tell you whether the filter helps.
+- Section 13 is the same idea applied to the top-down H4-M1 build; the
+  rationale and the implementation notes there apply.
+- Flattening before news is a deliberate choice to accept a known small cost
+  (exiting trades that would have survived) against an unknown large one
+  (slippage through a stop during a release).
+
+---
+
+## 35. Bottom-Up Stack EA — BTCUSD# test fork
+
+**File:** `experimental-bottomup-stack-m1-strict-cloud-bias-btcusd-ea.mq5`
+**Magic number:** `20260861`
+
+The live VPS logic re-tuned for crypto testing. Five changes, all of them
+about the instrument rather than the strategy:
+
+1. `Symbols` preset to `BTCUSD#`.
+2. **Spread gate disabled** (`InpMaxSpreadPoints = 0`). The 60-point cap
+   tuned for `GOLDm#` blocked *every* BTCUSD# entry — a 2-digit BTC spread is
+   100+ points.
+3. **M1, M5 and M15 all use the full cloud-bias check** (current *and*
+   future cloud must agree), where the parent applies the full rule to M1
+   only.
+4. `InpBECoverPoints` raised 15 → **300** so the break-even stop clears the
+   much wider BTC spread instead of sitting inside it.
+5. Fresh magic `20260861`, so it can never touch the live build's positions.
+
+### Status & caveats
+
+- **A test fork, not a build.** It exists to find out whether the stack
+  transfers to crypto at all; delete it when that question is answered.
+- Points 2 and 4 are the two places where a gold-tuned build silently breaks
+  on another instrument. Any future symbol fork should start by checking
+  exactly those.
+- 24/7 markets change what the D1 and H4 biases mean — there is no weekend
+  gap and no session structure. Treat the bias results with suspicion.
+
+---
+
+## 36. Bottom-Up Stack EA — robustness pack *(promoted to the main builds)*
+
+**File:** `experimental-bottomup-stack-m1-strict-cloud-bias-robustness-vps-ea.mq5`
+**Magic number:** `20260863`
+
+**Promoted 2026-08-23.** Both main builds now carry this pack verbatim; the
+pre-pack versions are archived as the `-archived20260823` pair. The file
+stays here as the reference copy.
+
+Five hardening changes (review recommendations R2–R6). **No trading logic
+changed** — every one of them is about what happens when the broker, the
+link or the machine misbehaves.
+
+| | Change | The failure it closes |
+|---|---|---|
+| **R2** | **Unknown-position guard.** A position carrying the EA's magic whose comment no longer names a tier is logged once per ticket and blocks new entries on that symbol until it is gone | Brokers rewrite or truncate order comments on partial fills and server events. Such a position was invisible to the EA: orphaned from break-even, the trail and the cloud exit, while the EA cheerfully opened duplicates behind it |
+| **R3** | **Disaster stop.** Every entry carries a hard SL at `ATR(tier TF) × InpDisasterATRMult` (default 8); a missing stop self-heals in `ManageLevelProtection()` | The build was stopless by design, relying on a kumo-touch exit checked once per M1 bar. A gap, a dead VPS or a broken link had nothing bounding the loss |
+| **R4** | **Peak rebuild.** After a restart mid-trade the chandelier references are rebuilt from tier-timeframe history since the position's open time | They used to collapse to the open price, leaving the trail far looser after a restart than before it — silently, at the worst possible moment |
+| **R5** | **Order robustness.** `SetTypeFillingBySymbol()` before every order, and the margin cap commits at most `InpMarginUsePct` % of free margin (default 80) | CTrade's FOK default is rejected outright by IOC-only brokers; committing 100% of free margin left nothing against an adverse move |
+| **R6** | **Twin rule.** The desktop build carries the identical pack | The two builds drifting apart — see [AGENTS.md](../AGENTS.md) |
+
+**R1 was deliberately not implemented** (user decision): a supersede-invariant
+guard that would abort a new entry while an existing higher-tier position
+survived its close attempt.
+
+### Status & caveats
+
+- The disaster stop is a **backstop, not a risk budget**. Sizing is measured
+  against 2 × ATR while the stop sits at 8 × ATR, so a trade that runs to it
+  loses roughly four times the nominal risk percentage. That is the accepted
+  bargain: a bounded tail in exchange for never stopping out a trade the
+  kumo exit would have managed.
+- R2 is conservative on purpose — one unidentifiable position freezes new
+  entries for the whole symbol. If that fires often, the cause is the
+  broker's comment handling and should be investigated, not tuned around.
+- `InpDisasterStopEnabled = false` reproduces the pre-pack behaviour exactly,
+  which is the clean A/B.
+
+---
+
+## 37. Bottom-Up Stack EA — market profile layer
+
+**File:** `experimental-bottomup-stack-market-profile-vps-ea.mq5`
+**Magic number:** `20260864`
+
+The newest and largest experiment: a fork of the live VPS build (M1-strict
+cloud bias + the robustness pack) with a **TPO market profile** measured on
+M30 driving the entries.
+
+### The profile engine
+
+Rebuilt on every new M30 bar. Each bar distributes one TPO across the price
+buckets its `[low, high]` range covers, weighted by coverage.
+
+- **POC** — the bucket holding the most TPOs, i.e. fair value.
+- **Value area** — the tightest range around the POC holding
+  `InpMPValuePct` % of all TPOs; `VAH` is its top, `VAL` its bottom.
+- **Bucket height** — fixed points via `InpMPBucketPoints`, or adaptive
+  `ATR(M30) / 10` when it is `0`, clamped so a profile always spans 8–2000
+  buckets.
+- **Window** (`InpMPProfileType`) — `0` ROLLING, the last `InpMPBars` M30
+  bars (default 48 = one day); `1` SESSIONS, the current session only (Tokyo
+  from 00:00, London from 10:00, New York from 16:00 server time, matching
+  the MT5 market profile indicator).
+- **Daily POC key levels** — the last `InpMPDays` (default 8) *completed*
+  days. Peak-prominence analysis can yield up to three significant areas per
+  day (multi-distribution days); trend days yield none. Dead days are
+  skipped, levels are backfilled at startup, finalised at each server-day
+  rollover, and journaled when price crosses one.
+- **Shape read** — every completed day is classified `[N]` normal, `[2D]`
+  double distribution, `[TU]`/`[TD]` trend up/down.
+- **Session stacking** — the last 8 completed sessions. Consecutive value
+  areas piling up in one direction (Tokyo flat, London higher, New York
+  higher) mean a one-directional auction.
+
+### Entry modes (`InpMPEntryMode`)
+
+| | Mode | Rule |
+|---|---|---|
+| 0 | OFF | Profile measured and journaled only — the EA trades exactly like its parent |
+| 1 | POC side | Longs at/above the POC, shorts at/below — trade with fair value |
+| 2 | VA breakout | Longs above VAH, shorts below VAL — expansion |
+| 3 | VA reject | The last M30 bar traded beyond a value-area edge and closed back inside |
+| 4 | Daily POC | Trade with the primary POC of the most recent day that had a significant one |
+| 5 | Stack | Consecutive sessions stacking — enter with the auction on a pullback into the last session's value area |
+| 6 | Old POC | The last closed bar touched an old daily POC and closed back on the near side — the level rejected price |
+| **7** | **AUTO** *(default)* | Per-bar dispatch, in priority order, with no stale regimes |
+
+**AUTO** is where the work went. When a stack is live
+(≥ `InpMPStackMin` sessions), the auction is one-directional and *only*
+with-stack trades are allowed: a pullback into the last stacked session's
+value area, a quality-filtered extension beyond it, or the rejection of a
+fresh old daily POC. With no stack it falls through **MAGNET** (price within
+`InpMPAutoNearATR` × ATR(M30) of a fresh daily POC → trade its rejection) →
+**BREAKOUT** (price left the value area → trade the expansion, but only while
+not overextended and not against the multi-day shape read) → **BALANCE**
+(price inside value → fade the edges, filtered to the shape read) →
+**DAILY** (fallback while the profile builds). The active environment is
+journaled whenever it changes.
+
+### Strategy aim — ride trends, cut losses
+
+- **Ride:** stack and breakout continuations enter *with* the auction, the
+  chandelier trail locks profit behind the peak, and the kumo-touch exit
+  lets a trend run to its cloud. Keep `InpMPExitVA` and `InpMPExitOldPOC`
+  **off** to ride — they are take-profits that cap winners at value and key
+  levels, which is right for magnet and balance trades and wrong for trend
+  rides.
+- **Cut:** every entry carries a stop at `InpDisasterATRMult × ATR`
+  (default **2** here, against the live build's 8 — so the risked percentage
+  is what is actually at stake), break-even and the trail take over once
+  green, `InpCutTimeHours` (default 0 = off) closes a trade that is still
+  not green after N hours, and `InpMPShapeBias` (off by default) blocks
+  entries against the multi-day shape read.
+
+### Status & caveats
+
+- **Not deployed.** The production VPS file is untouched; magic `20260864`
+  shares positions with nothing.
+- **The largest surface area of any experiment here** — the profile engine,
+  seven entry modes and the AUTO dispatcher are all new code on top of an
+  already large build. Most of it has never been exercised in a backtest.
+- **AUTO is a dispatcher, not a strategy.** It picks one of four regimes per
+  bar; a result that looks good may be one regime carrying three that lose.
+  Run modes 1–6 individually before reading anything into mode 7.
+- **The 2 × ATR stop is a real change of character**, not just a tighter
+  number. The parent's 8 × ATR stop almost never fires; this one will, and
+  it will sometimes cut trades the kumo exit would have recovered.
+- Session start times are **server time** and are hard defaults
+  (`InpMPTokyoStart` / `InpMPLondonStart` / `InpMPNYStart`). Check them
+  against your broker's server offset before reading any session result.

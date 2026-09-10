@@ -20,8 +20,9 @@ Thumbs.db
 Tester/
 Reports/
 
-# Python monitor runtime state (dedupe cache — regenerated each run)
-monitor/state/
+# Python monitor runtime state (dedupe cache — regenerated each run;
+# written to ./state relative to wherever monitor.py is run from)
+state/
 __pycache__/
 *.pyc
 

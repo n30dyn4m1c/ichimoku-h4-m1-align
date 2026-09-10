@@ -18,6 +18,15 @@ VPS files (by name pattern):
   replaced the bottom-up bias-stack build (magic `20260850`), archived as
   `archives/ichimoku-h4-m1-vps-ea-archived20260820.mq5`.
 
+Since 2026-08-23 both builds also carry the **robustness pack** (review
+recommendations R2–R6: unknown-position guard, disaster stop, chandelier
+peak rebuild, per-symbol order filling + capped margin use, and the twin
+rule). It was promoted verbatim from
+`experiments/experimental-bottomup-stack-m1-strict-cloud-bias-robustness-vps-ea.mq5`;
+the pre-pack builds are archived as the `-archived20260823` pair.
+Recommendation R1 (the supersede-invariant guard) was deliberately **not**
+implemented — do not add it back without being asked.
+
 Unless the user explicitly states that a VPS file should be updated, leave
 them untouched — even when a change applies to all other EAs.
 
@@ -56,3 +65,31 @@ in code or docs:
   is grown upward from M1, each tier trades its own chain, and direction is
   granted by a bias timeframe (H4 primary, H1 stand-in) instead of by
   top-down agreement.
+
+## Documentation
+
+Three files carry the docs, and they must stay in step with the code:
+
+- `README.md` — the two main builds, their inputs, and an index table of
+  every file in `experiments/` and `archives/`.
+- `experiments/EXPERIMENTAL-NOTES.md` — one numbered section per
+  experiment. The README's `§` column points at these numbers, so a new
+  section must be added at the end (never renumbered) and the README table
+  updated in the same change.
+- `ICHIMOKU-THEORIES.md` — the time/wave/price theory the filters draw on.
+
+A new EA is not finished until it has a row in the README table and a
+section in the notes.
+
+## Magic numbers
+
+Several experiments share a magic number with a sibling (`20260848`,
+`20260850`, `20260851`, `20260854`); the README flags them. **Give any new
+build a number nothing else uses** — check with:
+
+```bash
+grep -hoE '^(int|input +int|const +int) +MAGIC[A-Z_0-9]* *= *[0-9]+' \
+  *.mq5 experiments/*.mq5 | grep -oE '[0-9]+$' | sort | uniq -c | sort -rn
+```
+
+The highest number in use is `20260864` (the market profile experiment).

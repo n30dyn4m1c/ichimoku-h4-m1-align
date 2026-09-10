@@ -20,6 +20,37 @@ build adds terminal `Alert()` popups and the weekly equity reminder.
 Both builds carry their own magic number, so they can run on the same account
 — even the same symbol — without touching each other's positions.
 
+> ### 🛡️ Robustness pack (added 2026-08-23)
+>
+> Both main builds carry a five-part hardening pack (review recommendations
+> R2–R6), promoted verbatim from
+> `experiments/experimental-bottomup-stack-m1-strict-cloud-bias-robustness-vps-ea.mq5`.
+> The trading logic is unchanged; what changed is what happens when the
+> broker, the link or the box misbehaves:
+>
+> - **R2 — unknown-position guard.** A position carrying the EA's magic whose
+>   comment no longer names a tier (brokers rewrite or truncate comments on
+>   partial fills) used to be invisible: orphaned from break-even, the trail
+>   and the cloud exit while the EA opened duplicates behind it. It is now
+>   logged once per ticket and blocks new entries on that symbol until it is
+>   gone.
+> - **R3 — disaster stop.** Every entry carries a wide hard SL at
+>   `ATR(tier TF) × InpDisasterATRMult` (default 8), so a gap or a dead VPS
+>   cannot run unbounded. See [Risk Protection](#risk-protection).
+> - **R4 — peak rebuild.** After a restart mid-trade the chandelier
+>   references are rebuilt from tier-timeframe history since the position
+>   opened, instead of collapsing to the open price and loosening the trail.
+> - **R5 — order robustness.** The filling mode is chosen per symbol (the FOK
+>   default breaks on IOC-only brokers), and one order may commit at most
+>   `InpMarginUsePct` % of free margin (default 80, was 100).
+> - **R6 — twin rule.** The desktop build carries the identical pack; only
+>   the magic, the `Alert()` popups and the equity reminder differ.
+>
+> The pre-pack builds are archived as the `-archived20260823` pair.
+> Recommendation R1 — a supersede-invariant guard that would abort a new
+> entry while a higher-tier position survives its close attempt — was
+> deliberately **not** implemented.
+>
 > ### 🔄 M1-strict cloud bias (changed 2026-08-20)
 >
 > On 2026-08-20 the main builds were replaced by the **M1-strict cloud-bias**
@@ -62,6 +93,7 @@ Both builds carry their own magic number, so they can run on the same account
 - `ichimoku-h4-m1-mt5pc-ea.mq5` — MT5 desktop build (same logic) with alerts and the weekly equity reminder
 - `archives/` — retired builds, including the 2026-08-18 top-down VPS and desktop originals and the 2026-08-14 pre-merge pair
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
+- `ICHIMOKU-THEORIES.md` — the time/wave/price theory research the filters are drawn from
 - `utilities/` — deployment scripts and the Python monitor
 
 > The repository is still named `ichimoku-h4-m1-align` after the original
@@ -100,12 +132,13 @@ that percentage steps down as the account grows.
 - ✅ Bias gate — H4 grants direction to the whole stack, with an H1 stand-in so an undecided H4 doesn't freeze the lower tiers; the H4 tier is additionally gated by D1
 - ✅ Per-timeframe Ichimoku alignment (trend + Chikou confirmation) on every rung of the chain
 - ✅ Touch-based kumo exit — the trade is cut when price reaches the tier's cloud edge, without waiting for a candle to close
-- ✅ Profit protection — break-even stop once in profit, then an ATR chandelier trail (spike-gated on the lower tiers)
+- ✅ Profit protection — a wide disaster stop attached at entry, a break-even stop once in profit, then an ATR chandelier trail (spike-gated on the lower tiers)
 - ✅ Equity-percentage risk sizing with three de-risking regimes as the account grows
 - ✅ Entry consolidation — when several tiers align at once, only the largest opens and smaller running tiers are closed into it
 - ✅ Spread filter to avoid entries during wide/illiquid conditions
 - ✅ Multi-symbol support (comma-separated watch list, up to 60 symbols)
-- ✅ Crash/restart-safe — per-tier state is rebuilt from open positions, so a restart mid-trade resumes correctly
+- ✅ Crash/restart-safe — per-tier state and chandelier peaks are rebuilt from open positions and tier-timeframe history, so a restart mid-trade resumes correctly
+- ✅ Broker-tolerant — per-symbol order filling mode, a capped margin commitment, and a guard that halts new entries on a symbol holding a position the EA can no longer identify
 - ✅ Push notifications and journal lines on every entry/exit, plus terminal `Alert()` popups on the desktop build
 - ✅ Weekly equity reminder with a suggested profit-withdrawal amount (desktop build only)
 
@@ -133,8 +166,9 @@ always-on box:
   (requote, market halt) is retried on the next M1 bar instead of freeing the
   tier for a fresh entry on top of a live position.
 - **Margin-capped sizing.** `CapLotsToMargin()` uses `OrderCalcMargin` to
-  shrink the computed volume until it fits free margin, so an oversized tier
-  is trimmed rather than rejected by the broker.
+  shrink the computed volume until it fits inside `InpMarginUsePct` % of free
+  margin (default 80), so an oversized tier is trimmed rather than rejected
+  by the broker and something is always left in reserve.
 - **Quiet, efficient operation.** Failed orders and stop modifications log
   their broker retcode, duplicate symbols in the watch list are ignored, and
   stop modifications that would only tighten microscopically are skipped to
@@ -246,14 +280,15 @@ SHA is stored in `/tmp/last_deploy_sha` (override with `STATE_FILE=`).
 > in MetaEditor — auto-deploy only drops the updated source into
 > `MQL5/Experts/`; it cannot reload a running EA.
 
-> **Migrating from the top-down build (2026-08-18).** The filename is
-> unchanged, so an existing `deploy.sh` / `auto-deploy.sh` setup picks the new
-> build up with no changes — but the **strategy and the magic number both
-> changed** (`20260846`/`20260847` → `20260850`). Any position still open
-> under an old magic will not be recognised or managed by the new build:
-> close those positions (or manage them out by hand) before or immediately
-> after the switch. Recompile with F7 and re-attach the EA so the running
-> instance is the new `.ex5`.
+> **Migrating from an older build.** The filename never changes, so an
+> existing `deploy.sh` / `auto-deploy.sh` setup picks a new build up with no
+> changes — but the magic number has moved twice: `20260846`/`20260847`
+> (top-down) → `20260850` (bottom-up bias stack) → **`20260858`** (the
+> current M1-strict cloud-bias build). A position still open under an old
+> magic is invisible to the new build and will never be managed or closed by
+> it, so close those positions (or manage them out by hand) before or
+> immediately after the switch. Recompile with F7 and re-attach the EA so the
+> running instance is the new `.ex5`.
 
 ---
 
@@ -468,9 +503,14 @@ than freeing the tier for a fresh entry on top of a live position.
 
 ### Risk Protection
 
-**There is no entry stop loss.** The trade runs until one of the exits above
-fires; protection comes from a two-stage layer that engages once the trade is
-in profit, using ATR computed on **each tier's own timeframe**:
+**The entry stop is a disaster stop, not a working stop.** Since 2026-08-23
+every entry carries a wide hard SL at `ATR(tier TF) × InpDisasterATRMult`
+(default 8.0) — far enough away that it never takes a trade the strategy
+would have managed out, close enough that a gap, a dead VPS or a broken link
+cannot run unbounded. A missing stop self-heals on the next management pass.
+The trade otherwise runs until one of the exits above fires, and the real
+protection is a two-stage layer that engages once the trade is in profit,
+using ATR computed on **each tier's own timeframe**:
 
 - **Break-even.** Once profit reaches the ATR threshold — `InpBEProfitATR`
   (default 1.0 × ATR) on M5/M15/M30, the tighter `InpBEProfitH1H4` (default
@@ -486,17 +526,21 @@ in profit, using ATR computed on **each tier's own timeframe**:
 `InpMaxSpreadPoints` (default 60) skips entries when the live spread is too
 wide; set it to `0` to disable the filter.
 
-> Running without an entry stop is a deliberate design choice of this build:
-> the touch-based kumo exit is meant to do that job, and it is checked once
-> per closed M1 bar. Between two M1 closes, a fast adverse move is uncapped.
-> Size accordingly and test on demo first.
+> The disaster stop is a backstop, not a risk budget. Position size is
+> measured against `InpRiskATRMult` (2 × ATR), while the stop sits at 8 ×
+> ATR — so a trade that runs all the way to it loses roughly four times the
+> nominal risk percentage. Day-to-day the exit is meant to be the kumo touch,
+> and that is checked once per closed M1 bar: between two M1 closes a fast
+> adverse move is capped only by the disaster stop. Size accordingly and test
+> on demo first.
 
 ### Equity-Based Position Sizing
 
 Every trade risks a **fixed percentage of actual equity at the moment of
 entry**, measured against a reference distance of
 `ATR(tier TF) × InpRiskATRMult` (default 2.0). That distance is a *sizing
-basis only* — no stop is attached to the order.
+basis only* — the stop actually attached to the order is the much wider
+disaster stop described above.
 
 The percentage steps down as the account grows, across three regimes:
 
@@ -580,12 +624,13 @@ the desktop build.
 | Parameter | Default | Description |
 |-----------|---------|--------------|
 | `InpFixedLots` | 0.10 | Fallback volume when ATR/tick data for sizing is unavailable |
-| `InpRiskATRMult` | 2.0 | Reference distance for sizing = ATR(tier TF) × this (sizing basis only — no stop is attached) |
+| `InpRiskATRMult` | 2.0 | Reference distance for sizing = ATR(tier TF) × this (sizing basis only — the attached stop is the wider disaster stop) |
 | `InpRiskTier2At` | 7000.0 | Equity at which risk drops to regime 2 (half) |
 | `InpRiskTier3At` | 13000.0 | Equity at which risk drops to regime 3 (tiny) |
 | `InpRiskPctM5` / `M15` / `M30` / `H1` / `H4` | 1 / 1 / 5 / 10 / 20 | Regime 1 risk % per tier |
 | `InpRiskPctM5_T2` … `InpRiskPctH4_T2` | 0.5 / 0.5 / 2.5 / 5 / 10 | Regime 2 risk % per tier |
 | `InpRiskPctM5_T3` … `InpRiskPctH4_T3` | 0.1 / 0.1 / 0.2 / 1 / 2 | Regime 3 risk % per tier |
+| `InpMarginUsePct` | 80.0 | Maximum % of free margin one order may commit (R5) |
 
 **Entry Filters**
 
@@ -615,6 +660,13 @@ the desktop build.
 | `InpSpikeLockATR` | 2.0 | Spike-gated chandelier arms once profit ≥ this × ATR (M5/M15/M30) |
 | `InpTrailActivateATR` | 0.5 | H1/H4 chandelier trail arms once profit ≥ this × ATR |
 | `InpTrailATR` | 1.0 | Trail distance behind the peak, × ATR (tier timeframe) |
+
+**Disaster Stop**
+
+| Parameter | Default | Description |
+|-----------|---------|--------------|
+| `InpDisasterStopEnabled` | `true` | Attach the wide hard SL at entry (R3) — turn it off to reproduce the pre-2026-08-23 stopless behaviour |
+| `InpDisasterATRMult` | 8.0 | Disaster stop distance = ATR(tier TF) × this |
 
 **Rejection Exit**
 
@@ -702,9 +754,10 @@ timeframe from the anchor down to M1 must agree before one trade opens:
   with other EAs, or with manual trades. The retired bottom-up bias-stack
   builds used `20260850` (VPS) / `20260852` (desktop), and the retired
   top-down builds `20260846` / `20260847` (VPS) and `20260830` / `20260831`
-  (desktop); those numbers are now free, but if you still have positions open
-  under them, close or migrate them before running the archived files
-  alongside the current ones.
+  (desktop). Those numbers are free as far as the *main* builds go, but
+  several files in `experiments/` still use them — see the clash warning in
+  [Experimental EAs](#experimental-eas) — so check before running an archived
+  or experimental build alongside a current one.
 - **Per-tier state recovery:** `SyncStateFromPositions()` rebuilds every
   tier's direction, entry reference, peak and break-even memory from the open
   positions filtered by magic number, using the position comment
@@ -732,157 +785,130 @@ re-read:
 
 | File | What it is |
 |------|------------|
+| `ichimoku-h4-m1-vps-ea-archived20260823.mq5` | The VPS build as it stood before the **robustness pack** (R2–R6) was promoted into it on 2026-08-23 — same M1-strict cloud-bias strategy, magic `20260858` |
+| `ichimoku-h4-m1-mt5pc-ea-archived20260823.mq5` | Its desktop twin from the same promotion (magic `20260860`) |
 | `ichimoku-h4-m1-vps-ea-archived20260820.mq5` | The **bottom-up bias-stack VPS build** replaced on 2026-08-20 (H4 bias + H1 stand-in, kumo-touch exits; magic `20260850`), superseded by the M1-strict cloud-bias build |
 | `ichimoku-h4-m1-mt5pc-ea-archived20260820.mq5` | Its desktop twin, replaced the same day (magic `20260852`) |
 | `ichimoku-h4-m1-vps-ea-archived20260818.mq5` | The **top-down** dual-mode VPS build replaced on 2026-08-18 (`InpTopTF` = `TOP_H4` / `TOP_H1`, kijun-start filter, BE30, M15/M5 Kijun-cross exit; magics `20260846` / `20260847`) |
 | `ichimoku-h4-m1-mt5pc-ea-archived20260818.mq5` | Its desktop twin, replaced the same day (magics `20260830` / `20260831`) |
 | `ichimoku-h4-m1-vps-ea-archived20260814.mq5`, `ichimoku-h1-m1-vps-ea-archived20260814.mq5` | The two separate VPS builds that were merged into the dual-mode file on 2026-08-14 |
 | `ichimoku-h4-m1-mt5pc-ea-archived20260814.mq5`, `ichimoku-h1-m1-mt5pc-ea-archived20260814.mq5` | Their desktop counterparts from the same merge |
-| `ichimoku-h4-m1-ea.mq5`, `ichimoku-h1-m1-ea.mq5`, `ichimoku-h4-m1-align-ea.mq5`, `ichimoku-h1-m1-align-ea.mq5`, and the `-archived20260811` pair | The older standard top-down alignment builds |
+| `ichimoku-h4-m1-ea-archived20260811.mq5`, `ichimoku-h1-m1-ea-archived20260811.mq5` | The oldest standard top-down alignment builds |
 
-Archived files are kept as-is and are not maintained. If you want to run one
-alongside a current build, check its magic number first — the current builds
-use `20260858` and `20260860`, and the archived ones use their own numbers,
-so they will not collide, but two archived builds of the same generation
-will.
+Archived files are kept as-is and are not maintained. **Check the magic
+number before running one alongside a current build.** Most archived builds
+carry their own number and will not collide, but the `-archived20260823`
+pair shares `20260858` / `20260860` with the live builds — running either of
+them next to the current VPS or desktop EA means two EAs managing one set of
+positions. Two archived builds of the same generation clash the same way.
 
 ---
 
 ## Experimental EAs
 
-All experimental strategies live in [`experiments/`](experiments/), each
-prefixed `experimental-` to keep them clearly separate from the main
-builds at the repo root. The set includes a PO3-enhanced
-variant of the H4-M1 alignment EA (`experimental-h4-m1-po3-ea.mq5`), an
-Ichimoku time-theory mean-reversion EA (`experimental-h1-m1-reversion-ea.mq5`),
-a fast M1-M5 breakout alignment EA (`experimental-m1-m5-breakout-ea.mq5`), a
-shorter-anchor M30-M1 breakout alignment clone
-(`experimental-m30-m1-breakout-ea.mq5`), an H4-M15 alignment clone that
-trims the stack down to M15 (`experimental-h4-m15-align-ea.mq5`), a
-Kijun-pullback variant of the H4-M1 build
-(`experimental-h4-m1-pullback-ea.mq5`) that re-enters the trend when price
-bounces off the H4 Kijun after a full-alignment breakout, two break-even
-experiments — `experimental-h4-m1-be30-ea.mq5`, which moves the stop to
-break even + a few points (spread cover) when a trade turns profitable
-within 30 minutes of entry, and `experimental-h4-m1-be15-ea.mq5`, which
-moves the stop to break even after the trade has been in profit
-continuously for 15 minutes — a news-filter fork of the H4-M1 desktop build
-(`experimental-h4-m1-news-filter-ea.mq5`) that reads the terminal's built-in
-MQL5 Economic Calendar and closes positions an hour before every high-impact
-("red folder") release, staying flat until five minutes after it — plus
-alignment-filter pruning forks of both former VPS builds, breakout/hold
-experiments, and the retired builds moved to [`archives/`](archives/). There is also
-a family of **Karen Peloille multi-timeframe EAs** (`experimental-karen-*.mq5`)
-that mechanise her system from *Trading with Ichimoku* (ch. 3–4): the Kijun
-break is the signal, the Lagging Span validates it, and the entry is a Tenkan
-(or Kijun) pullback on the management time frame — five builds covering her
-medium-term (D1→H4→H1), VST (H1→M15→M5), Kijun-retest, counter-trend-at-the-SSB,
-and 3-candle impulse strategies, each with its own magic number. The newest
-addition is the **Structure-Map EA**
-(`experimental-structure-map-ea.mq5`), which drops the alignment gate
-entirely: it records where price sits relative to every Ichimoku structure
-across up to six timeframe slots — anchored anywhere from H4 to MN1 — maps
-the swing legs and the candle structure at the level price is reacting to,
-scores that read into a conviction number, and takes the continuation
-bounce — off the cloud, off the kijun — only when the stop, the room to the
-next obstacle, and the reward:risk all work out. It ships in two flavours:
-the H4-anchored build above and a **D1-anchored fork**
-(`experimental-structure-map-d1-ea.mq5`) that bounces off daily structures
-while still timing entries on M15 — same engine, different scale, its own
-magic number so both can run at once. The **bottom-up stack family**
-also lives here: the original five-tier build
-(`experimental-bottomup-stack-ea.mq5`), the "very profitable" snapshot it
-settled into (`experimental-bottomup-stack-ea-very-profitable.mq5`), the
-**H1-bias fork** (`experimental-bottomup-stack-h1-bias-ea.mq5`) — which has
-since been **promoted to the main VPS and desktop builds at the repo root**
-and is kept here as the experimental reference — and a **D1-ladder fork**
-(`experimental-bottomup-stack-d1-ladder-ea.mq5`, magic `20260851`) that adds
-a D1 tier, a flat-kijun filter on every timeframe, and a D1 → H4 → H1
-hand-off bias ladder. A **standard-account build**
-(`experimental-bottomup-stack-standard-account-ea.mq5`, magic `20260854`)
-forks the H1-bias variant and re-scales its money management for a
-full-size account funded with about $100 — quarter risk throughout, equity thresholds at
-$700/$1300, and a minimum-lot gate that skips an entry rather than silently
-rounding it up to 0.01 lot; the trading logic is unchanged. An **M1-tier
-fork** (`experimental-bottomup-stack-m1-tier-ea.mq5`, magic `20260856`) turns
-M1 into a sixth tradable tier — it opens on M1 alignment alone and exits on a
-touch of the M1 cloud, each higher tier still exiting on its own timeframe's
-cloud exactly as before. An **M30-bias fork**
-(`experimental-bottomup-stack-m30-bias-ea-third-most-profitable.mq5`,
-magic `20260855`) — the third most profitable build in the family per the
-user's 2026-08-20 report — keeps the parent's H4 bias and H1 stand-in
-untouched and adds two changes: a **fundamental redefinition of a valid
-kumo breakout** — on every timeframe from M1 to D1 (entry chains, biases,
-the D1 filter), a breakout now requires price beyond the kumo **and**
-chikou beyond the kumo **and** the tenkan/kijun twist (tenkan > kijun
-bullish, < bearish) — plus an **M30 bias** as the last-resort stand-in:
-when H4 and H1 are both flat, the M5 and M15 tiers may still open provided
-M30 shows that valid breakout, and those M30-authorised trades close when
-a candle closes beyond the highest timeframe's **tenkan sen** (an M5
-candle close beyond the M5 tenkan, an M15 candle close beyond the M15
-tenkan) instead of the cloud. A further fork
-(`experimental-bottomup-stack-m1m5m15m30-strict-cloud-bias-ea.mq5`, magic
-`20260859`) makes the cloud-bias gate **wait for both cloud positions to
-agree** on M1 through M30 — the Span A/B twist must hold at the current
-bar AND at the far end of the future cloud — while H1 and H4 only look atthe future cloud. An
-**M1-strict cloud-bias fork** (`experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5`,
-magic `20260858`) keeps the early-breakout freedom on the bigger tiers:
-on M1 both the current and future cloud must be twisted the trade's way,
-while M5 and above need only the future cloud — the current cloud may be
-either direction. It is the most profitable iteration reported so far
-($100 → $14000 on Jan–Aug 2026 backtest, user report) — **promoted
-2026-08-20 to the main VPS/desktop builds at the repo root** (magics
-`20260858` / `20260860`), with the experiment file kept here as the
-reference. An
-**M1/M5-strict follow-up** (`experimental-bottomup-stack-m1m5-strict-cloud-bias-ea-second-most-profitable.mq5`,
-same magic) extends the full check to M5 as well — M1 and M5 both need
-current+future agreement, M15 and above keep the future-only rule; the
-user reports it as the second most profitable iteration. A
-**M1/M5/M15-strict follow-up** (`experimental-bottomup-stack-m1m5m15-strict-cloud-bias-ea.mq5`,
-same magic) extends the full check to M15 too — M1/M5/M15 need
-current+future agreement, M30 and above keep the future-only rule. A
-**standard-account conversion of the live build**
-(`experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5`, magic
-`20260862`) forks the current VPS EA — not the retired H1-bias parent the
-earlier standard-account build came from — for a **full-size account
-funded with about $100**, replacing the XM Ultra Low Micro account the
-live build runs on. On a standard gold symbol 0.01 lot is 1 oz (about $1
-of P/L per $1 of gold), ten times the micro exposure and the smallest
-trade the broker accepts, which breaks two of the parent's assumptions at
-once: its risk table is overridden by the lot floor below roughly $10k of
-equity, and it attaches **no entry stop at all**. So this build adds a
-**hard stop at entry** (2 × ATR of the tier TF — the same distance the
-parent already used as its sizing reference, now real and attached),
-**prices risk against that stop** rather than a notional distance, caps
-**every** trade at 5% of equity and **skips** any entry whose minimum lot
-would exceed it (so the tiers unlock one at a time as equity grows —
-typically only M5 can trade at $100), re-cuts the risk ladder to
-1/1.5/2/2.5/3% with thresholds at $2000/$10000, and adds a **daily loss
-limit, a peak drawdown halt and a 60-minute post-loss cooldown** that all
-survive a VPS restart. It also tightens the entry gate to the
-**M1/M5/M15-strict cloud rule** above (via a new `InpStrictCloudUpTo`
-input) and prints a **live per-tier risk table** to the journal on the
-first M1 bar. The hard stop is an explicit trade-off, not a free win — it
-will sometimes fire where the kumo-touch exit would have let a trade
-recover; `InpUseHardStop = false` reproduces the parent exactly. The
-rest are
-newer and less battle-tested
-than the main builds; see
-**[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**
-for the full catalog.
+Every experimental strategy lives in [`experiments/`](experiments/), prefixed
+`experimental-` so it can never be confused with the two main builds at the
+repo root. They are newer and less tested than the main builds — treat them
+as research code and demo-test them first.
 
-> The per-symbol US30, Silver, and BTCUSD variants of the H4-H1 swing EA
-> (`experimental-h4-h1-align-us30-ea.mq5`,
-> `experimental-h4-h1-align-silver-ea.mq5`,
-> `experimental-h4-h1-align-btc-ea.mq5`) were removed from the repo —
-> their per-symbol tuning is superseded by the symbol-agnostic H4-H1
-> builds (`experimental-h4-h1-align-ea.mq5`, the ignition EA, and the
-> per-timeframe EA), which accept any symbol through the `Symbols` input.
+The full write-up for each family is in
+**[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**;
+the tables below are the index. The § column points at the notes section.
 
-The **MS-W1-D1 build** and its **Python + GitHub Actions monitor** — both new
-and unbacktested — are also documented in
-**experiments/EXPERIMENTAL-NOTES.md** (section 6) until they've
-earned main-build status.
+> **Magic numbers are not all unique.** Forks were sometimes given a number a
+> sibling already used. Files sharing a magic **must not run on the same
+> account at the same time** — they would each try to manage the other's
+> positions. The known clashes are `20260848`, `20260850`, `20260851` and
+> `20260854` (marked ⚠️ below), plus the deliberate `20260858` lineage, which
+> the live VPS build also uses.
+
+### Bottom-up stack family (the current model)
+
+The lineage that produced the live builds. Each row forks the row above it
+unless stated otherwise.
+
+| File (`experiments/`) | Magic | What it changes | § |
+|---|---|---|---|
+| `experimental-bottomup-stack-ea.mq5` | `20260848` ⚠️ | The original five-tier bottom-up build — M1 grown upward, each tier trading its own chain | 19 |
+| `experimental-bottomup-stack-ea-very-profitable.mq5` | `20260848` ⚠️ | The snapshot the family settled into; parent of the hardening forks below | 19 |
+| `experimental-bottomup-stack-ea-very-profitable-intrabar.mq5` | `20260853` | M30/H1/H4/D1 alignment read on the **forming** candle, with close confirmation against fakeouts; M1–M15 still wait for the close | 33 |
+| `experimental-bottomup-stack-ea-very-profitable-windows-laptop.mq5` | `20260850` ⚠️ | Multi-level positions restored, plus a disaster stop (4 × ATR) and a per-tier re-entry cooldown | 32 |
+| `experimental-bottomup-stack-ea-very-profitable-windows-laptop-minimal.mq5` | `20260852` | Structural fixes **only** — one position per symbol, disaster stop, per-tick kumo exit. Written after backtests showed the filtered forks did worse than the raw snapshot | 32 |
+| `experimental-bottomup-stack-ea-very-profitable-windows-laptop-overextension-protection.mq5` | `20260851` ⚠️ | Adds an H4 pullback guard — turtle-soup sweep and rejection-candle exhaustion checks on every tier | 32 |
+| `experimental-bottomup-stack-office-pc-v2.mq5` | `20260849` | Safety layer over the snapshot: real SL at entry, per-trade risk ceiling, drawdown-aware sizing, daily-loss circuit breaker | 32 |
+| `experimental-bottomup-stack-h1-bias-ea.mq5` | `20260850` ⚠️ | H1 stands in for the bias when H4 is flat. **Promoted 2026-08-18** to the main builds | 20 |
+| `experimental-bottomup-stack-d1-ladder-ea.mq5` | `20260851` ⚠️ | Adds a D1 tier, a flat-kijun filter on every timeframe, and a D1 → H4 → H1 bias ladder | 21 |
+| `experimental-bottomup-stack-standard-account-ea.mq5` | `20260854` ⚠️ | Re-scales the H1-bias fork's money management for a full-size account funded with ~$100 — quarter risk, min-lot gate that skips rather than rounds up | 22 |
+| `experimental-bottomup-stack-news-blackout-vps-ea.mq5` | `20260854` ⚠️ | Flattens positions before high-impact ("red folder") events from the terminal's built-in calendar and blocks entries until after them | 34 |
+| `experimental-bottomup-stack-m1-tier-ea.mq5` | `20260856` | Makes M1 a sixth **tradable** tier — opens on M1 alignment alone, exits on the M1 cloud | 23 |
+| `experimental-bottomup-stack-refined-ea.mq5` | `20260857` | Consolidation hardening; the cloud-bias gate looks only at the projected kumo 26 bars ahead | 24 |
+| `experimental-bottomup-stack-m30-bias-ea-third-most-profitable.mq5` | `20260855` | Redefines a valid kumo breakout on **M1–D1** (price + chikou beyond the kumo + tenkan/kijun twist) and adds an M30 last-resort bias with tenkan-close exits. Third most profitable (user report, 2026-08-20) | 25 |
+| `experimental-bottomup-stack-m1-strict-cloud-bias-ea-most-profitable.mq5` | `20260858` | M1 must be twisted the trade's way at **both** the current bar and the far end of the future cloud; M5+ check the future cloud only. Most profitable so far — **promoted 2026-08-20** to the main builds | 26 |
+| `experimental-bottomup-stack-m1m5-strict-cloud-bias-ea-second-most-profitable.mq5` | `20260858` | M5 joins the full current+future check | 27 |
+| `experimental-bottomup-stack-m1m5m15-strict-cloud-bias-ea.mq5` | `20260858` | M15 joins the full check | 28 |
+| `experimental-bottomup-stack-m1m5m15m30-strict-cloud-bias-ea.mq5` | `20260859` | M30 joins the full check; only H1 and H4 stay future-only | 29 |
+| `experimental-bottomup-stack-m1-strict-cloud-bias-btcusd-ea.mq5` | `20260861` | BTCUSD# test fork of the live build: spread gate off, BE cover raised to 300 points, full cloud check on M1/M5/M15 | 35 |
+| `experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5` | `20260862` | Forks the **live** build for a ~$100 full-size account: hard 2 × ATR stop at entry, risk priced against it, 5% per-trade cap, min-lot skip, daily-loss / drawdown / cooldown breakers | 30 |
+| `experimental-bottomup-stack-m1-strict-cloud-bias-robustness-vps-ea.mq5` | `20260863` | The robustness pack (R2–R6) hardening the live build. **Promoted 2026-08-23** into the main builds | 36 |
+| `experimental-bottomup-stack-market-profile-vps-ea.mq5` | `20260864` | **Newest.** Adds a TPO market-profile layer measured on M30 — POC, value area, daily key levels, session stacking, day-shape read — driving entries through an AUTO regime dispatcher | 37 |
+
+### Top-down alignment builds
+
+The retired model: every timeframe from the anchor down to M1 must agree
+before one trade opens. Kept for reference and A/B work.
+
+| File (`experiments/`) | Magic | What it is | § |
+|---|---|---|---|
+| `experimental-h4-m1-po3-ea.mq5` | `20260502` | H4-M1 alignment plus a Power-of-Three dealing-range filter | 1 |
+| `experimental-h4-m15-align-ea.mq5` | `20260724` | H4 anchor, stack trimmed to M15 | 5 |
+| `experimental-h4-m15-vps-ea.mq5` | `20260825` | VPS-style build of the H4-M15 clone — push/journal only, no popups | 11 |
+| `experimental-h4-m1-be30-ea.mq5` | `20260811` | Break even + spread cover once a trade is profitable within 30 minutes of entry | 8 |
+| `experimental-h1-m1-be30-ea.mq5` | `20260813` | The same BE30 rule on the H1 anchor | 8 |
+| `experimental-h4-m1-be15-ea.mq5` | `20260812` | Break even after 15 continuous minutes in profit, with a kihon-suchi time filter | 9 |
+| `experimental-h4-m1-pullback-ea.mq5` | `20260807` | Re-enters the trend on a bounce off the H4 kijun after a full-alignment breakout | 7 |
+| `experimental-h4-m1-news-filter-ea.mq5` | `20260832` | Closes an hour before every high-impact release, flat until five minutes after | 13 |
+| `experimental-h4-m1-kijun-start-vps-ea.mq5` | `20260846` | The dual-mode H4/H1 VPS merge with the kijun-start filter | 18 |
+| `experimental-h4-m1-no-m30-ea.mq5` | `20260822` | Alignment-filter pruning — M30 dropped from the chain | 11 |
+| `experimental-h4-m1-no-m30-m1-ea.mq5` | `20260823` | M30 and M1 dropped | 11 |
+| `experimental-h4-m1-no-m30-m5-m1-ea.mq5` | `20260824` | M30, M5 and M1 dropped | 11 |
+| `experimental-h4-m1-no-m1-ea.mq5` | `20260828` | M1 dropped | 11 |
+| `experimental-h1-m1-no-m1-ea.mq5` | `20260829` | M1 dropped, H1 anchor | 11 |
+| `experimental-h4-h1-align-ea.mq5` | `20260817` | Symbol-agnostic H4-H1 swing build | 31 |
+| `experimental-d1-h4-align-ea.mq5` | `20260816` | The same stack anchored one scale up, D1 → H4 | 31 |
+| `experimental-h4-h1-ignition-ea.mq5` | `20260821` | Equivalence-aware compression/breakout ("ignition") entry engine | 10 |
+| `experimental-h4-h1-per-timeframe-ea.mq5` | `20260826` / `20260827` | Each timeframe trades its own breakout and exits on a tenkan close | 12 |
+
+### Other models
+
+| File (`experiments/`) | Magic | What it is | § |
+|---|---|---|---|
+| `experimental-h1-m1-reversion-ea.mq5` | `20260722` | Ichimoku time-theory mean reversion rather than trend following | 2 |
+| `experimental-m1-m5-breakout-ea.mq5` | `20260717` | Fast M1-M5 breakout alignment | 3 |
+| `experimental-m30-m1-breakout-ea.mq5` | `20260723` | The same breakout on a shorter M30 anchor | 4 |
+| `experimental-kumo-breakout-ea.mq5` | `20260845` | Kumo breakout with a flat-kijun filter | 17 |
+| `experimental-structure-map-ea.mq5` | `20260834` | Drops the alignment gate entirely: maps price against every Ichimoku structure across up to six timeframe slots, scores the read into a conviction number, and takes the continuation bounce only when stop, room and reward:risk all work out | 14 |
+| `experimental-structure-map-d1-ea.mq5` | `20260835` | The same engine one scale up — daily structures, M15 timing | 15 |
+| `ichimoku-ms-w1-d1-ea.mq5` | `20260806` | The MS → W1 → D1 long-horizon build described [above](#ms-w1-d1-alignment-build); watched by the Python monitor rather than run on a VPS | 6 |
+
+### Karen Peloille family
+
+Five builds mechanising the system from *Trading with Ichimoku* (ch. 3–4):
+the Kijun break is the signal, the Lagging Span validates it, and entry is a
+Tenkan (or Kijun) pullback on the management timeframe. All are documented in
+notes section 16.
+
+| File (`experiments/`) | Magic | Her strategy |
+|---|---|---|
+| `experimental-karen-multitf-ea.mq5` | `20260840` | Medium-term, D1 → H4 → H1 |
+| `experimental-karen-vst-ea.mq5` | `20260841` | Very-short-term, H1 → M15 → M5 |
+| `experimental-karen-kijun-retest-ea.mq5` | `20260842` | Kijun retest |
+| `experimental-karen-countertrend-ea.mq5` | `20260843` | Counter-trend at the Senkou Span B |
+| `experimental-karen-candle3-ea.mq5` | `20260844` | Three-candle impulse |
+
+> The per-symbol US30, Silver and BTCUSD variants of the H4-H1 swing EA were
+> removed from the repo — their per-symbol tuning is superseded by the
+> symbol-agnostic H4-H1 builds, which accept any symbol through the `Symbols`
+> input.
 
 ---
 
