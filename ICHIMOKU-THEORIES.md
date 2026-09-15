@@ -339,6 +339,7 @@ The repo's EAs already implement slices of this framework:
 | **H1-M1 Reversion EA** (`InpTimeCycles` = 9/17/26/33 ±2) | Time + Wave | The inverse use: after the move has run a full cycle *and* the Kijun has gone flat, the change day is treated as a turn point — fade the extension back to the flat Kijun. The "Kijun touch" reset is wave-2/equilibrium logic. |
 | **Alignment builds** (price + Chikou vs Tenkan/Kijun/Kumo) | Wave (equilibrium) | Trend-following wave-3 continuation: all timeframes must agree that price is on the trend side of the equilibrium. Effectively buys young N-wave legs, not mature ones. |
 | Exit logic (Kijun cross, trail) | Wave | Wave-2-invalidation exit: when price crosses back through the equilibrium, the wave count is broken. |
+| **Kihon-Suchi + PO3 Gate EA** (`experimental-bottomup-stack-kihon-po3-ea.mq5`, notes §38) | Time + Price | The ±2 window this section asks for, on a **different count** from the be15 filter above. Candles from a **calendar anchor** (day / week / month / year / custom time) rather than bars since a Kijun touch, read as a **ladder** of timeframes (default H4/H1/M30/M15 from the week open, plus M2 from the day open) and requiring N of them to sit within ±2 of the *nearest* kihon number — nearest and either side, because a turn due at 26 is not cancelled by the candle after it. M2 is anchored to the **day** on purpose: counted from the week open it passes 257 by Monday morning and is past the end of the series for the rest of the week. It gates entries ahead of the alignment stack. A PO3 level gate behind it supplies the price half: room to the next 3ⁿ level measured in the tier's own ATR, and the level as the take profit. |
 
 Notable gaps — where the framework *could* extend the EAs (research ideas only,
 not implemented):
@@ -348,9 +349,11 @@ not implemented):
 - **Wave-shape classification**: label I/V/N automatically (swing detection on the
   anchor timeframe) to filter entries by wave position (e.g. only wave-3
   continuations).
-- **Change-day windows**: replace exact-match cycle veto with a ±tolerance window
-  and/or anchor-timeframe-only checks (the reversion EA already uses ±2; the
-  README suggests testing the same for the alignment filter).
+- **Change-day windows** — **implemented** in the `kihon-po3` build (notes §38):
+  a ±2 window on an anchor-based count, read as a ladder of timeframes with
+  N-of-M agreement. The be15 filter above still uses the older exact-match,
+  bars-since-touch count, so the repo now carries **two different notions of
+  "on a kihon number"** — the two must not be conflated when comparing results.
 
 ---
 

@@ -92,4 +92,5 @@ grep -hoE '^(int|input +int|const +int) +MAGIC[A-Z_0-9]* *= *[0-9]+' \
   *.mq5 experiments/*.mq5 | grep -oE '[0-9]+$' | sort | uniq -c | sort -rn
 ```
 
-The highest number in use is `20260864` (the market profile experiment).
+The highest number in use is `20260865` (the kihon-suchi + PO3 gate
+experiment).

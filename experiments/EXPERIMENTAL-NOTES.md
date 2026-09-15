@@ -3570,3 +3570,297 @@ journaled whenever it changes.
 - Session start times are **server time** and are hard defaults
   (`InpMPTokyoStart` / `InpMPLondonStart` / `InpMPNYStart`). Check them
   against your broker's server offset before reading any session result.
+
+---
+
+## 38. Bottom-Up Stack EA — kihon suchi time gate + PO3 level gate + M2 rung
+
+**File:** `experimental-bottomup-stack-kihon-po3-ea.mq5`
+**Magic number:** `20260865`
+
+A fork of the live VPS build (M1-strict cloud bias + the robustness pack)
+that adds **two gates in front of and behind the structure gate that was
+already there**, plus an optional **M2 rung** inside that structure gate. The
+parent asked one question before opening a trade — does Ichimoku point a
+direction? This build asks three, cheapest first, and any one of them can
+veto:
+
+| | Gate | Question | Source |
+|---|---|---|---|
+| 1 | **TIME** | Is a kihon suchi turn due, within ±2? | `experiments/po3-levels.mq5` |
+| 2 | **STRUCTURE** | Does Ichimoku point a direction? | the parent, plus the optional M2 rung |
+| 3 | **PRICE** | Is there a PO3 level worth acting on, and room to it? | the PO3 nest |
+
+Gate 1 is market-wide — it is read once per symbol per minute and does not
+depend on the tier — so it is the first veto and the alignment work below it
+is skipped entirely on the minutes it fails. Gates 2 and 3 are per-tier.
+
+### Gate 1 — the kihon suchi time gate
+
+The Ichimoku basic time numbers, counted in candles from a calendar anchor:
+`9, 17, 26` simple and `33, 42, 51, 65, 76, 129, 172, 226, 257` compound.
+
+Counting is **inclusive at both ends** — the candle you start from is candle
+1 — which is the whole of the arithmetic: two 17-spans laid end to end do not
+make 34, because the last candle of the first span *is* the first candle of
+the second, so `17 + 17 - 1 = 33`. Every compound number chains simple spans
+that share their turning candle. **26 is the exception**: it does not come out
+of that rule (three chained 9s give 25), it is a calendar given — a month of
+trading days under the six-day week Japan kept when this was written — and the
+rule builds on it.
+
+**The ±2 range** (`InpTimeTol`, default 2) is the point of the gate. A kihon
+number is where a move is *due* to change character, not the instant it must,
+so the gate measures the signed distance from the count to the **nearest**
+number and accepts it either side. Nearest rather than next, because a turn
+that was due at 26 is not cancelled by the candle after it — a count two
+candles *past* 26 is as much "around 26" as one two candles short. The sign
+reads the way the chart does: negative is still short of the number, positive
+is just past it.
+
+Because the tolerance is in **candles of that timeframe**, the window scales
+itself — ±2 on H4 is ±8 hours, on M15 it is ±30 minutes — and no extra
+"sticky" state is needed. The window *is* the tolerance.
+
+**The ladder** (`InpTimeLadder`, default
+`"H4:W,H1:W,M30:W,M15:W,M2:D"`) is a list of `TIMEFRAME:ANCHOR` pairs read
+together, requiring `InpTimeMinHits` of them (default 2) inside the range. One
+count landing is a small turn due; several landing together is a bigger one.
+
+Every pair carries its **own** anchor because a count has to be able to
+*reach* the numbers to say anything: M15 counted from the week open passes 257
+by midweek and is then past the end of the series, while H4 from the week open
+reaches 26 but not 33. The default is the week ladder — four rungs counted
+from the same open, so their times can be read against each other — plus M2
+on a **day** anchor. Add the other day-anchored pairs (`,H1:D,M30:D,M15:D`)
+for the session reading beside it. Anchors are `D` day, `W` week, `M` month,
+`Y` year, `T` a custom server time.
+
+**M2 wants a day anchor, not the week one.** A trading day holds around 690 M2
+candles, so every kihon number up to 257 is reachable from the day open. From
+the week open the count passes 257 about eight hours into Monday and is then
+past the end of the series for the rest of the week — where it can never
+register a hit. `M2:W` is therefore a rung that silently does nothing, which
+is the exact failure mode the per-pair anchor exists to prevent. The default
+pair is `M2:D`; `M2:T` with `InpTimeAnchorHour`/`Min` gives a session count.
+Because ±2 on M2 is only ±4 minutes, an M2 window is brief — roughly 17% of a
+trading day across the twelve numbers — which is what makes it a *timing*
+rung rather than a regime filter. Widen `InpTimeTol` (clamped to 8) to stretch
+it.
+
+Adding M2 as a fifth rung changes what "2 of them" means: the gate is very
+slightly easier to satisfy than the four-rung default, since there are more
+chances to reach two hits. Dropping `,M2:D` restores the four-rung ladder
+exactly as it is described above.
+
+A rung whose count is unknown (history still loading) or refused (anchor
+further back than the 20,000-candle span cap) is **not** a hit and does not
+block on its own — one timeframe still loading must not veto an entry the
+other rungs approve.
+
+The counting convention and its arithmetic are ported **verbatim** from
+`po3-levels.mq5`, so the EA and the chart cannot disagree about where a count
+stands. The four ported functions and the number series were diffed against
+the indicator after the port: identical.
+
+### The M2 rung in the structure stack
+
+M2 joins the alignment stack between M1 and M5 as a **step in the chain, not a
+tradable tier** (`InpUseM2`, default on). With it on, the M5 tier needs
+M1 + M2 + M5 aligned instead of M1 + M5, and every higher tier inherits M2
+because the chain grows through it on the way up. It also joins the cloud gate
+beside the M5 tier's existing M1 check.
+
+There is deliberately **no M2 tier**: no risk row, no ATR handle, no exit of
+its own, and the level → timeframe mapping is unchanged (levels are still
+M5…H4). The stack array simply grows a step, and every level-to-timeframe
+lookup now goes through `TfIdxOfLevel()` rather than spelling `+1` at each
+site — M2's arrival is exactly the kind of change that leaves one of those
+sites behind.
+
+**M1 stays the only timeframe that must fully agree.** M2 is checked *beside*
+it, never instead of it, because loosening the rule this build is named for
+would be a silent change of character. Whether M2 itself takes the full
+current+future check or the M5+ future-only rule is `InpM2CloudFull`
+(default: full, since a 2-minute bar is close in character to M1).
+
+**A broker without M2 is not a failure.** M2 is optional and skips itself
+rather than blocking: a symbol that refuses an M2 handle at init, or that has
+no M2 bars yet, drops the rung with one journal note and runs its chain as
+M1 + M5 and up. That matters because `CheckAlign` returns 0 on unreadable
+data — an M2 rung *enforced* without an M2 feed would fail every chain check
+and stop every entry on the symbol, leaving the EA silent with nothing in the
+journal to say why. The rung re-joins automatically if the history arrives.
+
+`InpUseM2 = false` reproduces the parent build exactly, so the two settings
+are a clean A/B.
+
+### Gate 3 — the PO3 level gate
+
+`po3-levels.mq5` draws levels at `m × 3ⁿ` and, when several grids land on the
+same price, lets the **highest** power own it — *"the higher the power,
+stronger the level"*. That rule has a closed form, which is what makes it
+cheap enough to run on every entry:
+
+```
+strength(R) = 3 ^ v3(R)          v3(R) = how many times R divides by 3
+```
+
+Gold at 4374 divides by 3 seven times, so it is a 2187 level — the same answer
+the indicator reaches by drawing every ticked grid and letting the strongest
+win, and the same label it writes on the line. The EA therefore names levels
+exactly as the chart does. The formula was checked against a reproduction of
+the indicator's own merge: **222 level assignments, no disagreements.**
+
+Two consequences the gate uses:
+
+1. The levels of power ≥ k are exactly the **multiples of 3^k**, so "the next
+   level worth considering" is the next multiple — one division, no grid
+   walking. (The next-multiple arithmetic was also checked against the parent
+   PO3 build's `PO3NextLevel()`: identical on every case tried.)
+2. Its **actual** power may be higher than k — a multiple of 243 that is also
+   a multiple of 729 *is* a 729 level — so the EA resolves and journals the
+   real power, capped at `InpPO3MaxPower` to match the indicator's top grid.
+
+Gate 3 is a **take profit and a room filter, and nothing else** — it does not
+fade levels or trade their breakouts. Structure supplies the direction; PO3
+supplies the exit and the veto.
+
+- **ROOM.** Distance to the next level is measured in units of the same
+  reference risk the sizing uses — `ATR(tier TF) × InpRiskATRMult` — so "room"
+  means room in units of what the trade is actually risking, not in points.
+  Closer than `InpPO3MinRR` and price is trading *into* a level: the entry is
+  skipped (`InpPO3RoomFilter`, on by default).
+- **TARGET.** Inside the band `[InpPO3MinRR, InpPO3MaxRR]` the level becomes
+  the trade's take profit, placed `InpPO3BufferATR × ATR` **in front** of it
+  so the fill happens before the level can reject price.
+- **RUNNER.** Beyond `InpPO3MaxRR` the level is too far to be a target, so the
+  trade opens with no TP and is left to the parent's exits (kumo touch, BE,
+  chandelier).
+
+A TP the broker would reject (inside its minimum stop distance, or on the
+wrong side of entry once the buffer is applied) degrades to a runner rather
+than failing the entry — the same way the disaster stop degrades. An
+unevaluable gate (ATR not readable) **blocks**, taking the same stance the
+cloud gate takes on unreadable buffers.
+
+### Why the level power is per tier
+
+This is the one part of the design that is not obvious, and getting it wrong
+disables the upper half of the stack.
+
+The band is measured in each tier's own ATR, and those differ by about an
+order of magnitude across the stack — on gold `ATR(M5)` is a couple of dollars
+and `ATR(H4)` a few dozen. A single global power cannot serve both ends. With
+`ATR` scaled as `sqrt(TF)` from an assumed `ATR(M5)` of `$2.00`, simulating
+the share of price positions where the room filter reads "no room":
+
+| Global power 3 (step 27) | M5 | M15 | M30 | H1 | H4 |
+|---|---|---|---|---|---|
+| **blocked** | 22% | 38% | 54% | **77%** | **100%** |
+
+The H4 tier would never trade again and H1 nearly never. So `InpPO3Power`
+takes one power per tier (M5, M15, M30, H1, H4); a single number applies to
+every tier. The default `"3,3,4,4,5"` gives, on the same illustration:
+
+| tier | ref risk | step | no room / target / runner |
+|---|---|---|---|
+| M5 | 4.00 | 27 | 22% / 78% / 0% |
+| M15 | 6.93 | 27 | 38% / 62% / 0% |
+| M30 | 9.80 | 81 | 18% / 79% / 3% |
+| H1 | 13.86 | 81 | 26% / 74% / 0% |
+| H4 | 27.71 | 243 | 17% / 74% / 9% |
+
+Those ATRs are an **illustration, not a measurement** — the point is the shape,
+not the numbers. The startup read-out prints the step, the next level and the
+rr each tier actually sees at the current price, so the powers should be set
+from that output rather than from this table.
+
+### Deliberately not implemented — the reaction
+
+A kihon time landing on a strong PO3 level is where a move often **reverses**
+and sometimes carries on, and an earlier draft of this file carried fade and
+break-and-hold entries for exactly that. They were dropped on the user's
+instruction to start simple, and should not be added back without being asked.
+
+Two things are worth reading first, because they say the two outcomes are not
+symmetric:
+
+- **§7 measured the analogous fade and it won 0/13.** Fading a breakout back
+  to the H4 Kijun — even conditioned on high ADX or a large extension — lost
+  every time, while the *same* level-touch entered **with** the trend won
+  **61.6%** against 26.5% for the opposite close.
+- **§1 already implements the rejection as a directional veto.** `PO3Bias()`
+  detects price acting off a major PO3 level and allows only trades *away*
+  from it. That is the family's existing answer, and it restricts entries
+  rather than generating them.
+
+### Verification performed
+
+There is no MQL5 compiler on this machine, so the build was verified
+statically and the numbers were verified independently:
+
+- **Fork integrity.** All 29 parent functions compared after comment and
+  whitespace normalisation: **19 identical**, 0 removed. Of the 10 that differ,
+  5 change only by the `TfIdxOfLevel()` index remap and nothing else
+  (`CloseLevelPositions`, `ExitLevel`, `LevelComment`, `ManageLevelProtection`,
+  `SyncStateFromPositions`), and the other 5 are the ones that must change for
+  the gates and the M2 rung (`ChainAligned`, `LevelCloudBiasOK`, `OnInit`,
+  `OnTick`, `OpenLevel`). Every function was token-audited to confirm no
+  change beyond the index remap and the M2/gate logic.
+- **M2-off equivalence.** `ChainAligned` and `LevelCloudBiasOK` were *proved*
+  against the parent symbolically, not eyeballed: with `InpUseM2=false` the
+  chain checks exactly the same set of timeframes for all five tiers
+  (M5; M5+M15; …; M5…H4) and the cloud gate checks exactly the same
+  timeframes with the same strictness (M5 tier: M5 future + M1 full; every
+  other tier: its own TF future + the TF below future). With M2 on, the M5
+  tier gains M2 beside M1 and the higher tiers are byte-for-byte unchanged in
+  the cloud gate.
+- **Index arithmetic.** Every level → timeframe mapping checked against the
+  parent: level *l* now resolves through `TfIdxOfLevel(l)` = `tfs[l+2]`, which
+  is the same timeframe the parent reached with `tfs[l+1]` for all five levels.
+  No raw `+1` index expressions remain.
+- **Kihon port.** `KihonOffset`, `KihonCount`, `KihonAnchor` and
+  `KihonPeriodOpen` diffed against `po3-levels.mq5`: identical. The number
+  series and `KIHON_SIMPLE` / `KIHON_COUNT` / `KIHON_SPAN_CAP` match.
+- **PO3 strength.** `3^v3(R)` against a reproduction of the indicator's
+  merge rule: 222 assignments, no disagreements.
+- **Next-level arithmetic.** Against the parent PO3 build's `PO3NextLevel()`
+  on 126 price/step/direction cases: no differences.
+- **Structure.** Brace, paren and bracket balance; all 14 `PrintFormat` /
+  `StringFormat` calls audited for specifier-versus-argument count.
+
+### Status & caveats
+
+- **Not deployed, and not compiled.** No MQL5 toolchain was available, so this
+  build has never been through MetaEditor. Expect to fix compile errors on
+  first load, then backtest on demo before reading anything into a result.
+- **The production VPS file is untouched** — magic `20260865` shares positions
+  with nothing, and specifically not with the live build's `20260858`, so this
+  can run beside production without either managing the other's trades.
+- **Gate 1 is the part most likely to be wrong in practice.** The default
+  ladder is the four week rungs plus `M2:D`, at 2-of-5. Whether that fires
+  often enough to be a filter rather than an off switch is an empirical
+  question this note does not answer — the journal records the counts that
+  hit, so the frequency can be read off a demo run.
+- **M2 is on by default and does change the default behaviour.** With
+  `InpUseM2=true` the M5 tier needs one more timeframe to agree than the
+  parent did, so fewer entries — which is the point, but it means a result
+  cannot be compared against the parent without turning the rung off first.
+  Check the journal's per-symbol M2 line at startup: if a symbol reports the
+  rung UNAVAILABLE, that symbol is silently running the parent's chain and an
+  A/B across symbols would not be comparing like with like.
+- **M2 is the thinnest data in the stack.** A 2-minute bar is close to the
+  spread on a retail gold feed, and its ATR, its cloud and its kihon count are
+  all built from far fewer ticks than the M5 rung beside them. Treat an M2
+  agreement as a timing confirmation, not as evidence of structure.
+- **`InpPO3Power` needs setting from the read-out before any result means
+  anything.** The defaults are scaled to gold's ATR by tier as an illustration;
+  on another instrument, or another volatility regime, they will put the gate
+  in the wrong place — too fine and every entry is blocked, too coarse and
+  every trade is a runner.
+- **The TP changes the character of the trade.** The parent's winners run to
+  the kumo edge or the chandelier; a PO3 take profit caps them at a level.
+  That is the intended experiment, but a lower average win with a higher win
+  rate is the expected shape, not a bug — and `InpPO3TpEnabled=false` isolates
+  the room filter from the target to tell the two effects apart.

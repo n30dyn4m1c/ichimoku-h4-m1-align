@@ -811,6 +811,10 @@ Every experimental strategy lives in [`experiments/`](experiments/), prefixed
 repo root. They are newer and less tested than the main builds — treat them
 as research code and demo-test them first.
 
+The directory also holds one **indicator** (`po3-levels.mq5`), which is a
+chart tool rather than a strategy: it carries no `experimental-` prefix
+because it places no orders. It is indexed at the end of this section.
+
 The full write-up for each family is in
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**;
 the tables below are the index. The § column points at the notes section.
@@ -850,7 +854,8 @@ unless stated otherwise.
 | `experimental-bottomup-stack-m1-strict-cloud-bias-btcusd-ea.mq5` | `20260861` | BTCUSD# test fork of the live build: spread gate off, BE cover raised to 300 points, full cloud check on M1/M5/M15 | 35 |
 | `experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5` | `20260862` | Forks the **live** build for a ~$100 full-size account: hard 2 × ATR stop at entry, risk priced against it, 5% per-trade cap, min-lot skip, daily-loss / drawdown / cooldown breakers | 30 |
 | `experimental-bottomup-stack-m1-strict-cloud-bias-robustness-vps-ea.mq5` | `20260863` | The robustness pack (R2–R6) hardening the live build. **Promoted 2026-08-23** into the main builds | 36 |
-| `experimental-bottomup-stack-market-profile-vps-ea.mq5` | `20260864` | **Newest.** Adds a TPO market-profile layer measured on M30 — POC, value area, daily key levels, session stacking, day-shape read — driving entries through an AUTO regime dispatcher | 37 |
+| `experimental-bottomup-stack-market-profile-vps-ea.mq5` | `20260864` | Adds a TPO market-profile layer measured on M30 — POC, value area, daily key levels, session stacking, day-shape read — driving entries through an AUTO regime dispatcher | 37 |
+| `experimental-bottomup-stack-kihon-po3-ea.mq5` | `20260865` | **Newest.** A three-gate chain: a kihon suchi **time** gate (±2 candles, N-of-M across a TF ladder that includes M2), the parent's structure gate, then a PO3 **price** gate that measures room to the next level in the tier's own ATR and takes profit at it. Adds an optional **M2 rung** to the alignment chain — a step between M1 and M5, not a tradable tier | 38 |
 
 ### Top-down alignment builds
 
@@ -909,6 +914,15 @@ notes section 16.
 > removed from the repo — their per-symbol tuning is superseded by the
 > symbol-agnostic H4-H1 builds, which accept any symbol through the `Symbols`
 > input.
+
+### Indicators
+
+Chart tools rather than strategies — they draw and place no orders, so they
+carry no magic number and the index has no magic column.
+
+| File (`experiments/`) | What it is | § |
+|---|---|---|
+| `po3-levels.mq5` | Power-of-Three support/resistance levels on the chart — every grid from 1 to 19683, each price owned by the **highest** power of three that lands on it, so the biggest numbers read as the strongest levels — together with Ichimoku **kihon suchi** candle counts, the kihon segment panel and a timetable of when this week's kihon candles open. It is the source of the level arithmetic and the counting convention the `kihon-po3` EA ports, so the EA and the chart agree on what "on a kihon number" means | 38 |
 
 ---
 
