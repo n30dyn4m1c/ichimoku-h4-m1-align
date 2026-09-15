@@ -855,7 +855,7 @@ unless stated otherwise.
 | `experimental-bottomup-stack-standard-account-m1m5m15-cloud-ea.mq5` | `20260862` | Forks the **live** build for a ~$100 full-size account: hard 2 × ATR stop at entry, risk priced against it, 5% per-trade cap, min-lot skip, daily-loss / drawdown / cooldown breakers | 30 |
 | `experimental-bottomup-stack-m1-strict-cloud-bias-robustness-vps-ea.mq5` | `20260863` | The robustness pack (R2–R6) hardening the live build. **Promoted 2026-08-23** into the main builds | 36 |
 | `experimental-bottomup-stack-market-profile-vps-ea.mq5` | `20260864` | Adds a TPO market-profile layer measured on M30 — POC, value area, daily key levels, session stacking, day-shape read — driving entries through an AUTO regime dispatcher | 37 |
-| `experimental-bottomup-stack-kihon-po3-ea.mq5` | `20260865` | **Newest.** A three-gate chain: a kihon suchi **time** gate (±2 candles, N-of-M across a TF ladder that includes M2), the parent's structure gate, then a PO3 **price** gate that measures room to the next level in the tier's own ATR and takes profit at it. Adds an optional **M2 rung** to the alignment chain — a step between M1 and M5, not a tradable tier | 38 |
+| `experimental-bottomup-stack-kihon-po3-ea.mq5` | `20260865` | **Newest.** A three-gate chain: a kihon suchi **time** gate fixed to the **daily H1 setup** — H1 counted from the day open, judged against candles **9 and 17** (±2), both hardcoded because a day's ~23–24 candles can reach no other kihon number — then the parent's structure gate, then a PO3 **price** gate that measures room to the next level in the tier's own ATR and takes profit at it. Adds an optional **M2 rung** to the alignment chain — a step between M1 and M5, not a tradable tier | 38 |
 
 ### Top-down alignment builds
 

@@ -55,23 +55,41 @@
 //| minutes. No extra "sticky" state is needed — the window is the    |
 //| tolerance.                                                        |
 //|                                                                  |
-//| THE LADDER. One count landing on a number is a small turn due;    |
-//| several timeframes landing together is a bigger one. So the gate  |
-//| reads a LADDER of (timeframe, anchor) pairs — InpTimeLadder,      |
-//| default "H4:W,H1:W,M30:W,M15:W", all counted from the WEEK open   |
-//| so their times can be read against each other — and requires      |
-//| InpTimeMinHits of them (default 2) inside the tolerance.          |
+//| ONE RULE, HARDCODED: THE DAILY H1 SETUP. Count H1 candles from     |
+//| the DAY open and open the gate when that count is within           |
+//| InpTimeTol of 9 or of 17.                                          |
 //|                                                                  |
-//| Every pair carries its own anchor because a count has to be able  |
-//| to REACH the numbers to say anything: M15 counted from the week   |
-//| open passes 257 by midweek and is then past the end of the        |
-//| series, while H4 from the week open reaches 26 but not 33. The    |
-//| week ladder is the "bigger turn" reading; add the day-anchored    |
-//| pairs (",H1:D,M30:D,M15:D") for the session reading beside it.    |
+//| 9 and 17 are the only two kihon numbers a trading day can         |
+//| deliver, because a day holds about 23-24 H1 candles. They are a    |
+//| hardcoded PAIR rather than "the simple numbers" (which would be    |
+//| 9, 17 AND 26) because of 26: a nearest-number test measures         |
+//| distance and does not care that a number is out of reach, so on     |
+//| the LAST candle of the day a {9,17,26} series reports "26, +2" and  |
+//| opens the gate on a number the count never reached and never could. |
+//| The tolerance that makes the gate useful for 9 and 17 is exactly     |
+//| what makes it fire there. Measured on a 24-candle day: {9,17,26}    |
+//| opens the gate on candles 7-11, 15-19 AND 24; {9,17} opens it on    |
+//| 7-11 and 15-19 only. See the note on KihonDayH1.                    |
 //|                                                                  |
-//| A pair whose count is unknown (history still loading) or refused  |
-//| (anchor further back than the span cap) is NOT a hit and does not |
-//| block on its own — the other pairs can still carry the gate.      |
+//| With InpTimeTol at 2 that is candles 7-11 and 15-19 of the daily    |
+//| count — 10 of a day's ~23-24 candles, so roughly 40% of the         |
+//| session. Drop the tolerance to 0 to take only 9 and 17 exactly.     |
+//|                                                                  |
+//| THERE IS NO LADDER ANY MORE. An earlier version read a list of     |
+//| TF:ANCHOR rungs judged N-of-M, which was the right shape while the  |
+//| rungs were being chosen; the choice has been made, so the ladder    |
+//| string, its parser, the rung arrays, the N-of-M count and the clamp |
+//| that guarded it are all gone. That machinery also carried the cost  |
+//| that dominated a backtest — every rung meant an anchor lookup and a |
+//| Bars() window per symbol per M1 bar — and one fixed rule is a       |
+//| single window. The multi-rung version is preserved in commit        |
+//| c220059 if rungs are ever wanted back.                             |
+//|                                                                  |
+//| An unknown count (history still loading, or no D1 bar yet) is NOT  |
+//| a pass: the gate cannot be evaluated, and an unevaluable filter     |
+//| blocks rather than waves the trade through, the same stance the     |
+//| cloud gate takes on unreadable buffers. It clears itself as soon as |
+//| the history lands.                                                 |
 //|                                                                  |
 //|------------------------------------------------------------------|
 //| GATE 3 — PO3 LEVELS                                              |
@@ -208,9 +226,10 @@
 //| InpUseM2 = false reproduces the parent build exactly, so the two  |
 //| settings are a clean A/B.                                         |
 //|                                                                  |
-//| M2 is also a rung in the kihon suchi ladder (gate 1), where it    |
-//| wants a DAY anchor rather than the week one the other rungs use — |
-//| see the note on InpTimeLadder.                                    |
+//| M2 IS NOT PART OF GATE 1. It briefly was, as a rung of the kihon  |
+//| ladder; that ladder is gone and gate 1 is now the fixed daily H1   |
+//| rule alone, so nothing about M2 touches the time gate any more.    |
+//| The M2 described in this section is only the alignment rung below. |
 //|                                                                  |
 //|------------------------------------------------------------------|
 //| Unchanged from the parent: per-TF alignment grown bottom-up from  |
@@ -316,28 +335,32 @@ input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the reject
 input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
 input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
-//--- GATE 1: the kihon suchi time gate.
-input group  "Gate 1 - Kihon Suchi Time"
-input bool   InpTimeGateEnabled = true;                  // Require a kihon suchi turn to be due (gate 1)
-// One ladder entry is TIMEFRAME:ANCHOR. Timeframes M1 M2 M5 M15 M30 H1 H4
-// D1 W1 MN1; anchors D day, W week, M month, Y year, T custom time of day
-// (InpTimeAnchorHour/Min, server clock). Every pair carries its own anchor
-// because a count has to be able to REACH the numbers to say anything —
-// see the GATE 1 note in the header.
-//
-// M2 is in the list, and it wants a DAY anchor rather than the week one the
-// other rungs use. A trading day holds around 690 M2 candles, so every kihon
-// number up to 257 is reachable from the day open. From the WEEK open the
-// count passes 257 about eight hours into Monday and is then past the end of
-// the series for the rest of the week, where it can never register a hit —
-// so "M2:W" is a rung that silently does nothing. The default pair is
-// therefore "M2:D"; use "M2:T" with InpTimeAnchorHour/Min for a session count.
-input string InpTimeLadder      = "H4:W,H1:W,M30:W,M15:W,M2:D"; // Ladder of TF:ANCHOR pairs to read
-input int    InpTimeTol         = 2;                     // +/- candles counted as ON the number (the +/-2 range)
-input int    InpTimeMinHits     = 2;                     // How many ladder entries must be within the range (N of M)
-input bool   InpTimeCompound    = true;                  // Include the compound numbers (33 and up); false = 9, 17, 26 only
-input int    InpTimeAnchorHour  = 0;                     // Custom anchor hour, server (for a TF:T pair)
-input int    InpTimeAnchorMin   = 0;                     // Custom anchor minute, server (for a TF:T pair)
+//--- GATE 1: the kihon suchi time gate — the DAILY H1 setup, and only that.
+input group  "Gate 1 - Daily H1 Kihon Suchi"
+//--- One rule, hardcoded: count H1 candles from the DAY open and open the gate
+//--- when that count sits within InpTimeTol of 9 or of 17. Those are the only
+//--- two kihon numbers a trading day can deliver (~23-24 H1 candles), and they
+//--- are a hardcoded PAIR rather than "the simple numbers" because 26 is not
+//--- reachable while a nearest-number test would still fire on it at the day's
+//--- last candle — see the note on KihonDayH1.
+//---
+//--- There is deliberately no ladder left here. It carried a list of
+//--- TF:ANCHOR rungs judged N-of-M, which was the right shape while the rungs
+//--- were being chosen, but the choice has been made: daily H1 on 9 and 17 is
+//--- the whole gate. The rung machinery (the ladder string, its parser, the
+//--- N-of-M count and the clamp that guarded it) is gone with it. The
+//--- multi-rung version is preserved in commit c220059 if rungs are ever
+//--- wanted back.
+//---
+//--- Each rung used to cost an anchor lookup and a Bars() window per symbol
+//--- per M1 bar, which was the heaviest thing gate 1 did and the cost that
+//--- dominated a backtest; one fixed rule is a single window.
+//---
+//--- With InpTimeTol at 2 the gate is open on H1 candles 7-11 and 15-19 of the
+//--- daily count — 10 of a day's ~23-24 candles, so roughly 40% of the
+//--- session. Drop the tolerance to 0 to take only candles 9 and 17 exactly.
+input bool   InpTimeGateEnabled = true;   // Require the daily H1 kihon window (count from the day open, candles 9 and 17)
+input int    InpTimeTol         = 2;      // +/- H1 candles counted as ON 9 or 17 (0 = only those two candles)
 
 //--- GATE 3: the PO3 level gate.
 input group  "Gate 3 - PO3 Levels"
@@ -425,47 +448,51 @@ CTrade trade;
 // inclusive counting convention and the nearest-not-next tolerance.
 //==============================================================
 
-//--- 3 simple + 9 compound. The simple ones come first and the whole list is
-//--- ascending, so a scan can stop early and the first KIHON_SIMPLE entries
-//--- are exactly the simple numbers.
-#define KIHON_SIMPLE   3
-#define KIHON_COUNT    12
-
-const int KihonNumbers[KIHON_COUNT] =
-  {
-   9, 17, 26,                                   // simple
-   33, 42, 51, 65, 76, 129, 172, 226, 257       // compound
-  };
-
-//--- Only the offset test is carried over: the EA needs to ask "is the count
-//--- ON a number, within the tolerance", and nothing else from the series.
-//--- KihonIs / KihonNext / KihonAtOrBelow stay in the indicator, where the
-//--- panel and the schedule actually print them.
+//--- Only what the daily H1 gate needs is carried over. The full twelve-number
+//--- series, its compound/simple split, and the general nearest-number scan
+//--- (KihonIs / KihonNext / KihonAtOrBelow / KihonOffset over all twelve) all
+//--- live in the indicator, which is where they are actually read. The gate
+//--- here asks one question — is the daily H1 count on 9 or 17 — so that is
+//--- what is kept, and the series that supported every other reading is gone
+//--- with the ladder that used it.
 
 //+------------------------------------------------------------------+
-//| Signed distance from n to the NEAREST kihon suchi number.        |
+//| THE DAILY H1 NUMBERS — 9 and 17, and nothing else.               |
 //|                                                                  |
-//| 0 means n is one. Negative means the number is still ahead: 7    |
-//| returns -2, two candles short of 9. Positive means it has just   |
-//| gone by: 11 returns +2, two candles past 9.                      |
+//| Counted from the DAY open an H1 series is about 23-24 candles    |
+//| long, so 9 and 17 are the only kihon numbers a trading day can    |
+//| actually deliver. Those are the two this build trades off.        |
 //|                                                                  |
-//| The sign convention is n minus the number, so it reads the way   |
-//| the chart does - a count running up towards a level shows a      |
-//| negative gap closing to zero, then goes positive as it leaves.   |
+//| 26 IS THE TRAP, and it is why this is a hardcoded pair rather    |
+//| than "the simple numbers" (which would be 9, 17 AND 26). A        |
+//| nearest-number test does not care that a number is out of reach — |
+//| it only measures distance. 26 sits two candles past candle 24, so |
+//| on the LAST candle of the day a {9, 17, 26} series reports        |
+//| "26, offset +2" and the gate opens on a number the count never    |
+//| reached and never could. The tolerance that makes the gate useful  |
+//| for 9 and 17 is exactly what makes it fire there.                 |
 //|                                                                  |
-//| Nearest, not next, because either side matters. A count two       |
-//| candles PAST 26 is as much "around 26" as one two candles short  |
-//| of it, and a turn that was due at 26 is not cancelled by the     |
-//| candle after it.                                                 |
+//| Measured, on a 24-candle day: {9,17,26} opens the gate on candles |
+//| 7-11, 15-19 AND 24; {9,17} opens it on 7-11 and 15-19 only.       |
 //+------------------------------------------------------------------+
-int KihonOffset(const int n, const bool withCompound = true)
-  {
-   int last = withCompound ? KIHON_COUNT : KIHON_SIMPLE;
-   int best = n - KihonNumbers[0];
+#define KIHON_DAY_H1_COUNT 2
+const int KihonDayH1[KIHON_DAY_H1_COUNT] = { 9, 17 };
 
-   for(int i = 1; i < last; i++)
+//+------------------------------------------------------------------+
+//| Signed distance from n to the nearest of the daily H1 pair.      |
+//|                                                                  |
+//| Same convention as KihonOffset — n minus the number, so negative  |
+//| reads as still short of it and positive as just past — and the    |
+//| same nearest-not-next rule, because a turn due at 9 is not        |
+//| cancelled by the candle after it.                                 |
+//+------------------------------------------------------------------+
+int KihonOffsetDayH1(const int n)
+  {
+   int best = n - KihonDayH1[0];
+
+   for(int i = 1; i < KIHON_DAY_H1_COUNT; i++)
      {
-      int d  = n - KihonNumbers[i];
+      int d  = n - KihonDayH1[i];
       int ad = (d    < 0) ? -d    : d;
       int ab = (best < 0) ? -best : best;
       if(ad < ab)
@@ -476,21 +503,19 @@ int KihonOffset(const int n, const bool withCompound = true)
 
 //+------------------------------------------------------------------+
 //| Where the candle count starts.                                   |
-//+------------------------------------------------------------------+
-enum ENUM_KIHON_ANCHOR
-  {
-   KIHON_ANCHOR_DAY   = 0,  // Day open (the D1 candle)
-   KIHON_ANCHOR_WEEK  = 1,  // Week open
-   KIHON_ANCHOR_MONTH = 2,  // Month open (the 1st)
-   KIHON_ANCHOR_YEAR  = 3,  // Year open (1 January)
-   KIHON_ANCHOR_TIME  = 4   // Custom time of day (server)
-  };
-
 //--- Ceiling on how many candles a count will chase. Past 257 every count
 //--- reads the same - there is no kihon number above it - so an exact figure
 //--- buys nothing, while getting one forces the history to load. Beyond this
 //--- the count reports "too far" instead. Deliberately far above 257 so a
-//--- legitimate deep count, a week of M15 at around 480, is still exact.
+//--- legitimate deep count is still exact.
+//---
+//--- The anchor enum, the month/year calendar builder and the multi-anchor
+//--- selector (KihonAnchor) that stood here are gone: the gate counts from the
+//--- DAY open and nothing else, so the anchor is now the single line inside
+//--- KihonCountDayH1(). The day open comes from the D1 bar itself rather than
+//--- from the calendar, so it follows the BROKER's day boundary - on a broker
+//--- rolling at 00:00 server that is midnight, on a New York close broker it
+//--- is not, and the bar knows which.
 #define KIHON_SPAN_CAP  20000
 
 //+------------------------------------------------------------------+
@@ -504,24 +529,6 @@ enum ENUM_KIHON_ANCHOR
 //| period: a weekly candle straddling New Year belongs to the old   |
 //| year, which is the same rule the day and week anchors follow.    |
 //+------------------------------------------------------------------+
-datetime KihonPeriodOpen(const bool year)
-  {
-   MqlDateTime st;
-   TimeToStruct(TimeCurrent(), st);
-
-   if(year)
-      st.mon = 1;
-   st.day  = 1;
-   st.hour = 0;
-   st.min  = 0;
-   st.sec  = 0;
-
-   //--- day_of_week and day_of_year are ignored by StructToTime, so the
-   //--- stale values left in the struct cannot move the result
-   return(StructToTime(st));
-  }
-
-//+------------------------------------------------------------------+
 //| The time the count starts from.                                  |
 //|                                                                  |
 //| Day and week open come from the D1 and W1 bars themselves, so    |
@@ -534,37 +541,6 @@ datetime KihonPeriodOpen(const bool year)
 //| back a day if it has not come round yet, and then CLAMPED to the |
 //| day open, so a session anchor never counts across a day boundary |
 //| and the weekend gap.                                             |
-//+------------------------------------------------------------------+
-datetime KihonAnchor(const string sym, const ENUM_KIHON_ANCHOR mode,
-                     const int hour = 0, const int minute = 0)
-  {
-   datetime day = iTime(sym, PERIOD_D1, 0);
-
-   if(mode == KIHON_ANCHOR_WEEK)
-      return(iTime(sym, PERIOD_W1, 0));
-   if(mode == KIHON_ANCHOR_MONTH)
-      return(KihonPeriodOpen(false));
-   if(mode == KIHON_ANCHOR_YEAR)
-      return(KihonPeriodOpen(true));
-   if(mode == KIHON_ANCHOR_DAY || day == 0)
-      return(day);
-
-   //--- Midnight of the current server day, then the wanted time of day. The
-   //--- arithmetic is done in long rather than on datetime: a datetime is
-   //--- unsigned, so an intermediate that goes below zero would wrap to the
-   //--- far end of the epoch instead of clamping.
-   long now = (long)TimeCurrent();
-   long mid = now - (now % 86400);
-   long h   = (hour   < 0) ? 0 : (hour   > 23 ? 23 : hour);
-   long m   = (minute < 0) ? 0 : (minute > 59 ? 59 : minute);
-   long at  = mid + h * 3600 + m * 60;
-
-   if(at > now)
-      at -= 86400;                    // that time of day has not come round yet
-
-   return((datetime)at < day ? day : (datetime)at);
-  }
-
 //+------------------------------------------------------------------+
 //| How many candles of this timeframe have printed since the        |
 //| anchor, on the inclusive rule: the candle at the anchor is 1, so |
@@ -612,159 +588,69 @@ int KihonCount(const string sym, const ENUM_TIMEFRAMES tf, const datetime anchor
   }
 
 //==============================================================
-// KIHON TIME GATE (gate 1)
+// KIHON TIME GATE (gate 1) - the daily H1 setup
 //
-// The ladder is parsed once at init from InpTimeLadder, so the
-// per-minute path does no string work at all.
+// One rule: count H1 candles from the DAY open and ask whether that
+// count sits within InpTimeTol of 9 or of 17. There is no ladder
+// here any more and no rung parsing, no N-of-M count and no clamp to
+// guard one — the rung has been chosen, so the machinery that existed
+// to choose it is gone with it. The multi-rung version is preserved
+// in commit c220059 if rungs are ever wanted back.
 //==============================================================
 
-#define TGLADDER_MAX 16
-
-ENUM_TIMEFRAMES    g_tgTf[TGLADDER_MAX];
-ENUM_KIHON_ANCHOR  g_tgAnchor[TGLADDER_MAX];
-string             g_tgLabel[TGLADDER_MAX];   // "H4:W", for the journal
-int                g_tgCount = 0;
-
-//--- "M15" -> PERIOD_M15, and so on. False when the token is not one of
-//--- the nine timeframes the ladder accepts.
-bool TgTimeframe(const string tok, ENUM_TIMEFRAMES &tf)
+//--- The count the gate judges: H1 candles since the day open, inclusive.
+//--- Zero when the answer is not known yet (history still loading), -1 when
+//--- the anchor is further back than KIHON_SPAN_CAP.
+int KihonCountDayH1(const string sym)
   {
-   string s = tok;
-   StringToUpper(s);
-
-   if(s == "M1")  { tf = PERIOD_M1;  return(true); }
-   if(s == "M2")  { tf = PERIOD_M2;  return(true); }
-   if(s == "M5")  { tf = PERIOD_M5;  return(true); }
-   if(s == "M15") { tf = PERIOD_M15; return(true); }
-   if(s == "M30") { tf = PERIOD_M30; return(true); }
-   if(s == "H1")  { tf = PERIOD_H1;  return(true); }
-   if(s == "H4")  { tf = PERIOD_H4;  return(true); }
-   if(s == "D1")  { tf = PERIOD_D1;  return(true); }
-   if(s == "W1")  { tf = PERIOD_W1;  return(true); }
-   if(s == "MN1") { tf = PERIOD_MN1; return(true); }
-   return(false);
-  }
-
-//--- A single anchor letter. D/W/M/Y/T, case-insensitive.
-bool TgAnchor(const string tok, ENUM_KIHON_ANCHOR &an)
-  {
-   string s = tok;
-   StringToUpper(s);
-
-   if(s == "D") { an = KIHON_ANCHOR_DAY;   return(true); }
-   if(s == "W") { an = KIHON_ANCHOR_WEEK;  return(true); }
-   if(s == "M") { an = KIHON_ANCHOR_MONTH; return(true); }
-   if(s == "Y") { an = KIHON_ANCHOR_YEAR;  return(true); }
-   if(s == "T") { an = KIHON_ANCHOR_TIME;  return(true); }
-   return(false);
+   datetime anchor = iTime(sym, PERIOD_D1, 0);
+   return(KihonCount(sym, PERIOD_H1, anchor));
   }
 
 //+------------------------------------------------------------------+
-//| Parse "H4:W,H1:W,M30:W,M15:W" into the ladder arrays.            |
+//| Gate 1. Is the daily H1 count within the tolerance of 9 or 17?   |
 //|                                                                  |
-//| A malformed pair is REPORTED and dropped rather than failing the |
-//| load: a typo in one rung should cost you that rung, not the whole |
-//| expert. A ladder that parses to nothing leaves the gate disabled |
-//| with a warning, which is the honest reading of "no rungs".       |
-//+------------------------------------------------------------------+
-void TimeLadderParse()
-  {
-   g_tgCount = 0;
-
-   string parts[];
-   int n = StringSplit(InpTimeLadder, ',', parts);
-
-   for(int i = 0; i < n && g_tgCount < TGLADDER_MAX; i++)
-     {
-      string item = parts[i];
-      StringTrimLeft(item);
-      StringTrimRight(item);
-      if(StringLen(item) == 0)
-         continue;
-
-      string sides[];
-      if(StringSplit(item, ':', sides) != 2)
-        {
-         PrintFormat("Kihon gate: ladder entry \"%s\" is not TIMEFRAME:ANCHOR — dropped.", item);
-         continue;
-        }
-
-      string tfTok = sides[0];
-      string anTok = sides[1];
-      StringTrimLeft(tfTok);  StringTrimRight(tfTok);
-      StringTrimLeft(anTok);  StringTrimRight(anTok);
-
-      ENUM_TIMEFRAMES   tf;
-      ENUM_KIHON_ANCHOR an;
-      if(!TgTimeframe(tfTok, tf))
-        {
-         PrintFormat("Kihon gate: ladder entry \"%s\" — \"%s\" is not a timeframe (M1 M2 M5 M15 M30 H1 H4 D1 W1 MN1) — dropped.",
-                     item, tfTok);
-         continue;
-        }
-      if(!TgAnchor(anTok, an))
-        {
-         PrintFormat("Kihon gate: ladder entry \"%s\" — \"%s\" is not an anchor (D W M Y T) — dropped.",
-                     item, anTok);
-         continue;
-        }
-
-      g_tgTf[g_tgCount]     = tf;
-      g_tgAnchor[g_tgCount] = an;
-      g_tgLabel[g_tgCount]  = tfTok + ":" + anTok;
-      g_tgCount++;
-     }
-
-   if(InpTimeGateEnabled && g_tgCount <= 0)
-      Print("Kihon gate: no usable ladder entries — gate 1 is DISABLED (every entry passes it).");
-  }
-
-//+------------------------------------------------------------------+
-//| Gate 1. Read every rung and count the hits.                      |
+//| Writes the reading into 'info' for the journal, so a reviewed    |
+//| entry records what judged it — "H1:D10+1(9)" is count 10, one     |
+//| candle past 9. The count is in there so the reading can be        |
+//| checked by hand against the indicator's panel, and the tag saves  |
+//| working the number back out.                                      |
 //|                                                                  |
-//| A rung whose count is unknown (0) or refused (-1) is not a hit   |
-//| and is not held against the trade — history still loading on one |
-//| timeframe must not veto an entry the other rungs approve.        |
-//|                                                                  |
-//| Writes the hits into 'info' for the journal, so a reviewed entry |
-//| says which counts were standing on a number and by how much.     |
+//| An unknown count (history still loading, or no D1 bar yet) is NOT |
+//| a pass. The gate cannot be evaluated, and an unevaluable filter   |
+//| blocks rather than waves the trade through — the same stance the  |
+//| cloud gate takes on unreadable buffers. It clears itself as soon  |
+//| as the history lands.                                             |
 //+------------------------------------------------------------------+
 bool TimeGateOK(const int s, string &info)
   {
    info = "off";
-   if(!InpTimeGateEnabled || g_tgCount <= 0)
+   if(!InpTimeGateEnabled)
       return(true);
 
-   int    hits = 0;
-   int    tol  = (int)MathMax(0, MathMin(8, InpTimeTol));
-   string txt  = "";
-
-   for(int i = 0; i < g_tgCount; i++)
+   int c = KihonCountDayH1(syms[s]);
+   if(c <= 0)
      {
-      datetime anchor = KihonAnchor(syms[s], g_tgAnchor[i], InpTimeAnchorHour, InpTimeAnchorMin);
-      int      c      = KihonCount(syms[s], g_tgTf[i], anchor);
-      if(c <= 0)
-         continue;                        // unknown or refused — not a hit
-
-      int off = KihonOffset(c, InpTimeCompound);
-      int mag = (off < 0) ? -off : off;
-      if(mag > tol)
-         continue;
-
-      hits++;
-      //--- "+2" is two candles past the number, "-1" one short, "0" on it.
-      //--- The count itself goes in too, so the reading can be checked by
-      //--- hand against the indicator's panel.
-      txt += (StringLen(txt) > 0 ? " " : "") + g_tgLabel[i] +
-             IntegerToString(c) +
-             ((off > 0) ? "+" : (off < 0) ? "-" : "=") +
-             IntegerToString(mag);
+      info = (c < 0) ? "H1:D too far" : "H1:D no data";
+      return(false);
      }
 
-   int need = (int)MathMax(1, InpTimeMinHits);
-   info = (hits > 0) ? txt : "none";
+   int tol = (int)MathMax(0, MathMin(8, InpTimeTol));
+   int off = KihonOffsetDayH1(c);
+   int mag = (off < 0) ? -off : off;
+   if(mag > tol)
+     {
+      info = "H1:D" + IntegerToString(c) + " out of range";
+      return(false);
+     }
 
-   return(hits >= need);
+   //--- "+2" is two candles past the number, "-1" one short, "=" on it.
+   int num = (off > 0) ? c - mag : c + mag;   // the number the count is near
+   info = "H1:D" + IntegerToString(c) +
+          ((off > 0) ? "+" : (off < 0) ? "-" : "=") +
+          IntegerToString(mag) +
+          ((mag > 0) ? "(" + IntegerToString(num) + ")" : "");
+   return(true);
   }
 
 //==============================================================
@@ -1136,7 +1022,6 @@ int OnInit()
    symsCount = ParseSymbols(Symbols);
    if(symsCount <= 0) return(INIT_FAILED);
 
-   TimeLadderParse();
    PO3PowerParse();
 
    for(int s = 0; s < symsCount; s++)
@@ -1195,16 +1080,15 @@ int OnInit()
    trade.SetDeviationInPoints(Slippage);
    trade.SetExpertMagicNumber(MAGIC);
 
-   //--- The ladder as parsed, so a typo is visible without hunting for it.
+   //--- Gate 1 as it is actually configured. There is no ladder to print any
+   //--- more, but the tolerance is worth stating in the terms it is applied in,
+   //--- so the journal says which candles the gate will open on.
    if(InpTimeGateEnabled)
-   {
-      string lad = "";
-      for(int i = 0; i < g_tgCount; i++)
-         lad += (StringLen(lad) > 0 ? " " : "") + g_tgLabel[i];
-      PrintFormat("Kihon gate: %d rung(s) [%s], +/-%d candles, %d of %d must hit, compounds %s.",
-                  g_tgCount, lad, InpTimeTol, InpTimeMinHits, g_tgCount,
-                  InpTimeCompound ? "included" : "OFF (9/17/26 only)");
-   }
+      PrintFormat("Kihon gate: daily H1 — count H1 candles from the day open, open the gate "
+                  "within +/-%d of 9 or 17, that is candles %d-%d and %d-%d of the session.",
+                  InpTimeTol, 9 - InpTimeTol, 9 + InpTimeTol, 17 - InpTimeTol, 17 + InpTimeTol);
+   else
+      Print("Kihon gate: OFF — no time filter; entries run on the structure and PO3 gates alone.");
 
    //--- The M2 rung, per symbol. It is optional and can drop out silently
    //--- (no handle, or no history yet), so its state is printed rather than
@@ -1858,8 +1742,8 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
 
 // 'via' names the bias that authorised the entry ("H4", "H1" stand-in,
 // "H1x" counter-H4 stand-in, "--" none) and 'ks'/'po3' record the two new
-// gates, so a reviewed journal entry says which rungs hit and which level
-// the take profit was taken from. tp is 0 for a runner.
+// gates, so a reviewed journal entry says which reading let gate 1 through and
+// which level the take profit was taken from. tp is 0 for a runner.
 bool OpenLevel(int s, int lvl, int dir, double lots, string via, double tp,
                string ks, string po3)
 {

@@ -3622,46 +3622,58 @@ Because the tolerance is in **candles of that timeframe**, the window scales
 itself — ±2 on H4 is ±8 hours, on M15 it is ±30 minutes — and no extra
 "sticky" state is needed. The window *is* the tolerance.
 
-**The ladder** (`InpTimeLadder`, default
-`"H4:W,H1:W,M30:W,M15:W,M2:D"`) is a list of `TIMEFRAME:ANCHOR` pairs read
-together, requiring `InpTimeMinHits` of them (default 2) inside the range. One
-count landing is a small turn due; several landing together is a bigger one.
+**One rule, and it is hardcoded: the daily H1 setup.** Count H1 candles from
+the **day** open and open the gate when that count is within `InpTimeTol` of
+**9 or of 17**. With `InpTimeTol = 2` that is H1 candles 7–11 and 15–19 of the
+daily count: 10 of a day's ~23–24 candles, roughly 40% of the session.
+`InpTimeTol = 0` takes only candles 9 and 17 exactly.
 
-Every pair carries its **own** anchor because a count has to be able to
-*reach* the numbers to say anything: M15 counted from the week open passes 257
-by midweek and is then past the end of the series, while H4 from the week open
-reaches 26 but not 33. The default is the week ladder — four rungs counted
-from the same open, so their times can be read against each other — plus M2
-on a **day** anchor. Add the other day-anchored pairs (`,H1:D,M30:D,M15:D`)
-for the session reading beside it. Anchors are `D` day, `W` week, `M` month,
-`Y` year, `T` a custom server time.
+**9 and 17 are the reason, and 26 is the trap.** A trading day delivers
+~23–24 H1 candles, so 9 and 17 are the only kihon numbers it can reach — 26
+needs a longer day than there is. But a nearest-number test does not care that
+a number is out of reach; it only measures distance, and 26 sits two candles
+past candle 24. So a `{9, 17, 26}` series (which is what "the simple numbers"
+would give) reports **"26, offset +2" on the last candle of the day** and opens
+the gate on a number the count never reached and never could. The tolerance
+that makes the gate useful for 9 and 17 is exactly what makes it fire there.
+Measured on a 24-candle day:
 
-**M2 wants a day anchor, not the week one.** A trading day holds around 690 M2
-candles, so every kihon number up to 257 is reachable from the day open. From
-the week open the count passes 257 about eight hours into Monday and is then
-past the end of the series for the rest of the week — where it can never
-register a hit. `M2:W` is therefore a rung that silently does nothing, which
-is the exact failure mode the per-pair anchor exists to prevent. The default
-pair is `M2:D`; `M2:T` with `InpTimeAnchorHour`/`Min` gives a session count.
-Because ±2 on M2 is only ±4 minutes, an M2 window is brief — roughly 17% of a
-trading day across the twelve numbers — which is what makes it a *timing*
-rung rather than a regime filter. Widen `InpTimeTol` (clamped to 8) to stretch
-it.
+| series | candles where the gate opens |
+|---|---|
+| `{9, 17, 26}` | 7–11, 15–19, **and 24** |
+| `{9, 17}` | 7–11 and 15–19 |
 
-Adding M2 as a fifth rung changes what "2 of them" means: the gate is very
-slightly easier to satisfy than the four-rung default, since there are more
-chances to reach two hits. Dropping `,M2:D` restores the four-rung ladder
-exactly as it is described above.
+So the pair is hardcoded rather than taken as a flag on the shared series.
 
-A rung whose count is unknown (history still loading) or refused (anchor
-further back than the 20,000-candle span cap) is **not** a hit and does not
-block on its own — one timeframe still loading must not veto an entry the
-other rungs approve.
+**There is no ladder any more.** The gate began as a list of `TF:ANCHOR` rungs
+judged N-of-M — `H4:W,H1:W,M30:W,M15:W,M2:D` at 2-of-5, then narrowed to a
+single H1 rung — which was the right shape while the rungs were being chosen.
+The choice has been made, so the ladder string, its parser, the rung arrays,
+the N-of-M count and the clamp that guarded it are all gone, along with the
+anchor enum, the month/year calendar builder and the multi-anchor selector.
+Gate 1 is now one function with one input besides its on/off switch.
 
-The counting convention and its arithmetic are ported **verbatim** from
+That removal also took out gate 1's cost. Each rung meant an anchor lookup and
+a `Bars()` window per symbol **per M1 bar** — the heaviest thing gate 1 did,
+and the cost that dominated a backtest. One fixed rule is a single window. The
+multi-rung version is preserved in **commit `c220059`** if rungs are ever
+wanted back.
+
+An unknown count (history still loading, or no D1 bar yet) is **not** a pass.
+The gate cannot be evaluated, and an unevaluable filter blocks rather than
+waves the trade through — the same stance the cloud gate takes on unreadable
+buffers. It clears itself as soon as the history lands.
+
+The day open comes from the **D1 bar itself** rather than from the calendar, so
+it follows the broker's own day boundary: on a broker rolling at 00:00 server
+that is midnight, on a New York close broker it is not, and the bar knows
+which. The counting convention and its arithmetic are ported **verbatim** from
 `po3-levels.mq5`, so the EA and the chart cannot disagree about where a count
-stands. The four ported functions and the number series were diffed against
-the indicator after the port: identical.
+stands.
+
+Only what this gate needs was carried over from the indicator. The full
+twelve-number series, its compound/simple split and the general nearest-number
+scan live in `po3-levels.mq5`, which is where they are actually read.
 
 ### The M2 rung in the structure stack
 
@@ -3838,11 +3850,21 @@ statically and the numbers were verified independently:
 - **The production VPS file is untouched** — magic `20260865` shares positions
   with nothing, and specifically not with the live build's `20260858`, so this
   can run beside production without either managing the other's trades.
-- **Gate 1 is the part most likely to be wrong in practice.** The default
-  ladder is the four week rungs plus `M2:D`, at 2-of-5. Whether that fires
-  often enough to be a filter rather than an off switch is an empirical
-  question this note does not answer — the journal records the counts that
-  hit, so the frequency can be read off a demo run.
+- **Gate 1 is now a single fixed rule, so its correctness is a question about
+  the rule, not about configuration.** Daily H1, candles 9 and 17, ±2. There is
+  no ladder to mistype and no N-of-M to get wrong; what remains to check is
+  whether the rule is *worth having*, which is what the run is for.
+- **The daily H1 gate is open roughly 40% of the session** (10 of ~23–24
+  candles) at the default `InpTimeTol = 2`. That is a wide window by design —
+  it is a tolerance around a turn that is *due*, not a precise trigger — but it
+  is worth knowing before reading a marginal result as evidence the time filter
+  works. `InpTimeTol = 0` takes only candles 9 and 17 exactly, for a much
+  tighter test, and the two settings bracket the useful range.
+- **Test weight.** Gate 1 is a single `Bars()` window per symbol per M1 bar,
+  down from five when the ladder was present. If a backtest is still slow the
+  other two levers are `InpUseM2=false`, which removes the extra M2 alignment
+  leg, and `InpPO3Enabled=false`, which removes gate 3 without touching the
+  structure gate.
 - **M2 is on by default and does change the default behaviour.** With
   `InpUseM2=true` the M5 tier needs one more timeframe to agree than the
   parent did, so fewer entries — which is the point, but it means a result
