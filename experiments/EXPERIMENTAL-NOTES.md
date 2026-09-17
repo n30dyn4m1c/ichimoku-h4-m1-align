@@ -3886,3 +3886,770 @@ statically and the numbers were verified independently:
   That is the intended experiment, but a lower average win with a higher win
   rate is the expected shape, not a bug — and `InpPO3TpEnabled=false` isolates
   the room filter from the target to tell the two effects apart.
+
+---
+
+## 39. M1+M2 / M1+M2+M5 — fixed 90/120 targets and a session window
+
+**File:** `experimental-m1-m2-fixed-tp-ea.mq5`
+**Magic number:** `20260866`
+
+A minimal fork that keeps the parent's alignment test and throws away almost
+everything else. Two questions only: does **M1+M2** align, and does **M1+M2+M5**
+align. The first fires the **M2 tier**, the second the **M5 tier**. Nothing
+above M5 is read, and no directional gate sits on top — no cloud bias, no H4
+bias, no H1 stand-in, no D1 filter. The chain is the whole entry condition, in
+both directions.
+
+The second change is the exit. The deployed build has **no profit target at
+all**: it exits when price touches the tier's kumo edge and protects the trade
+with a break-even stop and a chandelier trail. This build replaces that with two
+fixed levels, one position, and nothing else:
+
+| Level | Distance | Where it lives |
+|---|---|---|
+| SL | 90 pips | On the order at entry, hard |
+| TP | 120 pips | On the order at entry |
+
+Both ride on the order, so the **broker** closes the trade — the EA never
+trails, never scales out, never moves a stop and has no break-even layer. A
+trade is opened and it either stops out at 90 or targets out at 120; there is no
+intermediate state to manage. The only defensive work left in the EA is
+re-attaching a stop that has gone missing, because an unstopped position is
+unbounded and the 90-pip stop is the entire risk definition of the build.
+
+Because the stop is a fixed 90 pips rather than an ATR multiple, the money at
+risk on a stop-out is *exactly* the configured percentage — there is no
+ATR approximation to drift against the actual stop.
+
+### One position at a time
+
+A tier opens only when it is flat, and the entry scan runs **highest tier
+first**, so when both chains align on the same minute only the M5 tier opens.
+Any M2 trade still running is closed into it as a supersede. The account
+therefore never holds more than one position per symbol, and never two.
+
+### Pips on a gold feed
+
+"1 pip" is `InpPipPoints` × the symbol's point, default **10**. On a feed
+quoted to 2 decimals that makes one pip 0.10 of price, so the user's anchors
+hold exactly: `4000.00 → 4012.00` is 120 pips and `4000.00 → 4009.00` is 90.
+On a 3-decimal gold feed the same 120-pip move is 12000 points, so
+`InpPipPoints` must be **100**. The EA prints `1 pip = <x> price units` and
+the two resolved distances at startup so a wrong setting is visible in the
+journal before it costs anything, and it refuses to start on a non-positive
+value.
+
+### The session filter
+
+Entries are allowed only while the **daily H1 count** sits in one of two
+windows — **7–11** and **15–19**, both inclusive, counted from the day open
+with the candle in progress counted as its own candle. Those two windows are
+the ±2 tolerance around kihon suchi **9** and **17**, the only two counts a
+~23–24 candle trading day can reach (see §38 for why 26 is deliberately not in
+the set); on a 24-candle day they cover ten candles, about 40% of the session.
+
+The day open is read from the D1 bar itself (`iTime(sym, PERIOD_D1, 0)`) rather
+than from a fixed hour, so a broker that rolls on a different clock, and the
+weekend gap, need no special case. The count uses `Bars()` over the window
+`[day open, now]` — the same method as §38, chosen because a bar *before* the
+anchor is simply not in the window, which keeps candle 1 on the correct side of
+the open where `iBarShift` with nearest-earlier rounding would put it on last
+night's close and shift every mark by one.
+
+The filter gates **entries only**. An open trade keeps running and can still
+reach its stop or target outside the windows, which is exactly right here:
+because both levels live on the order, a trade opened at candle 10 is the
+broker's to close and does not need the window to stay open. A chain that
+aligned while the window was shut is logged once every 15 minutes rather than
+silently dropped, so suppressed signals are visible in review.
+
+An unknown or implausible count (history still loading, no D1 bar, or a count
+above 30) **blocks** rather than waves the trade through — the same stance the
+cloud gate takes on unreadable buffers. It clears itself as soon as the history
+lands.
+
+### M2 is a real tier here, and it is optional
+
+Unlike §38, where M2 was a *rung* in the chain with no tier of its own, this
+build makes M2 tradable: it has a risk row, its own exit and its own comment
+(`Exp Buy M2`). That is the point of the experiment — a 2-minute chain is the
+fastest entry the alignment test can produce.
+
+Some brokers do not serve a 2-minute feed. M2 is therefore **skipped rather
+than enforced**: a symbol that refuses an M2 handle at init, or that has no M2
+bars yet, drops the M2 tier with one journal line per symbol and runs the M5
+chain as M1+M2+M5 only. This matters because `CheckAlign` returns 0 on
+unreadable data — a rung enforced without data would block every entry on the
+symbol and the EA would go silent with nothing in the journal to say why.
+
+### Risk ladder
+
+Sizing is a fixed % of actual equity measured against the **full 90-pip stop**,
+so the money at risk is exact rather than ATR-approximated, in the parent's
+three de-risking regimes:
+
+| Equity | M2 tier | M5 tier |
+|---|---|---|
+| < `InpRiskTier2At` ($7,000) | 0.5% | 2.0% |
+| $7,000 – `InpRiskTier3At` ($13,000) | 0.25% | 1.0% |
+| ≥ $13,000 | 0.1% | 0.5% |
+
+M5 is the higher-conviction chain — it needs M2 to agree as well — so it
+carries four times the M2 risk. **The ladder is a judgement call, not a tested
+result.** It is the first thing to change, and the two tiers can be equalised
+by setting the four M5 values to the M2 values.
+
+### What it deliberately does not have
+
+Not hardened, and not for the VPS without more work: no robustness pack, no
+disaster stop, no kumo-touch exit, no rejection exit, no chandelier trail, no
+bias gates, no unknown-position guard and no margin cap. It exists to answer
+one question — does the M1+M2 / M1+M2+M5 chain carry an edge when the exit is a
+fixed 90/120 target instead of a touch — and it should be read as nothing more
+than that.
+
+### Reading a result
+
+- **A fixed target changes the character of the trade.** The parent's winners
+  run to the kumo edge; here every winner is capped at 120 pips and every loser
+  is cut at 90. A lower average win with a higher win rate is the expected
+  shape, not a bug — and with no break-even layer the win rate has to carry the
+  edge on its own, since a trade that goes 100 pips into profit and reverses
+  gives all of it back.
+- **The M2 tier is the thinnest data in the build.** A 2-minute bar on a retail
+  gold feed is close to the spread, so an M2 entry can be a spread artifact.
+  Compare the M2 tier's results against the M5 tier's before drawing any
+  conclusion from either.
+- **The session filter roughly halves the trading day.** Only ~40% of a day's
+  candles are eligible, so the trade count is not comparable to the parent
+  without turning `InpSessionFilterEnabled` off first.
+- **`InpMaxSpreadPoints` (60) and the 90-pip stop interact.** Gold's spread is
+  a meaningful fraction of a 2-minute bar; a wide-spread M2 entry is much worse
+  than a wide-spread M5 entry at the same 90-pip stop.
+- **One position per symbol, always.** A tier opens only when flat and the scan
+  runs highest-first, so when both chains align on the same minute only the M5
+  tier opens and any running M2 trade is closed into it. The two tiers cannot
+  both be long or short at the same time, so their results are not additive.
+- **Restart recovery is exact here.** Both levels are on the position at fixed
+  distances, so a mid-trade restart inverts either one to recover the entry —
+  there is no partial-fill or break-even state to reconstruct, unlike the
+  earlier split-target draft of this experiment.
+
+---
+
+## 40. Bottom-Up Stack EA — PO3 reaction veto + dealing-range zone veto
+
+**File:** `experimental-bottomup-stack-kihon-po3-veto-ea.mq5`
+**Magic number:** `20260867`
+
+A fork of the kihon-suchi + PO3 gate experiment (§38, magic `20260865`), which
+is itself a fork of the live VPS build. Gates 1–3, the M1-strict cloud bias, the
+robustness pack and the M2 rung are all unchanged. What is new is **two
+location vetoes** at the end of the entry chain, so an entry now answers five
+questions, cheapest first:
+
+| | Gate | Question | Source |
+|---|---|---|---|
+| 1 | **TIME** | Is a kihon suchi turn due, within ±2? | §38 |
+| 2 | **STRUCTURE** | Does Ichimoku point a direction? | the parent |
+| 3 | **PRICE** | Is there a PO3 level worth acting on, and room to it? | §38 |
+| 4 | **REACTION** | Has price just been *rejected* at a major PO3 level? | **new** — §1's `PO3Bias()` ported |
+| 5 | **LOCATION** | Is price on the right side of its PO3 dealing range? | **new** — §1 computed it for display only |
+
+Gates 1, 4 and 5 are market-wide (they do not depend on the tier) and are read
+once per symbol per minute; gates 2 and 3 are per-tier.
+
+### Why a veto, and not an entry
+
+This is the design decision the whole build rests on, and it is deliberately the
+*conservative* half of the idea. The model being implemented is: a level acts as
+resistance, is tested, and once broken becomes support; price approaches a
+strong level, closes short of it, and reverses. That describes **two** possible
+responses — trade the reaction (fade it, or trade the break-and-hold retest), or
+refuse to trade *into* it. §38 recorded the first as deliberately not
+implemented, on the user's instruction to start simple, and said it should not
+be added back without being asked. **It is still not added back here.**
+
+What this build adds is the second response, which is also the one §1 had
+already implemented and §38 had already pointed at. The reason is §7's
+measurement, quoted in §38: fading the analogous H4-Kijun breakout **won 0/13**
+— even conditioned on high ADX or a large extension — while the *same*
+level-touch entered **with** the trend won **61.6%** against **26.5%** for the
+opposite close. The reversal and the continuation are not symmetric. So the
+useful action at a level is not "trade the bounce", it is "do not be the
+liquidity": a trade pushing *into* a level that has just rejected price is
+refused, while trades *away* from it are still allowed. Both new gates restrict
+entries; neither generates one.
+
+### Gate 4 — the reaction veto
+
+The level arithmetic is §38's, unchanged: a price is `raw = price ×
+InpPO3Scale`, a level's strength is `3^v3(raw)`, and the levels of power ≥ k are
+exactly the multiples of `3^k`. A **2187 level is a multiple of `3^7 = 2187`** in
+raw space.
+
+**Why a tag test and not a distance test.** On gold at ~4000 with `InpPO3Scale =
+1` the only 2187-grade levels in view are 2187 and 4374. "Is price near a 2187
+level *right now*" would therefore almost never be true, and a per-bar distance
+check would be dead code. A tag-with-memory is not: the lookback extreme stays
+near the level for as long as the rejection stands, so the veto covers the whole
+period during which the level is doing its work.
+
+The test, ported from §1's `PO3Bias()`:
+
+1. scan the last `InpPO3VetoBars` (180) **closed H4** bars for the highest high
+   and the lowest low;
+2. round that extreme to the **nearest** multiple of `3^InpPO3VetoPower`
+   (default 7 → 2187) and call it a **tag** when the extreme came within
+   `InpPO3VetoTolFrac × 3^InpPO3VetoBasePower` of it;
+3. for a high tag, the level is **rejecting** while the latest closed H4 close
+   is still back inside it by that same tolerance. The low side is the mirror.
+
+Three consequences worth stating, because each is a design choice rather than an
+accident:
+
+- **The tolerance comes off the BASE rung, not the level's own grade.** It is
+  "how close counts as a tag" in the instrument's fine-grid terms — a fixed
+  distance in price. Scaling it by the level's grade would give `0.4 × 2187 =
+  875` on gold, roughly a quarter of the instrument's whole range, and every bar
+  would tag every level. The base default is 4 (81 raw units), so the tag window
+  is about **±32 dollars on gold**. §1 uses the same basis and the same 0.4.
+- **Reclaim clears the veto by construction.** The rejection test is applied to
+  the *latest closed* H4 bar on every read, so the moment price closes back
+  through the level the tag simply stops being true. There is no separate
+  reclaim state, and therefore no chance of one drifting out of step with the
+  test that is supposed to maintain it.
+- **The newer tag supersedes the older.** When both sides tag inside one
+  lookback, the more recent extreme wins (series order: the lower index is the
+  newer bar). That is §1's rule, kept.
+
+**The verdict is directional.** A tagged HIGH means shorts only — no longs into
+that resistance. A tagged LOW means longs only — no shorts into that support. A
+lookback that tags neither leaves both directions open. This is what makes it
+the asymmetry §7 measured rather than a flat block on both sides.
+
+**It is cached on the H4 bar.** The verdict can only change when a new H4 bar
+closes, so the closed H4 bar time *is* the cache key and the `CopyRates` of 180
+bars runs **once per symbol per four hours**. §1 recomputes it on every M1 bar,
+which §38 flagged as a cost; this build does not carry that cost. Only a
+*successful* read is cached — a failure is retried on the next entry check
+rather than remembered, so the gate clears itself the moment the history lands.
+
+**An unreadable history blocks.** `CopyRates` returning nothing means the H4
+series is not there yet, and the gate answers `VETO_UNKNOWN`, which blocks. That
+is the stance gates 1 and 3 already take on unreadable data. Its consequence is
+real and is called out under caveats: a symbol with fewer than 180 closed H4
+bars cannot open a trade until it has them.
+
+### Gate 5 — the dealing-range zone
+
+The other half of the PO3 picture: not "is a level nearby" but "where inside its
+range is price". `floor(price / step) × step` opens the range price is in and
+the next rung closes it; the fraction of the way across that range is the
+position. The thirds of it are the model's own reading — lower third
+**discount**, middle **equilibrium**, upper **premium**.
+
+As a gate it is the classic location rule, *buy discount and sell premium*,
+written as two independent thresholds:
+
+- a **long** is refused above `InpPO3ZoneLongMaxPct` of the range;
+- a **short** is refused below `InpPO3ZoneShortMinPct`.
+
+Both default to **50**, the equilibrium line — the loosest sensible setting: no
+buying in premium, no selling in discount. Set them to **33.3 and 66.7** for the
+strict three-thirds model, where only the discount third is bought, only the
+premium third is sold, and the equilibrium middle is not traded at all.
+
+The **label** in the journal is always the model's thirds, whatever the
+thresholds are set to, so a journal line means one thing; the thresholds are the
+gate and are free to be looser than the thirds. The range grade is
+`InpPO3ZonePower` (default 5 → 243 on gold) and **not** the per-tier search
+power: the zone is a property of where price is, not of which tier is asking, so
+every tier reads the one range. The user's literal "9 range split into three 3s"
+reading is `InpPO3ZonePower = 2` with the 33.3 / 66.7 thresholds.
+
+The zone is read off the **bid** for both directions. The spread is a rounding
+error against a range of hundreds of units, and using one price keeps the tiers'
+readings comparable.
+
+**Gate 5 is off by default**, so a first run measures gate 4 alone. The two are
+independent and can be A/B'd separately against each other and against §38.
+
+### Inputs
+
+| Parameter | Default | Description |
+|---|---|---|
+| `InpPO3VetoEnabled` | `true` | Gate 4 (reaction veto) on/off |
+| `InpPO3VetoPower` | `7` | Major level = `3^7` = **2187** |
+| `InpPO3VetoBars` | `180` | Closed H4 bars scanned for the tagging extreme |
+| `InpPO3VetoBasePower` | `4` | Tag tolerance is a fraction of `3^4` = 81 |
+| `InpPO3VetoTolFrac` | `0.4` | ... that fraction — about ±32 dollars on gold |
+| `InpPO3VetoLogSetup` | `true` | Journal the current tag state per symbol at startup |
+| `InpPO3ZoneEnabled` | `false` | Gate 5 (dealing-range zone) on/off |
+| `InpPO3ZonePower` | `5` | Range grade = `3^5` = 243; one range, read by every tier |
+| `InpPO3ZoneLongMaxPct` | `50.0` | A long is refused **above** this % of the range |
+| `InpPO3ZoneShortMinPct` | `50.0` | A short is refused **below** this % |
+
+### Deliberately not implemented
+
+- **Break-and-hold / retest entries** — "a level once broken becomes support" as
+  a *signal*. Still not here, for the reason §38 gives: it is the entry half of
+  the reaction and it has not been asked for. §7's 0/13 on the analogous fade is
+  the standing argument against reading a level touch as a reason to trade.
+- **Neither new gate is written into the position comment.** The comment names
+  the trade's level and `SyncStateFromPositions()` parses it back; the R2 guard
+  turns a comment that no longer names a level into a *blocked symbol*, so the
+  comment format is load-bearing. It is left exactly as the parent had it. The
+  new gates are visible in the journal instead — the startup read-out, and the
+  throttled `BlockNote` line when one of them refuses a trade.
+
+### Verification performed
+
+There is no MQL5 compiler on this machine, so the build was verified statically
+against the committed parent (§38 at `HEAD`, not the mid-edit working copy):
+
+- **Fork integrity.** 43 functions in the parent, **none removed** in the fork.
+  After comment and whitespace normalisation, **40 are identical**, **3 differ**
+  (`OnInit`, `BlockNote`, `OnTick`) and **5 are new** (`PO3Px`,
+  `PO3VetoReadSym`, `PO3VetoTag`, `PO3ZoneReadSym`, `PO3VetoLogSetup`).
+- **The three changed functions were token-diffed.** `OnInit` has exactly two
+  hunks — the gate-4 cache reset inside the per-symbol loop, and the
+  `PO3VetoLogSetup()` call after `PO3LogSetup()`. `OnTick` has exactly two — the
+  two symbol-wide reads beside gate 1, and the gate-4/gate-5 block inserted
+  after gate 3's "room unknown" check and before the `topPo3` bookkeeping.
+  `BlockNote` has one: its line no longer says "gate 3", because all three gates
+  now share the one throttle.
+- **Balance.** Braces 159 / 159, parentheses 903 / 903, brackets 464 / 464;
+  nesting never goes negative.
+- **Declaration order.** `PO3Step` is defined up in the PO3 core section, well
+  above every new caller; the new enums and structs are declared before
+  `OnInit`; and `PO3VetoRead` / `PO3ZoneRead` are plain data structs, returned by
+  value the same way the parent already returns `PO3Read`.
+- **Format strings.** All 12 `PrintFormat` calls in the fork audited for
+  specifier-versus-argument count: **0 mismatches**. The two new read-out
+  branches that would have used an inline string ternary were rewritten to
+  assign to a local string first, matching the parent's own style.
+- **Magic.** `20260867` is used by nothing else in the repo.
+
+### Status & caveats
+
+- **Not deployed, and not compiled.** No MQL5 toolchain was available, so this
+  build has never been through MetaEditor. Expect to fix compile errors on first
+  load, then backtest on demo before reading anything into a result.
+- **The production VPS file is untouched**, and `20260867` shares positions with
+  nothing — specifically not with the live build's `20260858`, §38's `20260865`
+  or §39's `20260866`.
+- **An unreadable H4 history blocks every entry on that symbol.** 180 H4 bars is
+  about five weeks of trading, so a freshly added symbol is silent until it
+  loads. The startup read-out prints `veto UNKNOWN` for it, and `BlockNote` says
+  so once per streak rather than once a minute — but a silent symbol is the
+  failure mode to watch for, and the reason the read-out exists.
+- **Gate 4 defaults to the 2187 grade, which is rare on gold.** Expect very few
+  blocks: at ~4000 the only 2187 multiples in view are 2187 and 4374. If the
+  gate never fires, drop `InpPO3VetoPower` to `6` (729) — §1's default — and
+  measure again. The two settings bracket the useful range.
+- **Gate 5 is a large restriction when switched on.** Its 50/50 default refuses
+  a long anywhere in the top half of a 243-unit range, so the trade count will
+  move visibly. That is the point, but it means gate 5's effect should be read
+  as its own A/B, not folded in with gate 4's.
+- **The veto is a state, not an event.** It holds for as long as the level keeps
+  rejecting price and clears when price closes back through it, so the journal
+  will show long stretches of one block reason. That is the design; the reason
+  string only reprints when it changes.
+- **Clean A/B/C.** `InpPO3VetoEnabled = false` with `InpPO3ZoneEnabled = false`
+  reproduces §38 exactly; turning on gate 4 alone isolates the reaction veto;
+  both together is the full build.
+
+---
+
+## 41. Bottom-Up Stack EA — the tier set: a lean M5 + M15 + H1 stack
+
+**File:** `experimental-bottomup-stack-m5-m15-h1-vps-ea.mq5`
+**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` (the live VPS build, magic
+`20260858`), which is left untouched.
+**Magic number:** `20260868` — held across all three drafts of this experiment
+(the two M2 drafts and the eight-tier draft are deleted). Nothing else in the
+repo uses it, so this build never adopts or manages the live build's positions
+(`20260858`), the desktop twin's (`20260860`) or any fork's.
+
+The parent trades **five** tiers — M5, M15, M30, H1, H4. This build trades
+**three**, picked for separation rather than coverage:
+
+| Tier | Chain that must align before it opens |
+|---|---|
+| M5 | M1 + M5 |
+| M15 | M1 + M5 + M15 |
+| H1 | M1 + M5 + M15 + H1 |
+
+Plus **H4 as a bias, not a tier**: `tfs[]` still carries H4 and the H4 bias
+filter still requires it aligned with the trade before any entry (the H1
+stand-in covers M5 and M15 while H4 is flat). H4 has no risk row, no ATR handle,
+no exit and no position of its own. M30 is gone entirely — neither a tier nor
+read.
+
+### Why three, and why these three
+
+The chain is a strict **AND**, so the tier count is not a neutral choice. Every
+tier added to the middle of the stack multiplies the rarity of every chain above
+it while buying less and less independent information — adjacent timeframes are
+highly correlated, and a rung earns its place by what it *adds*, not by existing.
+Two observations drove the lean set:
+
+1. **H4 was already doing the work.** The H4 bias runs the identical
+   `CheckAlign(H4)` test an H4 *rung* would run, so for the H4 tier the rung was
+   literally redundant with the bias, and for every other tier H4's direction was
+   already required. Dropping H4 as a tier costs nothing in direction — it only
+   removes a tradable level.
+2. **M30 sat too close to its neighbours.** M15 → M30 is 2×, so an M30 rung
+   largely repeated what M15 had already said, at the cost of a full extra
+   condition on the H1 tier above it.
+
+What is left is 3× then 4× spacing, which also keeps the Ichimoku horizons on
+recognisable market rhythms — the periods are counts of *bars*, so 26 bars means
+something different on every timeframe:
+
+| Tier | Kijun = 26 bars | What that horizon is |
+|---|---|---|
+| M5 | ~2.2 h | intraday |
+| M15 | 6.5 h | a session |
+| H1 | 26 h | one trading day |
+| (H4 — bias only) | 104 h | one trading week |
+
+### The level space is small now, and every by-number test names its level
+
+Three levels — **M5 = 0, M15 = 1, H1 = 2** — with `tfs[] = { M1, M5, M15, H1, H4 }`
+and the parent's `lvl + 1` offset intact. Two by-number tests had to follow the
+top tier as it moved from H4 to H1:
+
+- the **D1 filter** now gates H1 (see the caveats — this is a real behaviour
+  change for H1);
+- the **tight break-even / full chandelier** bucket was `lvl >= 3` in the parent,
+  meaning "H1 or H4". It is now `lvl >= LEV_H1`, so H1 keeps exactly the treatment
+  it had and M5/M15 keep the looser spike-gated trail. Nothing moves.
+
+One test changed shape: the H1-bias ceiling is level-relative, so
+`ENUM_H1_BIAS_TIER` shrank to `{ M5 = 0, M15 = 1, H1 = 2 }` and its default moved
+from M30 to **M15** — the tier below the top, which is what the parent's default
+meant within its own stack. The H1 tier is deliberately excluded: the stand-in
+*is* H1's direction, so letting H1 fall back on it would validate H1 against
+itself.
+
+### What the lean stack does to the trade count
+
+Removing tiers is not symmetric with adding them, and the direction here is the
+opposite of the eight-tier draft:
+
+- **every chain gets shorter**, so every surviving tier fires more often. H1's
+  chain drops from five rungs (M1 + M5 + M15 + M30 + H1) to three, and M15 loses
+  M30 underneath it as well;
+- **two tradable levels disappear** — M30 and H4 — so those entries are gone
+  entirely. That is the cost of the change: fewer distinct setups, each firing
+  more often;
+- **H4's direction is not lost with the H4 tier.** The bias still requires it, so
+  what disappears is H4 *entries*, never H4 *influence*.
+
+The intended shape is a few well-spaced tiers each getting a fair share of the
+bars, instead of five tiers where the top two almost never qualify and the bottom
+one carries the count.
+
+There is **no input that re-adds a tier**: the tier set *is* the level space, so
+changing it is a code change. For a clean A/B against the five-tier parent, run
+`ichimoku-h4-m1-vps-ea.mq5` itself on the same window.
+
+### The cloud gate followed the tiers automatically
+
+The parent's gate reads (a) the **tier's own timeframe** at the far end of the
+future cloud and (b) the **timeframe directly below the tier**, the same way —
+except where that timeframe is M1, which takes the full current+future check.
+Both are index lookups (`tfs[lvl + 1]`, `tfs[lvl]`), so a shorter `tfs[]`
+re-points them with no code change:
+
+| Tier | own TF checked | "TF directly below" — what it now checks |
+|---|---|---|
+| M5 | M5 future | **M1 full (current + future)** |
+| M15 | M15 future | M5 future |
+| H1 | H1 future | **M15** future (was M30) |
+
+M1 is still the only timeframe that must fully agree, and only for the M5 tier —
+exactly the parent's rule. H4 is not referenced by the gate at all, because it is
+not a tier.
+
+### What the earlier drafts of this section established
+
+Three tier sets have now been tried on this fork. The first two builds are
+**deleted**; what they taught is kept here, because it is what motivated the lean
+set:
+
+1. **The M2 rung** (`-m2-rung-`, deleted). M2 as an extra *rung* between M1 and
+   M5 could only ever filter — a rung is a timeframe that must agree, so it holds
+   the entry count level or reduces it, never raises it. §38 found the same thing.
+   It also needed real machinery: MT5 lists `PERIOD_M2`, but non-standard periods
+   are built from the M1 series, so a symbol whose feed carries no M1 has no M2,
+   and an *enforced* M2 rung would have failed every chain check in silence. The
+   draft therefore had to skip the rung rather than require it.
+2. **The M2 tier** (`-m2-tier-`, deleted). Making M2 tradable did add entries, but
+   the earliest and thinnest ones: taken before M5 confirms, on the shallowest
+   pullbacks, where a 2-minute bar sits closest to the spread.
+3. **The eight-tier stack** (`-m10-m20-h2-tiers-`, deleted). M10, M20 and H2 as new
+   tiers with M2 removed. This is the draft that showed the cost of the
+   conjunction plainly: each added tier is also a rung above itself, so the three
+   additions *tightened* every existing tier while adding three new ones, and the
+   tier-1 risk rows summed to 55.5% of equity.
+
+The lean stack is the response to (3): fewer tiers, wider spacing, and no tier
+that merely repeats what its neighbour already says.
+
+### Status & caveats
+
+- **RESULT — user report: it does not perform as well as the live VPS build.**
+  This is the only empirical datapoint the tier-set question has, and it points
+  at the parent rather than at the lean set: **the five-tier stack stays the
+  better tier set on the evidence so far.** The magnitude, the instrument, the
+  window and whether it was a backtest or a forward test were not recorded, so
+  read it as a direction rather than a measurement. It is enough to say the
+  structural argument above — chain rarity, rung redundancy, the Kijun horizons
+  — did not survive contact with the data, and **this build should not be
+  promoted** on the strength of that argument. The obvious next test is which
+  tier the performance was lost to: if it was H4's entries, H4 is the tier to
+  put back first; if it was M30's, the parent's middle rung was doing more work
+  than its 2x spacing suggested.
+- **Not compiled, not backtested.** No MQL5 toolchain was available here. The
+  fork has been statically audited — brace, paren and bracket balance; every
+  level-to-timeframe index site converted; and a full `diff` against the parent
+  showing only the intended changes — but it has never been through
+  MetaEditor. Expect to fix compile errors on first load, then backtest on
+  demo before reading anything into a result.
+- **This is a fork, not a promotion.** The live build is untouched, and this
+  build carries magic `20260868`, so nothing here can manage the live build's
+  positions or vice versa.
+- **Do not run it beside the live build on the same account and symbol.** The
+  magics are distinct, which means both EAs would trade that symbol
+  independently and the account's exposure would double. Use a demo account or
+  a separate terminal.
+- **The risk ladder is the parent's, not an invention.** M5 1%, M15 1%, H1 10% —
+  the parent's own rows for those three tiers, with the M30 (5%) and H4 (20%) rows
+  removed along with those tiers. The tier-1 total therefore falls from the
+  parent's 37% to **12%** if all three ran at once.
+- **That aggregate is still reachable.** Per §24 the "one position per symbol"
+  claim is not enforced: a higher tier already running is never closed by a
+  smaller signal, so all three can be open together. The R3 disaster stop sits at
+  8 x ATR while sizing assumes 2 x, so the worst case on a full stack is four
+  times the nominal risk.
+- **H1 now carries a D1 filter the parent's H1 did not have.** The D1 gate was
+  written as "the top tier" (`LEVELS - 1`), which was H4 in the parent and is H1
+  here, so H1 entries additionally need the daily aligned. This is the one
+  behaviour change beyond the tier count. `InpD1Filter = false` restores the
+  parent's H1 exactly, and it is the first input to try if H1 trades look too
+  rare.
+- **Judge it on the pair, not on the count.** Shorter chains mean more entries at
+  every surviving tier, but two levels are gone, so the net count could move
+  either way. Compare win rate, average trade and worst drawdown against the
+  parent on the same window, and read the M5/M15 entries separately from the H1
+  ones — H1 is now the only tier taking the 10% row.
+- **H4 is not a tier, and that is deliberate.** Its direction is still required on
+  every trade through the bias, so what was given up is H4 *entries* — the rare,
+  largest, longest-held ones. If forward results suggest the big swing trades were
+  carrying the account, H4 is the first tier to put back.
+- **One parent behaviour is inherited unchanged.** The parent's header claims
+  "at most one position per symbol"; §24 shows that is not enforced — a higher
+  tier already running is never closed by a smaller signal, so several tiers
+  can run at once. This fork corrects the header text but deliberately does not
+  change the behaviour.
+
+---
+
+## 42. Bottom-Up Stack EA — M2 as a tradable TIER
+
+**File:** `experimental-bottomup-stack-kihon-po3-veto-m2tier-ea.mq5`
+**Magic number:** `20260869`
+
+A fork of §40's kihon + PO3 + veto build (`20260867`), which forks §38's
+kihon + PO3 gate experiment (`20260865`), which forks the live VPS build
+(`20260858`). Gates 1–5, the M1-strict cloud bias, the robustness pack and the
+M2 rung are all unchanged. The one change is a **sixth tradable tier at the
+bottom of the stack: M2**.
+
+> **Not the same experiment as §41 — check which one you mean.** §41 has moved on
+> twice: its M2 drafts were superseded and deleted, and
+> `experimental-bottomup-stack-m5-m15-h1-vps-ea.mq5` (magic `20260868`) is now a
+> **lean three-tier** fork of the **live VPS build** — M5, M15, H1, with H4 kept
+> as a bias only — and it does not read M2 at all. **This** build is the one that
+> keeps **M2 as a tradable tier**, on top of the kihon + PO3 + veto stack (§40's
+> build), so its M2 trades must clear gates 1–5 as well. Different parents,
+> different magics (`20260868` vs `20260869`) — the magics do not collide, so both
+> can run side by side, but they answer different questions and their trade counts
+> are not comparable. §41's own conclusion is that a lower tier is worth having
+> only if it is *not* redundant with its neighbour; this build's M2 tier sits
+> directly under M5, so that question applies to it too.
+
+### What "an M2 tier" means
+
+M2 now plays **two independent roles under two independent switches**:
+
+| Role | Switch | Effect |
+|---|---|---|
+| **Rung** | `InpUseM2` (default on) | M2 is a step in the higher tiers' chains: the M5 tier needs M1 + M2 + M5, and every higher tier inherits it |
+| **Tier** | `InpM2Tier` (default on) | M1 + M2 aligned opens an **M2 trade** — its own risk row, its own ATR handle, its own exits, managed by the same code as M5 |
+
+Both are on by default, so the stack out of the box is:
+
+```
+M2 tier   <- M1 + M2
+M5 tier   <- M1 + M2 + M5
+M15 tier  <- M1 + M2 + M5 + M15
+... and so on up to H4.
+```
+
+The two roles are genuinely independent. `InpM2Tier = false` reproduces §40
+exactly (M2 as a rung only); `InpUseM2 = false` with the tier on gives M2
+trading on M1 + M2 while M5 trades on M1 + M5 — a coherent build, just not the
+default one.
+
+### Why this is not just a setting
+
+Levels are addressed by **index** (0 = the bottom of the stack), so adding a
+tier at the bottom renumbered all five existing tiers:
+
+| Level | Before (§40) | After |
+|---|---|---|
+| 0 | M5 | **M2** |
+| 1 | M15 | M5 |
+| 2 | M30 | M15 |
+| 3 | H1 | M30 |
+| 4 | H4 | H1 |
+| 5 | — | H4 |
+
+Every site that hardcoded a level number had to move with it. The four that
+mattered, and what would have broken silently:
+
+- **`LevelRiskPct()`** — a 6th row added and all five cases shifted. Left alone,
+  every tier would have been sized with the row below it: the H4 tier would have
+  risked H1's 10% instead of 20%.
+- **`LevelCloudBiasOK()`** — the "this tier sits on M1, so it carries the full
+  current+future check" special case was `lvl == 0`. Left alone it would have
+  given the **M5** tier the M2 tier's treatment and left the M2 tier's own cloud
+  unchecked. It now branches on `LVL_M2` for the new bottom and `LVL_M5` for the
+  old one.
+- **`ManageLevelProtection()`** — the break-even and chandelier arming
+  thresholds split on `lvl >= 3`, where 3 was H1. After the shift 3 is M30, so
+  the **M30 tier would have been given the H1/H4 tighter arming rule** and H1
+  would have lost it.
+- **`ENUM_H1_BIAS_TIER`** — the enum values *are* level indices, so the H1-bias
+  ceiling moved from `{0,1,2,3}` to `{1,2,3,4}`. Left alone, the default
+  `H1TIER_M30` would have allowed only up to M15 on the H1 stand-in. The M2 tier
+  is deliberately not named in the enum but *is* covered by it: M2 is level 0,
+  below every setting, so any mode but OFF lets the stand-in carry the M2 tier
+  too — the same "lower tiers may stand in" rule read one rung further down.
+
+Those four are the "M2's arrival is exactly the kind of change that leaves one
+of those sites behind" trap §38's own comment warned about, and all four were
+live. `LVL_M2`, `LVL_M5` and `LVL_H1` now name the three that mean something.
+
+### The rung skip — the subtle one
+
+`ChainAligned()` walks the chain from M1 upward and **skips the M2 rung when it
+is inactive** (switch off, no handle, or no history yet). It returns 0 on
+unreadable data, so skipping is what makes a broker without M2 non-fatal.
+
+With M2 as the bottom tier, `TfIdxOfLevel(LVL_M2)` **is** `IDX_M2` — the M2
+tier reads the very timeframe the rung skip is about. So the skip would have
+applied to the M2 tier's own chain, which *is* M2, leaving it validating on
+**M1 alone** and opening M2 trades on a single timeframe. The skip is now
+level-aware:
+
+```cpp
+if(t == IDX_M2 && t < topIdx && !M2RungActive(s)) continue;
+```
+
+For the M2 tier `topIdx` is `IDX_M2`, so the guard cannot fire and M2 is
+required. For every tier above it `topIdx` is larger and the skip behaves
+exactly as it did before. A symbol with no M2 feed needs no special case:
+`CheckAlign()` on an unreadable M2 returns 0, so the M2 tier simply never opens.
+
+### Behaviour worth expecting
+
+- **The M2 tier will usually be superseded by M5, not run alongside it.** The
+  rung is on by default, so an M5 chain (M1 + M2 + M5) implies an M2
+  alignment. The consolidation rule closes lower tiers when a higher one opens,
+  so when both align on the same minute the M2 trade is closed into the M5
+  entry. The M2 tier therefore opens mainly when **M2 aligns and M5 does not**.
+  That is the expected shape, not a bug — but it means the tier's contribution
+  is the trades the stack previously declined, not a doubling of the count.
+- **An M2 feed is now needed for two things.** Both roles fail independently but
+  for the same reason, and both remain non-fatal: a symbol without M2 loses the
+  tier *and* the rung and keeps the other five tiers. The startup read-out
+  prints both roles per symbol so a silent M2 tier is visible.
+- **M2 is sized below M5** (0.5/0.25/0.05 against M5's 1/0.5/0.1). A 2-minute
+  bar is close to the noise floor on a wide-spread feed, and a wrong M2 read
+  costs the same dollars per lot as a wrong M5 read.
+- **M2's PO3 power is 3, the same as M5's** (`InpPO3Power = "3,3,3,4,4,5"`), not
+  2. The room filter's blocking fraction is roughly `InpPO3MinRR × refRisk /
+  step`, and M2's reference risk is about 0.6 of M5's, so step 9 would read "no
+  room" on about 40% of positions where step 27 reads about 14%. Over-blocking
+  the thinnest tier is the worse error; the startup read-out prints what M2
+  actually sees.
+- **Gate 4 and gate 5 apply to the M2 tier too.** They are market-wide and
+  directional, tested per tier, so the M2 tier is vetoed by the same rejection
+  and zone rules as everything else. Nothing was special-cased for it.
+
+### Inputs that changed
+
+| Parameter | Default | Description |
+|---|---|---|
+| `InpM2Tier` | `true` | **New.** Let M1 + M2 open an M2 trade, with its own risk row and exits |
+| `InpRiskPctM2` / `_T2` / `_T3` | `0.5` / `0.25` / `0.05` | **New.** M2's three equity-tier risk rows |
+| `InpPO3Power` | `"3,3,3,4,4,5"` | Was `"3,3,4,4,5"`; M2's power added at the front (see above) |
+| `InpH1BiasMaxTier` | `H1TIER_M30` | Enum values shifted to `1=M5, 2=M15, 3=M30, 4=H1` |
+
+Everything else is unchanged from §40.
+
+### Verification performed
+
+No MQL5 compiler on this machine, so this is static verification against §40's
+file as the parent:
+
+- **Fork integrity.** 48 functions in the parent, **none removed**. After
+  comment and whitespace normalisation **42 are identical**, **6 differ**
+  (`OnInit`, `ChainAligned`, `LevelCloudBiasOK`, `LevelRiskPct`,
+  `ManageLevelProtection`, `OnTick`) and **1 is new** (`M2TierActive`).
+- **Every changed function token-diffed.** `ChainAligned` gains only `t < topIdx
+  &&`; `LevelRiskPct` gains one `LVL_M2` case and shifts the other five case
+  labels; `LevelCloudBiasOK` gains the M2 branch and changes `lvl == 0` to
+  `LVL_M5`; `ManageLevelProtection` changes exactly two tokens, the two `3`s to
+  `LVL_H1`; `OnTick` gains one hunk, the M2-tier guard at the top of the tier
+  loop; `OnInit`'s three hunks are the M2 handle condition, the optional M2 ATR
+  handle, and the two-role startup read-out.
+- **A level-index sweep** for bare numbers compared against a level variable
+  now finds only `lvl < 0` (a clamp in `PO3Verdict`) and `l >= 0` (a loop
+  bound) — no bare level constants remain.
+- **Balance.** Braces 164 / 164, parentheses 921 / 921, brackets 468 / 468.
+- **Format strings.** All 33 `Print` / `PrintFormat` calls in the fork audited
+  for specifier-versus-argument count: **0 mismatches**.
+- **Magic.** `20260869`. `20260868` was claimed by the concurrent §41 fork
+  *while this build was being written* — §41 held it first, for its M2 drafts
+  and now for its eight-tier build — so this one was renumbered rather than
+  shipped colliding; the collision was found by the repo-wide magic scan and
+  both files now declare distinct numbers.
+
+### Status & caveats
+
+- **Not deployed, and not compiled.** Expect to fix compile errors on first
+  load, then backtest on demo.
+- **The production VPS file is untouched**, and `20260869` shares positions with
+  nothing — specifically not the live `20260858`, §38's `20260865`, §39's
+  `20260866`, §40's `20260867` or §41's `20260868`.
+- **The tier's effect is mostly a filter, not a new trade stream.** Read the
+  trade count before reading the profit: because M5 supersedes M2 whenever both
+  align, the M2 tier trades the chains the stack used to decline. If the count
+  barely moves, the interesting question is the average trade, not the sample
+  size.
+- **`TfIdxOfLevel()` now returns different timeframes for the same index than
+  §38/§40 do.** Anything that compares this build's journal or comment levels
+  against the parent's must map levels, not copy indices. The entry comments
+  (`Exp Buy M2`, `Exp Buy M5`, …) are built and parsed by the same function, so
+  the EA itself is self-consistent; it is cross-build reading that needs care.
+- **An M2 tier inherits M2's data quality.** A 2-minute gold bar is close to
+  the spread, and its ichimoku is built from far fewer ticks than M5's. Its
+  kumo-touch exit, rejection exit and chandelier all run on that data. Treat it
+  as the thinnest tier in the stack, which is why it is sized smallest.
