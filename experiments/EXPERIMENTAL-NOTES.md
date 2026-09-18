@@ -4895,3 +4895,118 @@ parent file as ground truth.
   and the tier is `Exp Buy M2` / `Exp Sell M2`, so the trades taken against an
   aligned H4 can be isolated. That subset has no precedent in the live build,
   and it is the part most likely to decide whether this build is worth keeping.
+
+---
+
+## 44. Bottom-Up Stack EA — a hard take profit on M2 and M5
+
+**File:** `experimental-bottomup-stack-m1m2-scalp-m30-bias-hardtp-ea.mq5`
+**Forked from:** `experimental-bottomup-stack-m1m2-scalp-m30-bias-ea.mq5`
+(section 43 — the M1+M2 scalp tier with an M30 bias, magic `20260870`),
+which is left untouched
+**Magic number:** `20260871` — fresh, so this build never adopts or manages
+positions belonging to any other file
+
+### What changed
+
+The whole bottom-up family has **no profit target anywhere**. Every tier
+rides a kumo-touch exit with the BE/chandelier layer behind it, and the only
+thing attached to the order is the wide disaster stop. This build is the
+first to put a **broker-side TP on the ticket at the moment it is sent**, on
+the two smallest tiers only:
+
+| Tier | Target | On a 4000.00 gold entry |
+|------|--------|-------------------------|
+| M2   | `InpTPPipsM2` = 30 pips | long 4003.00, short 3997.00 |
+| M5   | `InpTPPipsM5` = 60 pips | long 4006.00, short 3994.00 |
+| M15, M30, H1, H4 | none | unchanged from the parent |
+
+`LevelTPPips()` returns 0 for every tier above M5, and 0 is also MT5's own
+"no TP" value, so the four upper tiers need no special case — they send the
+same order the parent sends.
+
+### Pip size, and why it auto-resolves
+
+A pip here is the **gold convention: 0.10 of price**. The two defaults are
+therefore a 3.00 target on M2 and a 6.00 target on M5. In points — the unit
+MT5 actually works in — that depends on the feed:
+
+| Feed | 1 point | Points per pip | M2 (30 pips) | M5 (60 pips) |
+|------|---------|----------------|--------------|--------------|
+| 2-decimal gold | 0.01  | 10  | 300 points  | 600 points  |
+| 3-decimal gold | 0.001 | 100 | 3000 points | 6000 points |
+
+`InpPipPoints = 0` (the default) makes `PipPoints()` resolve this from
+`SYMBOL_DIGITS` as `round(0.10 / point)`. The fixed-TP sibling (section 38)
+instead hard-codes `InpPipPoints = 10` and tells the reader to change it to
+100 on a 3-decimal feed — a step that is silent when missed and puts every
+target at **a tenth** of the intended distance. Auto-resolving removes that
+failure mode: the same pip figure means the same price distance on either
+feed. OnInit prints the resolved points-per-pip and the resulting price
+distance per symbol, so the number is stated rather than assumed.
+
+The auto rule is **gold-specific by design**. On a 5-digit FX symbol it would
+make one pip 0.10 of price — 1000 FX pips — so a non-gold symbol needs
+`InpPipPoints` set explicitly (10 for 5-digit FX). `Symbols` defaults to
+`GOLDm#`, so the default path is the correct one.
+
+### The target is additive, not a replacement
+
+This was a deliberate choice over the fixed-TP sibling's philosophy, where
+the target and the disaster stop are the *only* ways out. Here the
+kumo-touch exit, the rejection-candle exit, the BE stop, the chandelier
+trail and the disaster stop **all still run on M2 and M5**, and the trade
+ends on whichever arrives first. The consequence is worth stating plainly:
+
+- This build can only ever **shorten** an M2/M5 trade relative to the
+  parent, never extend one. Any trade that would have run past 30/60 pips
+  and been handed to the trail is now cut at the target instead.
+- Every other trade in the file — all four upper tiers, and any M2/M5 trade
+  that never reaches its target — is **identical to the parent's**. So the
+  A/B against section 43 isolates exactly one thing: what capping the two
+  scalp tiers costs or saves.
+- `InpHardTPEnabled = false` restores the parent exactly.
+
+### Two mechanics that make the anchor hold
+
+1. **Every `PositionModify` now carries the current TP back in.** The parent
+   passed a bare `0` in that slot, which was correct when no tier had a
+   target but would have **stripped the target the first time BE or the
+   chandelier fired** — the trade would have silently reverted to parent
+   behaviour mid-flight, and only on the trades that went far enough to arm
+   BE. `tpCur` is read once per `ManageLevelProtection()` call and re-read
+   before the trail block, since the BE block may have modified the ticket.
+2. **A missing target self-heals**, mirroring the disaster stop's R3 path. A
+   target rejected at send time by the broker's minimum stop distance, or
+   stripped later, is re-attached on the next minute from the **entry**
+   anchor — not the current quote — so it lands where it would have at open.
+   `SyncStateFromPositions()` restores `entryPrice` from
+   `POSITION_PRICE_OPEN`, so this survives a restart mid-trade. The entry
+   log says `TP deferred (broker distance)` when the target did not go out
+   with the order, so a deferred target is visible rather than silent.
+
+A TP fill needs no bookkeeping of its own: `SyncStateFromPositions()`
+rebuilds every level's state from the live positions each minute, so a
+broker-side close frees the tier on the next bar exactly as a stop-out does.
+
+### What to watch
+
+- **The reward:risk of M2/M5 now drifts with volatility.** Risk sizing is
+  unchanged and still runs off ATR (`InpRiskATRMult`), with the disaster
+  stop at ATR x `InpDisasterATRMult` — but the target is a *fixed* pip
+  distance. 30 pips is a long way in a quiet session and a short one in a
+  fast session, so the effective R:R of these two tiers is not constant the
+  way it is in the fixed-TP sibling, where both legs are fixed. This is
+  inherent to mixing a fixed target with an ATR stop; judge the two tiers
+  against section 43 before reading anything into the numbers.
+- **M2 and M5 now have different targets** (30 vs 60), where every previous
+  fixed-target build used one number for both. The M5 tier holds a longer
+  chain and a longer bar, so the wider target is the intent — but it does
+  mean the two tiers are no longer comparable to each other on target size.
+- **Check the resolved pip line in the journal before trusting a backtest.**
+  It is the one number that silently invalidates every result if the feed is
+  not what was assumed, which is exactly why OnInit prints it per symbol.
+- **Not yet compiled or backtested.** The file was written and statically
+  checked (brace/paren balance, no `PositionModify` left stripping the TP,
+  format-specifier arity) but there is no MQL5 compiler on the machine it
+  was authored on. MetaEditor is the first step before any test run.
