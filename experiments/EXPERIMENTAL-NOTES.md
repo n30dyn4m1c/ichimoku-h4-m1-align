@@ -5010,3 +5010,132 @@ broker-side close frees the tier on the next bar exactly as a stop-out does.
   checked (brace/paren balance, no `PositionModify` left stripping the TP,
   format-specifier arity) but there is no MQL5 compiler on the machine it
   was authored on. MetaEditor is the first step before any test run.
+
+---
+
+## 45. Bottom-Up Stack EA — an M1 tier, re-cut targets, and a five-band risk ladder
+
+**File:** `experimental-bottomup-stack-m1-m2-scalp-tiers-5band-ea.mq5`
+**Forked from:** `experimental-bottomup-stack-m1m2-scalp-m30-bias-hardtp-ea.mq5`
+(section 44 — the hard M2/M5 take profit, magic `20260871`), which is left
+untouched
+**Magic number:** `20260872` — fresh, so this build never adopts or manages
+positions belonging to any other file
+
+### 1. A seventh tier: M1, alone
+
+The entry condition is `CheckAlign(M1) != 0` and nothing else. No higher
+timeframe confirms it. This is a deliberate break with the rule every build
+in this family has carried since the beginning — *"M1 alone never trades; it
+is only the start of the stack"* — and it sits behind `InpM1Tier`.
+
+Its bias is **M30 alone** (`InpM1M30Bias`), the same gate the M2 scalp tier
+uses and for the same reason: the bottom tiers are a separate regime that
+does not consult H4 or the H1 stand-in ladder. So the M1 tier trades while
+H4 is flat, and **against an aligned H4**. Expect a high trade count and no
+higher-timeframe agreement whatsoever; this is the least confirmed entry in
+the file by a wide margin, and the honest expectation is that it is the
+first thing to switch off if the results disappoint.
+
+**The level index now equals the TF index.** With M1 tradable the level list
+`{M1,M2,M5,M15,M30,H1,H4}` is exactly `tfs[]`, so the parent's `lvl + 1`
+offset — which existed only because level 0 was M2 — is gone from all 18 of
+its call sites. `LVL_*` and `IDX_*` are now equal by construction, and both
+are kept because they say different things at a call site (which *tier* vs
+which *timeframe*). `ENUM_H1_BIAS_TIER` shifted up by one with them, so
+`H1TIER_M5 = 2` where it was 1.
+
+The cloud gate gained a case: the M1 tier has no "TF below" to confirm, so
+the M1 cloud checked in full **is** its whole gate.
+
+### 2. Targets re-cut, and M1 given one
+
+| Tier | Was (§44) | Now | On a 4000.00 entry |
+|------|-----------|-----|--------------------|
+| M1   | — (no tier) | 30 pips | 4003.00 |
+| M2   | 30 pips   | **50 pips** | 4005.00 |
+| M5   | 60 pips   | **70 pips** | 4007.00 |
+| M15+ | none      | none | — |
+
+A pip is still the gold convention (0.10 of price), still auto-resolved from
+`SYMBOL_DIGITS`, and the target is still additive — every managed exit still
+runs on these tiers.
+
+### 3. Three risk bands become five, and 13k+ carries more risk
+
+The parent's ladder cut H4 to 2.0% above 13000, against 10.0% in the
+7000–13000 band. That 5x cliff outran the equity growth that triggered it,
+so an account crossing 13000 risked **fewer dollars than it had at 7000**:
+
+| | equity | total risk | money at risk |
+|--|--------|-----------|---------------|
+| parent, band 2 floor | $7,000  | 18.75% | $1,321 |
+| parent, band 3 floor | $13,000 | 3.45%  | **$448** |
+
+The new ladder is anchored on **H4 per band**, with every other tier holding
+the fixed fraction of H4 that bands 1 and 2 have always used (M1 0.0125,
+M2 0.025, M5/M15 0.05, M30 0.25, H1 0.5):
+
+| band | equity | M1 | M2 | M5 | M15 | M30 | H1 | **H4** | total | $ at floor |
+|------|--------|----|----|----|-----|-----|----|--------|-------|-----------|
+| 1 | < 7000      | 0.25   | 0.5   | 1.0  | 1.0  | 5.0  | 10.0 | **20.0** | 37.75% | $1,132 |
+| 2 | 7000–13000  | 0.125  | 0.25  | 0.5  | 0.5  | 2.5  | 5.0  | **10.0** | 18.88% | $1,321 |
+| 3 | 13000–17000 | 0.0625 | 0.125 | 0.25 | 0.25 | 1.25 | 2.5  | **5.0**  | 9.44%  | $1,227 |
+| 4 | 17000–20000 | 0.0375 | 0.075 | 0.15 | 0.15 | 0.75 | 1.5  | **3.0**  | 5.66%  | $963 |
+| 5 | 20000+      | 0.0125 | 0.025 | 0.05 | 0.05 | 0.25 | 0.5  | **1.0**  | 1.89%  | $378 |
+
+**Bands 1 and 2 are unchanged.** Band 3 restores dollar continuity across
+13000 ($1,321 → $1,227 instead of → $448); bands 4 and 5 then taper on
+purpose.
+
+Two things about this ladder that are easy to misread:
+
+- **M30 in band 3 rises 6.25x** (0.2 → 1.25), not the 2.5x the H4 anchor
+  implies. The parent's 13000+ band was the **one place** M30 broke the
+  ladder's own shape — `0.10 x H4` where every other band uses `0.25 x H4`.
+  The new bands restore the shape, which means M30 gains more than its
+  neighbours here. `InpRiskPctM30_T3 = 0.5` holds it at the old ratio.
+- **Band 5 is more conservative than the parent's 13000+ band** (H4 1.0%
+  against 2.0%). A 20000+ account therefore risks *less* than the parent
+  would have. That is the taper working as specified, not an oversight.
+
+As always the input % is the **sizing** basis (2xATR) and the disaster stop
+sits at 8xATR, so a full stop-out costs **4x** the figure: band 1 is 151% at
+the disaster stop, band 3 is 37.8%, band 5 is 7.5%. OnInit prints every band
+with totals.
+
+### The one-position rule now covers both bottom tiers
+
+`HigherLiveLevelBusy()` became `OtherLevelBusy(s, lvl)`, scanning **every**
+other level rather than only the five live ones. The parent's narrower
+question was right when M2 was the only M30-biased tier: the only hazard was
+M2 opening against a live H4-biased trade. With M1 tradable there are two
+tiers taking direction from M30, and they can disagree **with each other** —
+a running M2 long and an M1 short would have passed the parent's check,
+because it never looked at level 0. On a netting account MT5 nets the
+opposing orders, shrinking or closing the live trade while `state[]` still
+reports it open. `InpScalpNeedsFlatSymbol` governs both tiers.
+
+### What to watch
+
+- **The M1 tier is the whole experiment.** Everything else here is a
+  parameter change. Its entries log `(bottom-up, bias M30)` on tier `Exp Buy
+  M1` / `Exp Sell M1`, so they are separable — read them on their own before
+  judging the build, and read the counter-H4 subset separately again.
+- **M1 will usually be superseded, not run alongside.** The scan is
+  highest-tier-first, so any tier that aligns on the same minute beats it;
+  and `OtherLevelBusy` blocks it while anything else is open. Its real
+  contribution is the minutes when *only* M1 aligns.
+- **A 1-minute bar is below the noise floor** for an Ichimoku reading that
+  nothing else confirms. Treat a good M1 result with more suspicion than a
+  good M5 one, and compare against §44 with `InpM1Tier = false` to isolate
+  what the tier actually added.
+- **Band 3 changed two things at once** — the H4 anchor *and* M30's ratio.
+  If band 3 behaves oddly, test `InpRiskPctM30_T3 = 0.5` before concluding
+  anything about the anchor.
+- **Not yet compiled or backtested.** No MQL5 compiler on the machine it was
+  authored on. It was checked statically (brace/paren balance, `PrintFormat`
+  arity, no `PositionModify` stripping a TP), the risk ladder was simulated
+  against the intended table, and the entry scan was traced through nine
+  scenarios covering M1-alone, counter-H4, supersede and both flat-symbol
+  blocks. MetaEditor is still the first step before any test run.
