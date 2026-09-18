@@ -26,10 +26,42 @@
 //|    say different things at a call site (which TIER vs which TF).  |
 //|    `ENUM_H1_BIAS_TIER` shifted up by one with them.               |
 //|                                                                  |
-//| 2. TARGETS RE-CUT, AND M1 GIVEN ONE.                             |
-//|    M1 30 pips, M2 50 (was 30), M5 70 (was 60). M15 and above      |
-//|    still take no target. A pip is still the gold convention,      |
-//|    0.10 of price, auto-resolved from SYMBOL_DIGITS.               |
+//| 2. TARGETS RE-CUT, AND M1 GIVEN ONE — PLUS A TIGHT HARD STOP.    |
+//|                                                                  |
+//|      tier   TP      SL      reward:risk                          |
+//|      M1     30p     20p     1.50 : 1                             |
+//|      M2     40p     25p     1.60 : 1                             |
+//|      M5     50p     30p     1.67 : 1                             |
+//|      M15+   none    none (8xATR disaster stop only, as parent)   |
+//|                                                                  |
+//|    A pip is the gold convention, 0.10 of price, auto-resolved     |
+//|    from SYMBOL_DIGITS, so M1 is a 2.00 stop against a 3.00        |
+//|    target on gold.                                                |
+//|                                                                  |
+//|    THE HARD STOP REPLACES THE DISASTER STOP ON THESE THREE TIERS  |
+//|    rather than sitting beside it, and is CLAMPED to the tighter   |
+//|    of the fixed distance and 8xATR — on a volatile feed a fixed   |
+//|    20 pips could otherwise exceed 8xATR and become a WIDER stop   |
+//|    than the parent's, the opposite of the intent. The broker's    |
+//|    minimum stop distance is still the floor: a stop too tight to  |
+//|    place is widened to the nearest legal level, not dropped.      |
+//|    M15 and above are untouched.                                   |
+//|                                                                  |
+//|    SIZING FOLLOWS THE REAL STOP, AND THIS IS THE IMPORTANT PART.  |
+//|    RiskLots sized every tier against 2xATR while the stop sat at  |
+//|    8xATR, which is why a stop-out has always cost ~4x the stated  |
+//|    risk %. A fixed 20-pip stop has no fixed relationship to       |
+//|    2xATR at all, so leaving sizing alone would have made the risk |
+//|    table fiction on exactly the tiers this build is about.        |
+//|    M1/M2/M5 are therefore sized on the stop they will actually    |
+//|    run. The consequence, which MUST be read before comparing      |
+//|    tiers:                                                         |
+//|                                                                  |
+//|      M1/M2/M5   stop-out costs ~1x the stated risk %             |
+//|      M15..H4    stop-out costs ~4x the stated risk % (unchanged) |
+//|                                                                  |
+//|    The two halves of the risk ladder are no longer on one scale.  |
+//|    OnInit prints this split rather than leaving it to be found.   |
 //|                                                                  |
 //| 3. THE RISK LADDER GOES FROM THREE BANDS TO FIVE, AND 13k+       |
 //|    CARRIES MORE RISK.                                            |
@@ -488,8 +520,14 @@ input group  "Hard Take Profit (M2 + M5 only — attached at entry, in pips)"
 input bool   InpHardTPEnabled = true;    // Attach a broker-side TP to M2/M5 entries (M15/M30/H1/H4 never get one)
 input double InpPipPoints     = 0.0;     // Points per pip. 0 = AUTO (gold convention: 1 pip = 0.10 of price, so 10 pts on a 2-decimal feed, 100 on a 3-decimal one). Set explicitly for a non-gold symbol.
 input double InpTPPipsM1      = 30.0;    // M1 tier take profit, pips — 30 = 4000.00 -> 4003.00 (0 = no TP on this tier)
-input double InpTPPipsM2      = 50.0;    // M2 scalp tier take profit, pips — 50 = 4000.00 -> 4005.00 (0 = no TP on this tier)
-input double InpTPPipsM5      = 70.0;    // M5 tier take profit, pips — 70 = 4000.00 -> 4007.00 (0 = no TP on this tier)
+input double InpTPPipsM2      = 40.0;    // M2 scalp tier take profit, pips — 40 = 4000.00 -> 4004.00 (0 = no TP on this tier)
+input double InpTPPipsM5      = 50.0;    // M5 tier take profit, pips — 50 = 4000.00 -> 4005.00 (0 = no TP on this tier)
+
+input group  "Hard Stop Loss (M1 + M2 + M5 only — attached at entry, in pips)"
+input bool   InpHardSLEnabled = true;    // Give M1/M2/M5 a tight hard SL instead of the wide 8xATR disaster stop
+input double InpSLPipsM1      = 20.0;    // M1 tier stop, pips — 20 against a 30-pip target = 1.50 : 1
+input double InpSLPipsM2      = 25.0;    // M2 tier stop, pips — 25 against a 40-pip target = 1.60 : 1
+input double InpSLPipsM5      = 30.0;    // M5 tier stop, pips — 30 against a 50-pip target = 1.67 : 1
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
@@ -612,6 +650,22 @@ int OnInit()
          Print("Hard TP: InpTPPipsM1/M2/M5 cannot be negative. Aborting.");
          return(INIT_FAILED);
       }
+   }
+
+   if(InpHardSLEnabled)
+   {
+      if(InpSLPipsM1 < 0.0 || InpSLPipsM2 < 0.0 || InpSLPipsM5 < 0.0)
+      {
+         Print("Hard SL: InpSLPipsM1/M2/M5 cannot be negative. Aborting.");
+         return(INIT_FAILED);
+      }
+      // A stop at or beyond the target is almost certainly a typo, and it
+      // would size the tier as if it risked far less than it can lose.
+      if((InpSLPipsM1 > 0.0 && InpTPPipsM1 > 0.0 && InpSLPipsM1 >= InpTPPipsM1) ||
+         (InpSLPipsM2 > 0.0 && InpTPPipsM2 > 0.0 && InpSLPipsM2 >= InpTPPipsM2) ||
+         (InpSLPipsM5 > 0.0 && InpTPPipsM5 > 0.0 && InpSLPipsM5 >= InpTPPipsM5))
+         Print(PCTime() + " | !! HARD SL >= HARD TP on at least one of M1/M2/M5 — reward:risk is "
+               "below 1:1 there. Intentional? If not, check InpSLPips*/InpTPPips*.");
    }
 
    for(int s = 0; s < symsCount; s++)
@@ -745,6 +799,28 @@ int OnInit()
    }
    else
       Print(PCTime() + " | Hard TP: disabled — M1/M2/M5 run on managed exits only, as in the parent");
+
+   //--- Stops, and the sizing consequence. Spelling out reward:risk here is
+   //--- the cheapest place to catch a mis-set pip figure, and the 1x/4x split
+   //--- is the single most misreadable thing about this build's risk table.
+   if(InpHardSLEnabled)
+   {
+      PrintFormat("%s | Hard SL: M1 %.0f pips (R:R %.2f), M2 %.0f (%.2f), M5 %.0f (%.2f) — "
+                  "clamped to the tighter of this and %.0fxATR; M15+ keep the disaster stop alone",
+                  PCTime(),
+                  InpSLPipsM1, (InpSLPipsM1 > 0 ? InpTPPipsM1 / InpSLPipsM1 : 0.0),
+                  InpSLPipsM2, (InpSLPipsM2 > 0 ? InpTPPipsM2 / InpSLPipsM2 : 0.0),
+                  InpSLPipsM5, (InpSLPipsM5 > 0 ? InpTPPipsM5 / InpSLPipsM5 : 0.0),
+                  InpDisasterATRMult);
+      Print(PCTime() + " | Hard SL: M1/M2/M5 are now SIZED ON THEIR REAL STOP, so a stop-out there "
+            "costs ~1x the stated risk %. M15+ are still sized on " +
+            DoubleToString(InpRiskATRMult, 1) + "xATR and stopped at " +
+            DoubleToString(InpDisasterATRMult, 1) + "xATR, so a stop-out there still costs ~" +
+            DoubleToString(InpDisasterATRMult / InpRiskATRMult, 0) + "x. Do not read the two halves "
+            "of the risk ladder as one scale.");
+   }
+   else
+      Print(PCTime() + " | Hard SL: disabled — every tier runs the wide disaster stop, as in the parent");
 
    //--- The M1 tier needs no readiness probe the way the M2 one does: M1 is
    //--- the base feed every chain already depends on, so if it were missing
@@ -1409,7 +1485,17 @@ double RiskLots(int s, int lvl)
 
    double a[1];
    if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
-   double stopDist = a[0] * InpRiskATRMult;
+
+   // A hard-SL tier is sized against the stop it will REALLY run, not the
+   // 2xATR reference. Without this the risk table would be fiction on those
+   // tiers: lots sized for a 2xATR loss but stopped out at a fixed 20 pips
+   // risk whatever ratio those two distances happen to have that minute.
+   // Sizing off the real stop makes InpRiskPct* mean exactly what it says —
+   // and note the consequence: on M1/M2/M5 a stop-out now costs 1x the
+   // stated percent, where on M15+ it still costs 4x (2xATR sized, 8xATR
+   // stopped). The two halves of the ladder are no longer comparable.
+   double stopDist = HardStopDistance(s, lvl, a[0]);
+   if(stopDist <= 0.0) stopDist = a[0] * InpRiskATRMult;
 
    double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
    double tickSize  = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_SIZE);
@@ -1498,6 +1584,34 @@ double PipPrice(int s)
    return PipPoints(s) * SymbolInfoDouble(syms[s], SYMBOL_POINT);
 }
 
+// Hard stop distance for a tier, in pips. 0 means "this tier has no hard
+// stop" — M15 and above keep the parent's wide 8xATR disaster stop alone.
+double LevelSLPips(int lvl)
+{
+   if(!InpHardSLEnabled) return 0.0;
+   if(lvl == LVL_M1) return InpSLPipsM1;
+   if(lvl == LVL_M2) return InpSLPipsM2;
+   if(lvl == LVL_M5) return InpSLPipsM5;
+   return 0.0;                      // M15, M30, H1, H4 — disaster stop only, as in the parent
+}
+
+// The stop distance a hard-SL tier will ACTUALLY run, in price units.
+//
+// Clamped to the disaster distance so the hard stop can only ever be the
+// TIGHTER of the two: on a volatile feed a fixed 20 pips could otherwise
+// exceed 8xATR and quietly become a WIDER stop than the parent's, which is
+// the opposite of the point. Returns 0 when the tier has no hard stop.
+double HardStopDistance(int s, int lvl, double atrVal)
+{
+   double pips = LevelSLPips(lvl);
+   if(pips <= 0.0) return 0.0;
+
+   double dist = pips * PipPrice(s);
+   if(InpDisasterStopEnabled && atrVal > 0.0)
+      dist = MathMin(dist, atrVal * InpDisasterATRMult);
+   return dist;
+}
+
 double LevelTPPips(int lvl)
 {
    if(!InpHardTPEnabled) return 0.0;
@@ -1554,7 +1668,7 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
    // the broker distance check makes it invalid right now, the order goes
    // out without it and ManageLevelProtection re-attaches next minute.
    double sl = 0.0;
-   if(InpDisasterStopEnabled)
+   if(InpDisasterStopEnabled || LevelSLPips(lvl) > 0.0)
    {
       double a[1];
       if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) > 0 && a[0] > 0)
@@ -1562,7 +1676,14 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
          double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
          double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
          int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-         double dist    = MathMax(a[0] * InpDisasterATRMult, minDist + point);
+
+         // M1/M2/M5 take their tight fixed stop; every tier above keeps the
+         // wide 8xATR disaster stop. Either way the broker's minimum stop
+         // distance is the floor, so a stop too tight to place is widened to
+         // the nearest legal level rather than dropped.
+         double want    = HardStopDistance(s, lvl, a[0]);
+         if(want <= 0.0) want = a[0] * InpDisasterATRMult;
+         double dist    = MathMax(want, minDist + point);
          sl             = NormalizeDouble((dir == 1) ? price - dist : price + dist, digits);
 
          // A long's SL triggers on the BID, a short's on the ASK — validate
@@ -1591,6 +1712,10 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
       peakLow[s][lvl]    = price;
       beMoved[s][lvl]    = false;
       string action = (dir == 1) ? "Buy" : "Sell";
+      string slNote = (LevelSLPips(lvl) > 0.0 && sl > 0.0)
+                      ? ", SL " + DoubleToString(LevelSLPips(lvl), 1) + "p @ " +
+                        DoubleToString(sl, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS))
+                      : "";
       string tpNote = "";
       if(LevelTPPips(lvl) > 0.0)
          tpNote = (tp > 0.0)
@@ -1598,7 +1723,7 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
                     DoubleToString(tp, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS))
                   : ", TP deferred (broker distance)";
       string msg = PCTime() + " | " + action + " " + sym + " " + tfName[lvl] +
-                   " @ " + DoubleToString(lots, 2) + " (bottom-up, bias " + via + tpNote + ")";
+                   " @ " + DoubleToString(lots, 2) + " (bottom-up, bias " + via + slNote + tpNote + ")";
       Print(msg); SendNotification(msg);
    }
    return ok;
@@ -1737,10 +1862,16 @@ void ManageLevelProtection(int s, int lvl)
    // price so the tail definition never drifts; only attaches while no
    // other stop exists — BE/chandelier take over from there and only ever
    // tighten.
-   if(InpDisasterStopEnabled && slCur == 0.0)
+   if((InpDisasterStopEnabled || LevelSLPips(lvl) > 0.0) && slCur == 0.0)
    {
-      double dSl = NormalizeDouble(isLong ? entryPrice[s][lvl] - InpDisasterATRMult * atrVal
-                                          : entryPrice[s][lvl] + InpDisasterATRMult * atrVal,
+      // Re-attach the stop this tier is supposed to run — the tight hard one
+      // where it has it, the wide disaster one otherwise. Anchored at the
+      // ENTRY price, so a tier that lost its stop does not silently get a
+      // wider one measured from wherever price has drifted to.
+      double healDist = HardStopDistance(s, lvl, atrVal);
+      if(healDist <= 0.0) healDist = InpDisasterATRMult * atrVal;
+      double dSl = NormalizeDouble(isLong ? entryPrice[s][lvl] - healDist
+                                          : entryPrice[s][lvl] + healDist,
                                    digits);
       bool okD = isLong ? (dSl > 0 && dSl < bid - minDist)
                         : (dSl > ask + minDist);

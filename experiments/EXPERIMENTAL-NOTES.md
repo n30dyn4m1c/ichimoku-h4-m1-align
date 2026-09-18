@@ -5048,18 +5048,54 @@ which *timeframe*). `ENUM_H1_BIAS_TIER` shifted up by one with them, so
 The cloud gate gained a case: the M1 tier has no "TF below" to confirm, so
 the M1 cloud checked in full **is** its whole gate.
 
-### 2. Targets re-cut, and M1 given one
+### 2. Targets re-cut, M1 given one, and a tight hard stop added
 
-| Tier | Was (§44) | Now | On a 4000.00 entry |
-|------|-----------|-----|--------------------|
-| M1   | — (no tier) | 30 pips | 4003.00 |
-| M2   | 30 pips   | **50 pips** | 4005.00 |
-| M5   | 60 pips   | **70 pips** | 4007.00 |
-| M15+ | none      | none | — |
+| Tier | TP | SL | reward:risk | on a 4000.00 long |
+|------|----|----|-------------|-------------------|
+| M1   | 30 pips | 20 pips | 1.50 : 1 | TP 4003.00, SL 3998.00 |
+| M2   | 40 pips | 25 pips | 1.60 : 1 | TP 4004.00, SL 3997.50 |
+| M5   | 50 pips | 30 pips | 1.67 : 1 | TP 4005.00, SL 3997.00 |
+| M15+ | none | none | — | 8xATR disaster stop only, as the parent |
 
 A pip is still the gold convention (0.10 of price), still auto-resolved from
-`SYMBOL_DIGITS`, and the target is still additive — every managed exit still
-runs on these tiers.
+`SYMBOL_DIGITS`. The **target** is still additive — every managed exit still
+runs on these tiers. The **stop** is not: it *replaces* the wide disaster
+stop on M1/M2/M5.
+
+Two details keep "tighter" honest:
+
+- **Clamped to the tighter of the fixed distance and 8xATR.** On a quiet
+  feed a fixed 20 pips can exceed 8xATR, which would make the "tight" stop
+  *wider* than the parent's — the opposite of the point. `HardStopDistance()`
+  takes the minimum of the two, so the clamp bites at low ATR (at ATR 0.10 on
+  gold, all three tiers fall back to 8xATR = 0.80) and the fixed figure rules
+  everywhere above.
+- **The broker minimum stop distance is still the floor.** A stop too tight
+  to place is widened to the nearest legal level, not dropped.
+
+#### The sizing change, which matters more than the stop itself
+
+`RiskLots()` sized every tier against `2 x ATR` while the stop sat at
+`8 x ATR` — which is why, throughout this family, a stop-out has cost about
+**4x** the percentage named in the input. A *fixed* pip stop has no fixed
+relationship to 2xATR at all, so leaving sizing untouched would have made
+the risk table fiction on precisely the three tiers this change is about:
+lots sized for a 2xATR loss, stopped out at whatever ratio 20 pips happened
+to bear to 2xATR that minute.
+
+So M1/M2/M5 are now sized on **the stop they will actually run**. The
+consequence must be read before comparing any two tiers:
+
+| tiers | sized against | stopped at | a stop-out costs |
+|-------|---------------|------------|------------------|
+| M1, M2, M5 | their hard stop | their hard stop | **~1x** the stated risk % |
+| M15, M30, H1, H4 | 2 x ATR | 8 x ATR | **~4x** the stated risk % (unchanged) |
+
+**The two halves of the risk ladder are no longer on one scale.** The §45
+risk table above still describes the *sizing* basis correctly for every
+tier, but the money a stop-out costs now differs by a factor of four between
+the bottom three tiers and the top four. OnInit prints this split at startup
+rather than leaving it to be discovered.
 
 ### 3. Three risk bands become five, and 13k+ carries more risk
 
@@ -5145,9 +5181,16 @@ reports it open. `InpScalpNeedsFlatSymbol` governs both tiers.
   starts tapering at 17000. Any drawdown statistic taken across that range
   is measuring two different risk regimes, so split it at 13000 before
   comparing against §44.
+- **The hard stop makes the bottom tiers cheap to be wrong on, and that may
+  change what the tiers are for.** At ~1x risk with 1.5:1 reward, M1/M2/M5
+  no longer need the win rate they did when a stop-out cost 4x. Judge them on
+  expectancy, not on hit rate, and do not carry conclusions from §44 across —
+  its M2/M5 trades were sized and stopped on completely different terms.
 - **Not yet compiled or backtested.** No MQL5 compiler on the machine it was
   authored on. It was checked statically (brace/paren balance, `PrintFormat`
   arity, no `PositionModify` stripping a TP), the risk ladder was simulated
-  against the intended table, and the entry scan was traced through nine
+  against the intended table, the entry scan was traced through nine
   scenarios covering M1-alone, counter-H4, supersede and both flat-symbol
-  blocks. MetaEditor is still the first step before any test run.
+  blocks, and the stop clamp and sizing were simulated across an ATR range to
+  confirm the 1x / 4x split. MetaEditor is still the first step before any
+  test run.
