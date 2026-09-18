@@ -5080,29 +5080,36 @@ M2 0.025, M5/M15 0.05, M30 0.25, H1 0.5):
 |------|--------|----|----|----|-----|-----|----|--------|-------|-----------|
 | 1 | < 7000      | 0.25   | 0.5   | 1.0  | 1.0  | 5.0  | 10.0 | **20.0** | 37.75% | $1,132 |
 | 2 | 7000–13000  | 0.125  | 0.25  | 0.5  | 0.5  | 2.5  | 5.0  | **10.0** | 18.88% | $1,321 |
-| 3 | 13000–17000 | 0.0625 | 0.125 | 0.25 | 0.25 | 1.25 | 2.5  | **5.0**  | 9.44%  | $1,227 |
-| 4 | 17000–20000 | 0.0375 | 0.075 | 0.15 | 0.15 | 0.75 | 1.5  | **3.0**  | 5.66%  | $963 |
-| 5 | 20000+      | 0.0125 | 0.025 | 0.05 | 0.05 | 0.25 | 0.5  | **1.0**  | 1.89%  | $378 |
+| 3 | 13000–17000 | 0.0875 | 0.175 | 0.35 | 0.35 | 1.75 | 3.5  | **7.0**  | 13.21% | $1,718 |
+| 4 | 17000–20000 | 0.05   | 0.1   | 0.2  | 0.2  | 1.0  | 2.0  | **4.0**  | 7.55%  | $1,284 |
+| 5 | 20000+      | 0.025  | 0.05  | 0.1  | 0.1  | 0.5  | 1.0  | **2.0**  | 3.77%  | $755 |
 
-**Bands 1 and 2 are unchanged.** Band 3 restores dollar continuity across
-13000 ($1,321 → $1,227 instead of → $448); bands 4 and 5 then taper on
-purpose.
+**Bands 1 and 2 are unchanged.**
 
-Two things about this ladder that are easy to misread:
+Three things about this ladder that are easy to misread:
 
-- **M30 in band 3 rises 6.25x** (0.2 → 1.25), not the 2.5x the H4 anchor
-  implies. The parent's 13000+ band was the **one place** M30 broke the
-  ladder's own shape — `0.10 x H4` where every other band uses `0.25 x H4`.
-  The new bands restore the shape, which means M30 gains more than its
-  neighbours here. `InpRiskPctM30_T3 = 0.5` holds it at the old ratio.
-- **Band 5 is more conservative than the parent's 13000+ band** (H4 1.0%
-  against 2.0%). A 20000+ account therefore risks *less* than the parent
-  would have. That is the taper working as specified, not an oversight.
+- **13000 is no longer a de-risking point — it is a step UP.** At H4 7.0%
+  the band-3 floor risks **$1,718** against band 2's $1,321, so crossing
+  13000 *increases* money at risk by about 30% rather than holding it level.
+  The de-risking now begins at 17000. That is the intended shape, but it is
+  the opposite of what the parent's ladder did at this edge — and the
+  opposite of the "restore dollar continuity" reasoning that motivated the
+  first pass at these bands. It is the first thing to re-read if drawdown
+  past 13k looks wrong.
+- **M30 in band 3 rises 8.75x** (0.2 → 1.75), far more than the H4 anchor
+  alone implies. The parent's 13000+ band was the **one place** M30 broke
+  the ladder's own shape — `0.10 x H4` where every other band uses
+  `0.25 x H4`. The new bands restore the shape, so M30 gains more than its
+  neighbours here. `InpRiskPctM30_T3 = 0.7` holds it at the old ratio.
+- **Band 5 merely matches the parent's old 13000+ risk** (H4 2.0%) rather
+  than going below it. So the most conservative band in this file is no
+  tighter than what the parent applied from 13000 upward — the whole ladder
+  now sits at or above the parent's everywhere past 13000.
 
 As always the input % is the **sizing** basis (2xATR) and the disaster stop
 sits at 8xATR, so a full stop-out costs **4x** the figure: band 1 is 151% at
-the disaster stop, band 3 is 37.8%, band 5 is 7.5%. OnInit prints every band
-with totals.
+the disaster stop, band 3 is 52.9%, band 5 is 15.1%. OnInit prints every
+band with totals.
 
 ### The one-position rule now covers both bottom tiers
 
@@ -5131,8 +5138,13 @@ reports it open. `InpScalpNeedsFlatSymbol` governs both tiers.
   good M5 one, and compare against §44 with `InpM1Tier = false` to isolate
   what the tier actually added.
 - **Band 3 changed two things at once** — the H4 anchor *and* M30's ratio.
-  If band 3 behaves oddly, test `InpRiskPctM30_T3 = 0.5` before concluding
+  If band 3 behaves oddly, test `InpRiskPctM30_T3 = 0.7` before concluding
   anything about the anchor.
+- **The equity curve now gets riskier before it gets safer.** Because band 3
+  steps up, a run from 7k to 17k raises money at risk the whole way and only
+  starts tapering at 17000. Any drawdown statistic taken across that range
+  is measuring two different risk regimes, so split it at 13000 before
+  comparing against §44.
 - **Not yet compiled or backtested.** No MQL5 compiler on the machine it was
   authored on. It was checked statically (brace/paren balance, `PrintFormat`
   arity, no `PositionModify` stripping a TP), the risk ladder was simulated

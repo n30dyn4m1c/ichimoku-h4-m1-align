@@ -43,29 +43,34 @@
 //|      band  equity          H4     total   $ at the band floor     |
 //|      1     < 7000        20.0%   37.75%   $1,132 @ 3000          |
 //|      2     7000-13000    10.0%   18.88%   $1,321 @ 7000          |
-//|      3     13000-17000    5.0%    9.44%   $1,227 @ 13000         |
-//|      4     17000-20000    3.0%    5.66%   $  963 @ 17000         |
-//|      5     20000+         1.0%    1.89%   $  378 @ 20000         |
+//|      3     13000-17000    7.0%   13.21%   $1,718 @ 13000         |
+//|      4     17000-20000    4.0%    7.55%   $1,284 @ 17000         |
+//|      5     20000+         2.0%    3.77%   $  755 @ 20000         |
 //|                                                                  |
-//|    Bands 1 and 2 are UNCHANGED. Band 3 restores dollar continuity |
-//|    across 13000; bands 4 and 5 then taper deliberately.           |
+//|    Bands 1 and 2 are UNCHANGED.                                   |
 //|                                                                  |
-//|    TWO THINGS TO KNOW ABOUT THIS LADDER:                          |
-//|    * M30 in band 3 is 1.25%, against the parent's 0.20% — a 6.25x |
-//|      rise, not the 2.5x the H4 anchor implies. The parent's       |
-//|      13000+ band was the ONE place M30 broke the ladder's shape   |
-//|      (0.10xH4 where every other band uses 0.25xH4); the new       |
-//|      bands restore the shape. Set InpRiskPctM30_T3 = 0.5 to hold  |
-//|      M30 at the old ratio instead.                                |
-//|    * Band 5 is more conservative than the parent's 13000+ band    |
-//|      (H4 1.0% against 2.0%), so a 20000+ account risks less than  |
-//|      it would have. That is the intent of the taper, not an       |
-//|      oversight.                                                   |
+//|    THREE THINGS TO KNOW ABOUT THIS LADDER:                        |
+//|    * 13000 IS NO LONGER A DE-RISKING POINT — IT IS A STEP UP.     |
+//|      At H4 7.0% the band-3 floor risks $1,718 against band 2's    |
+//|      $1,321, so crossing 13000 INCREASES money at risk by ~30%    |
+//|      rather than holding it level. The de-risking now begins at   |
+//|      17000. This is the intended shape, but it is the opposite of |
+//|      what the parent's ladder did at this edge, so it is the      |
+//|      first thing to re-read if drawdown past 13k looks wrong.     |
+//|    * M30 in band 3 is 1.75%, against the parent's 0.20%. The      |
+//|      parent's 13000+ band was the ONE place M30 broke the         |
+//|      ladder's shape (0.10xH4 where every other band uses          |
+//|      0.25xH4); the new bands restore the shape, so M30 gains      |
+//|      more here than its neighbours do. Set InpRiskPctM30_T3 = 0.7 |
+//|      to hold M30 at the old ratio instead.                        |
+//|    * Band 5 MATCHES the parent's old 13000+ risk (H4 2.0%) rather |
+//|      than going below it, so even the most conservative band here |
+//|      is no tighter than what the parent applied from 13000 up.    |
 //|                                                                  |
 //|    The % in the inputs is the SIZING basis (2xATR). The disaster  |
 //|    stop sits at 8xATR, so a full stop-out costs 4x the figure —   |
-//|    band 1 is 151% at the disaster stop, band 3 is 37.8%. OnInit   |
-//|    prints both, per band, with totals.                            |
+//|    band 1 is 151% at the disaster stop, band 3 52.9%, band 5      |
+//|    15.1%. OnInit prints both, per band, with totals.              |
 //|                                                                  |
 //| ONE-POSITION RULE, NOW COVERING BOTH BOTTOM TIERS.                |
 //| `HigherLiveLevelBusy()` became `OtherLevelBusy(s, lvl)`: it scans |
@@ -396,33 +401,35 @@ input double InpRiskPctM15_T2   = 0.5;    // M15  — band 2
 input double InpRiskPctM30_T2   = 2.5;    // M30  — band 2
 input double InpRiskPctH1_T2    = 5.0;    // H1   — band 2
 input double InpRiskPctH4_T2    = 10.0;   // H4   — band 2 (anchor)
-//--- Band 3 — InpRiskTier3At .. InpRiskTier4At. RAISED: the parent cut
-//--- H4 to 2.0 here, a 5x cliff that made a 13k account risk fewer
-//--- dollars than a 7k one. H4 5.0 restores dollar continuity across 13k.
-input double InpRiskPctM1_T3    = 0.0625; // M1   — band 3
-input double InpRiskPctM2_T3    = 0.125;  // M2   — band 3
-input double InpRiskPctM5_T3    = 0.25;   // M5   — band 3
-input double InpRiskPctM15_T3   = 0.25;   // M15  — band 3
-input double InpRiskPctM30_T3   = 1.25;   // M30  — band 3 (parent had 0.2 — see the header note on M30's ratio)
-input double InpRiskPctH1_T3    = 2.5;    // H1   — band 3
-input double InpRiskPctH4_T3    = 5.0;    // H4   — band 3 (anchor)
+//--- Band 3 — InpRiskTier3At .. InpRiskTier4At. RAISED WELL PAST the
+//--- parent's 2.0: at H4 7.0 the 13k floor risks MORE money than the 7k
+//--- floor ($1,718 vs $1,321), so 13000 is now a risk STEP-UP, not a
+//--- de-risking point. Deliberate — see the header table.
+input double InpRiskPctM1_T3    = 0.0875; // M1   — band 3
+input double InpRiskPctM2_T3    = 0.175;  // M2   — band 3
+input double InpRiskPctM5_T3    = 0.35;   // M5   — band 3
+input double InpRiskPctM15_T3   = 0.35;   // M15  — band 3
+input double InpRiskPctM30_T3   = 1.75;   // M30  — band 3 (parent had 0.2 — see the header note on M30's ratio)
+input double InpRiskPctH1_T3    = 3.5;    // H1   — band 3
+input double InpRiskPctH4_T3    = 7.0;    // H4   — band 3 (anchor)
 //--- Band 4 — InpRiskTier4At .. InpRiskTier5At. New.
-input double InpRiskPctM1_T4    = 0.0375; // M1   — band 4
-input double InpRiskPctM2_T4    = 0.075;  // M2   — band 4
-input double InpRiskPctM5_T4    = 0.15;   // M5   — band 4
-input double InpRiskPctM15_T4   = 0.15;   // M15  — band 4
-input double InpRiskPctM30_T4   = 0.75;   // M30  — band 4
-input double InpRiskPctH1_T4    = 1.5;    // H1   — band 4
-input double InpRiskPctH4_T4    = 3.0;    // H4   — band 4 (anchor)
-//--- Band 5 — InpRiskTier5At and above. New, and the most conservative
-//--- band in the file: H4 1.0 is half the parent's old 13000+ figure.
-input double InpRiskPctM1_T5    = 0.0125; // M1   — band 5
-input double InpRiskPctM2_T5    = 0.025;  // M2   — band 5
-input double InpRiskPctM5_T5    = 0.05;   // M5   — band 5
-input double InpRiskPctM15_T5   = 0.05;   // M15  — band 5
-input double InpRiskPctM30_T5   = 0.25;   // M30  — band 5
-input double InpRiskPctH1_T5    = 0.5;    // H1   — band 5
-input double InpRiskPctH4_T5    = 1.0;    // H4   — band 5 (anchor)
+input double InpRiskPctM1_T4    = 0.05;   // M1   — band 4
+input double InpRiskPctM2_T4    = 0.1;    // M2   — band 4
+input double InpRiskPctM5_T4    = 0.2;    // M5   — band 4
+input double InpRiskPctM15_T4   = 0.2;    // M15  — band 4
+input double InpRiskPctM30_T4   = 1.0;    // M30  — band 4
+input double InpRiskPctH1_T4    = 2.0;    // H1   — band 4
+input double InpRiskPctH4_T4    = 4.0;    // H4   — band 4 (anchor)
+//--- Band 5 — InpRiskTier5At and above. The most conservative band in
+//--- the file, though H4 2.0 merely MATCHES the parent's old 13000+
+//--- figure rather than going below it.
+input double InpRiskPctM1_T5    = 0.025;  // M1   — band 5
+input double InpRiskPctM2_T5    = 0.05;   // M2   — band 5
+input double InpRiskPctM5_T5    = 0.1;    // M5   — band 5
+input double InpRiskPctM15_T5   = 0.1;    // M15  — band 5
+input double InpRiskPctM30_T5   = 0.5;    // M30  — band 5
+input double InpRiskPctH1_T5    = 1.0;    // H1   — band 5
+input double InpRiskPctH4_T5    = 2.0;    // H4   — band 5 (anchor)
 input double InpMarginUsePct     = 80.0;   // Max % of FREE margin one order may commit (R5; parent used 100%)
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
