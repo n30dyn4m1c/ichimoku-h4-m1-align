@@ -4653,3 +4653,245 @@ file as the parent:
   the spread, and its ichimoku is built from far fewer ticks than M5's. Its
   kumo-touch exit, rejection exit and chandelier all run on that data. Treat it
   as the thinnest tier in the stack, which is why it is sized smallest.
+
+## 43. Bottom-Up Stack EA — M1+M2 scalp tier with an M30 bias
+
+**File:** `experimental-bottomup-stack-m1m2-scalp-m30-bias-ea.mq5`
+**Magic number:** `20260870`
+
+A fork of the **live VPS build** (`ichimoku-h4-m1-vps-ea.mq5`, `20260858`) by
+direct user request: *"add an additional bias timeframe for scalping with
+M1-M2 alignment only alignment. Use M30 for bias."* Read literally that is
+three requirements, and the build is exactly those three:
+
+| Requirement | Implementation |
+|---|---|
+| A new **scalping** tier | A sixth tradable tier at the bottom of the stack — **M2**, level 0 |
+| **M1-M2 alignment only** | The tier's chain is `ChainAligned(s, IDX_M2)` — exactly M1 + M2. Nothing higher is read for alignment |
+| **M30 for bias** | `M30Bias()` = `CheckAlign(s, IDX_M30)`, applied to the scalp tier and to nothing else |
+
+Nothing in the five live tiers changed. That claim is verified below, not
+asserted.
+
+### The one design decision worth arguing about
+
+There were two coherent readings of "use M30 for bias", and they produce very
+different EAs:
+
+- **M30 as the scalp tier's own bias** — chosen. The tier answers to M30 and
+  nothing else, so it can scalp while H4 is flat and, more controversially,
+  **against an aligned H4**.
+- **M30 as another stand-in on the existing ladder** — rejected. That is what
+  `experimental-bottomup-stack-m30-bias-ea-third-most-profitable.mq5` already
+  does: M30 applies only when H4 **and** H1 are both flat, as a last resort.
+
+The second is the more conservative design and reuses proven code, so it is
+worth being explicit about why it was not used: it is **not what was asked
+for**. A last-resort stand-in by construction cannot scalp against H4, and it
+couples the new tier to the H4/H1 ladder the request treats as separate. The
+chosen reading makes the scalp tier an independent regime — which is also the
+more interesting experiment, because a counter-H4 scalp is a genuinely new
+trade stream rather than a subset of one the stack already takes.
+
+**The counter-trend exposure is real and intended.** An M2 long can open while
+H4 is aligned bearish. If that turns out to be the wrong call, the switch is
+`InpM30ScalpBias = false` (the tier then trades the bare M1+M2 chain), or gate
+it explicitly — the note in `M30Bias()` says so at the call site.
+
+### M2 is a TIER, not a rung — the difference from §42
+
+§42 also added an M2 tier at the bottom, which makes it the obvious thing to
+compare against twice over. **They are different experiments and their numbers
+are not comparable.**
+
+| | §42 (`20260869`) | §43 — this build (`20260870`) |
+|---|---|---|
+| Parent | §40's kihon + PO3 + veto build | the **live VPS build** (`20260858`) |
+| M2 as a **rung** | yes, `InpUseM2` — M5 needs M1 + M2 + M5 | **no** — M5 stays M1 + M5 |
+| M2 as a **tier** | yes, `InpM2Tier` | yes, `InpM2ScalpTier` |
+| Scalp tier's bias | the parent's H4/H1 ladder | **M30 only, independent of H4** |
+| Other gates | gates 1–5 (kihon, PO3, vetoes) | none added — the live build's own gates |
+
+The rung difference is the load-bearing one. Because §42 keeps M2 as a rung,
+its M2 tier fires on chains the M5 tier *also* satisfies, so M5 supersedes it
+constantly and the tier mostly adds filter behaviour. Here M2 is **only** a
+tier: `ChainAligned()` skips the M2 rung for every tier above the scalp tier,
+so every M2-tier trade is a chain **no live tier would have taken**. The
+contribution is additive by construction.
+
+### The two hazards a fork like this inherits, and what was done about them
+
+An adversarial static review of the first draft found two real defects. Both are
+recorded here because both are the kind of thing that looks fine until it costs
+money.
+
+**1. The scalp tier could open against a running live-tier position.** The entry
+scan *skips* a level that already holds a position rather than evaluating it
+(`if(state[s][l] != 0) continue;`), and the supersede loop only walks **below**
+the tier that opens (`for(int l = 0; l < topTier; l++)`). So a tier that is
+already running neither blocks a new entry nor gets closed by one. For the five
+live tiers that is the parent's behaviour. For the scalp tier it is a **new**
+hazard, precisely because M30 rather than H4 grants its direction: with an H4
+long already open, M1+M2 can align **short** on a later bar, and the scalp would
+open against the live position. On a netting account MT5 then nets the two
+orders together — shrinking or closing the live trade behind the EA's back while
+`state[]` still reports it open, until the next `SyncStatePositions()`.
+
+Fixed for the scalp tier only, via `HigherLiveLevelBusy()` and
+`InpScalpNeedsFlatSymbol` (default on). The parent's equivalent case among the
+five live tiers is deliberately **not** changed, to preserve parity — so read
+the one-position rule narrowly: it now genuinely holds for the scalp tier, and
+remains exactly as loose for the live tiers as it is in the parent. The first
+draft's header claimed "at most one position per symbol runs at a time" without
+qualification; that claim was false in the parent too and is now stated
+correctly.
+
+**2. A feed that refuses M2 would have killed the whole EA.** `OnInit` created
+the M2 ichimoku and M2 ATR handles inside loops whose every iteration ended in
+`if(handle == INVALID_HANDLE) return(INIT_FAILED);` — correct for the five live
+timeframes, wrong for the added one. A broker refusing M2 would have aborted
+initialisation for the **entire** EA, taking the five live tiers down with it and
+printing nothing, because the read-out was after the failing loop. The tier's own
+comment claimed the opposite ("non-fatal, and the five live tiers are
+unaffected"). Both handle loops now exempt `IDX_M2` / `LVL_M2`: the symbol loses
+the scalp tier, keeps everything else, and says so in the journal. This matches
+how the repo's other M2 builds already treat a missing M2 feed (§38, §42).
+
+A third, smaller fix: the "tier ACTIVE" read-out was decided in `OnInit`, where
+a non-chart symbol's M2 series has often not been built yet and a timeseries
+accessor returns 0 — so a healthy feed could report "no M2 history" and never
+correct itself. It now fires once, lazily, on the first closed M1 bar where M2
+actually carries enough bars to read.
+
+### M2's cloud rule, and why it is a switch
+
+The scalp tier's **own** cloud is governed by `InpM2CloudFull`, default
+**`false`** — M2 takes the M5+ future-only rule, i.e. the live build's "M1 full /
+M5+ future-only" split simply extended one timeframe down. That is the reading
+most faithful to "the live VPS build plus a scalp tier", and it is what the rest
+of this section assumes.
+
+`InpM2CloudFull = true` gives M2 the M1-style **full** current+future check
+instead, on the argument that a 2-minute bar is close in character to M1. **That
+is the sibling M2 build's default** — `experimental-bottomup-stack-kihon-po3-
+veto-m2tier-ea.mq5` (§42) ships `InpM2CloudFull = true`. The two builds
+therefore disagree on M2's cloud rule out of the box, and **their scalp trade
+sets are not comparable until they are set the same way**. Flagged here because
+"two M2 experiments, same idea, different numbers" is exactly the kind of
+cross-build misreading §42's own notes warn about.
+
+### Level renumbering — the four sites that would have broken silently
+
+Adding a tier at the bottom renumbered all five existing levels (M5 0→1,
+M15 1→2, M30 2→3, H1 3→4, H4 4→5). Four sites hardcoded a level number and all
+four were live; each fix is one or two tokens.
+
+1. **`LevelRiskPct()`** — the M2 row was prepended and the five `case` labels
+   shifted. Left alone, **every tier would have been sized with the row below
+   it**: H4 would have risked H1's 10% instead of 20%, H1 would have risked
+   M30's 5%, and so on down. This is the most expensive of the four and the
+   hardest to see, because the trades and their direction are unchanged — only
+   the lot sizes are wrong.
+2. **`LevelCloudBiasOK()`** — the "this tier sits directly on M1, so it carries
+   the full current+future M1 cloud check" case was `lvl == 0`, and 0 is now
+   M2. The trap is that the *obvious* fix (leave it as `lvl == 0`) is wrong in
+   a way that looks right: it would have given the M5 tier future-only
+   treatment on **M2** — a timeframe its chain does not even contain — and left
+   **M1 unchecked for M5 entirely**. The correct condition is `lvl <= LVL_M5`,
+   because M2 is not a rung here, so **both** the M2 and M5 tiers sit directly
+   on M1. §42 needed a different fix at this same site for the same reason its
+   rung differs.
+3. **`ManageLevelProtection()`** — the break-even and chandelier arming bucket
+   split on `lvl >= 3`, where 3 was H1. After the shift 3 is M30, so M30 would
+   have been handed the H1/H4 **tighter** arming rule and H1 would have lost
+   it. Now `lvl >= LVL_H1`; the token diff is exactly two `3`s.
+4. **`ENUM_H1_BIAS_TIER`** — the enum member values *are* level indices, so the
+   ceiling moved from `{0,1,2,3}` to `{1,2,3,4}`. Left alone, the default
+   `H1TIER_M30` would have meant "up to M15" and silently dropped the M30 tier
+   from the H1 stand-in.
+
+A sweep for any bare numeric literal compared against a level variable now
+finds only `lvlMatch < 0` (a clamp) — no bare level constants remain.
+`LEVELS - 1` is still the H4 tier in both of its uses.
+
+### Inputs added
+
+| Parameter | Default | Description |
+|---|---|---|
+| `InpM2ScalpTier` | `true` | Let M1 + M2 aligned open an M2 scalp trade, with its own risk row, ATR handle and exits |
+| `InpM30ScalpBias` | `true` | The scalp tier's only directional gate. Off = it trades the bare M1+M2 chain |
+| `InpScalpNeedsFlatSymbol` | `true` | Never scalp while any live tier holds a position (hazard 1 above). Off restores the parent's looser semantics for the scalp tier alone |
+| `InpM2CloudFull` | `false` | M2's **own** cloud: `true` = M1-style full check, `false` = the M5+ future-only rule. §42 defaults this to `true` — see above |
+| `InpRiskPctM2` / `_T2` / `_T3` | `0.5` / `0.25` / `0.05` | The scalp tier's three equity-tier risk rows (a budget, not a lot count — see the caveats). The parent's three-tier ladder is unchanged |
+
+Everything else is unchanged from the live build, including all of its own
+inputs.
+
+### Verification performed
+
+No MQL5 compiler on this machine, so this is static verification with the
+parent file as ground truth.
+
+- **Fork integrity, function level.** 29 functions in the parent, 30 in the
+  fork: **none removed, exactly one added** (`M30Bias`). After comment and
+  string-literal normalisation **22 are byte-identical** and **7 differ**:
+  `ChainAligned`, `EntryBiasOK`, `LevelCloudBiasOK`, `LevelRiskPct`,
+  `ManageLevelProtection`, `OnInit`, `OnTick`.
+- **Every changed function token-diffed**, and each diff is only what the
+  design calls for: `ChainAligned` gains the rung-skip and two index names;
+  `LevelCloudBiasOK` changes two tokens (`== 0` → `<= LVL_M5`, `0` → `IDX_M1`);
+  `LevelRiskPct` gains the M2 case and shifts five labels;
+  `ManageLevelProtection` changes exactly two `3`s; `EntryBiasOK` gains the M2
+  block that returns before the H4/H1 ladder; `OnInit` gains the M2 read-out;
+  `OnTick` gains one guard line. **No other function was touched at all.**
+- **Chain mapping traced for all six tiers.** M2 = M1+M2; M5 = M1+M5;
+  M15 = M1+M5+M15; M30 = +M30; H1 = +H1; H4 = +H4. The five original chains are
+  identical to the parent's, which is the whole point of skipping the rung.
+- **Cloud gate traced for all six tiers.** M2 and M5 → tier TF future-only +
+  **M1 full check**; M15 and above → tier TF future-only + TF-below future-only.
+  This reproduces the parent's M5+ behaviour exactly.
+- **Position-comment compatibility.** Comments are built by `LevelComment()`
+  from `tfName[lvl + 1]`, and `tfName[]` shifted with the levels, so the
+  *strings* are unchanged per timeframe (`Exp Buy M5` is still `Exp Buy M5`).
+  Positions opened by the live build are not adopted either way (different
+  magic), but the naming stays consistent for journal reading.
+- **Balance.** Braces 89/89, parentheses 499/499, brackets 376/376.
+- **Format strings.** The file contains no `PrintFormat` calls; the two new
+  `Print` calls in `OnInit` use concatenation only, so there are no
+  specifier-versus-argument pairs to mismatch.
+- **Independently reviewed.** An adversarial static review was run against the
+  parent as ground truth, hunting specifically for a fifth renumbering escape,
+  chain-logic errors, and regressions in the five live tiers. It found no
+  renumbering escape and confirmed the five live tiers unchanged — and it found
+  the two real defects described above, both now fixed. The review's verdict on
+  the first draft was "the renumbering work is genuinely clean; the two things
+  worth acting on are the running-position hazard and the fatal M2 handle".
+- **Magic.** `20260870` — fresh, shared with nothing. `20260869` was the
+  previous highest in use (AGENTS.md said `20260865` and was stale; corrected).
+
+### Status & caveats
+
+- **Not deployed, and not compiled.** Expect to fix compile errors on first
+  load, then backtest on demo.
+- **The production VPS file and the desktop twin are untouched.** Nothing was
+  promoted, and per AGENTS.md no VPS file was modified.
+- **`PERIOD_M2` must exist on the broker's feed.** It is a standard MT5
+  timeframe, but a symbol whose feed refuses M2 loses the tier: `OnInit` exempts
+  the M2 handles from its fatal check, `scalpReady[]` goes false for that symbol
+  and the journal says so. **The five live tiers keep running** — that is the
+  whole point of the exemption, and it is now true (see hazard 2 above).
+- **Read the scalp tier's risk as a budget, not a lot count.** The scalp tier
+  carries a smaller *risk budget* than M5 (0.5% vs 1%), but lots scale as
+  `riskPct / ATR(tier TF)` and ATR(M2) < ATR(M5), so the scalp tier's **lot
+  size is frequently larger** than M5's. What stays smaller is the money at the
+  disaster stop (2% vs 4% of equity at 8 × ATR). "Sized below M5" means the
+  budget; it does not mean a smaller position.
+- **Expect the scalp tier to be rare, and check that first.** It only opens
+  when M1+M2 align *and* M30 agrees *and* no live tier passes its gates on that
+  same minute *and* (by default) no live tier holds a position. If the journal
+  shows almost no `bias M30` entries, the question is those filters, not the
+  code.
+- **Read the counter-H4 trades separately.** Entries log `(bottom-up, bias M30)`
+  and the tier is `Exp Buy M2` / `Exp Sell M2`, so the trades taken against an
+  aligned H4 can be isolated. That subset has no precedent in the live build,
+  and it is the part most likely to decide whether this build is worth keeping.
