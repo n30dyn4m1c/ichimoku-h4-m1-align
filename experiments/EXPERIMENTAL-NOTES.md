@@ -5194,3 +5194,97 @@ reports it open. `InpScalpNeedsFlatSymbol` governs both tiers.
   blocks, and the stop clamp and sizing were simulated across an ATR range to
   confirm the 1x / 4x split. MetaEditor is still the first step before any
   test run.
+
+---
+
+## 46. Bottom-Up Stack EA — the five-band risk ladder, and nothing else
+
+**File:** `experimental-bottomup-stack-5band-risk-ea.mq5`
+**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` — the **live VPS build** (magic
+`20260858`), which is left untouched
+**Magic number:** `20260873` — fresh, so this build never adopts or manages
+positions belonging to any other file
+
+### What this build is, and what it deliberately is not
+
+The trading logic is the live build's, **byte for byte**: five tiers (M5,
+M15, M30, H1, H4), M1 as the start of every chain and never a tier of its
+own, **no M2 anywhere**, the H4 bias with the H1 stand-in, the D1 filter on
+the H4 tier, kumo-touch exits, **no profit target**, the 8xATR disaster
+stop, and the robustness pack R2–R6. A `diff` against the live build over
+non-comment lines shows only the risk inputs, `LevelRiskPct()` and the new
+startup read-out.
+
+It **drops** everything explored in sections 43–45 — the M2 scalp tier
+(`20260870`), the hard M2/M5 take profits (`20260871`), and the M1 tier,
+re-cut targets and tight hard stops (`20260872`). Those files remain as the
+record. The only thing carried across is the band edges and percentages.
+
+That also means the **1x / 4x sizing split of §45 is gone**: every tier here
+is sized on `2 x ATR` and stopped at `8 x ATR`, so a stop-out costs about
+**4x** the stated risk percent on all five tiers, uniformly, exactly as the
+live build has always behaved.
+
+### The ladder
+
+| band | equity | M5 | M15 | M30 | H1 | **H4** | total | $ at floor | at 8xATR |
+|------|--------|----|-----|-----|----|--------|-------|-----------|----------|
+| 1 | < 7000      | 1.0  | 1.0  | 5.0  | 10.0 | **20.0** | 37.00% | $1,110 | 148.0% |
+| 2 | 7000–13000  | 0.5  | 0.5  | 2.5  | 5.0  | **10.0** | 18.50% | $1,295 | 74.0%  |
+| 3 | 13000–17000 | 0.35 | 0.35 | 1.75 | 3.5  | **7.0**  | 12.95% | $1,684 | 51.8%  |
+| 4 | 17000–20000 | 0.2  | 0.2  | 1.0  | 2.0  | **4.0**  | 7.40%  | $1,258 | 29.6%  |
+| 5 | 20000+      | 0.1  | 0.1  | 0.5  | 1.0  | **2.0**  | 3.70%  | $740   | 14.8%  |
+
+**Bands 1 and 2 are the live build's, unchanged.** H4 anchors each band and
+every other tier holds the fixed fraction of it the ladder has always used
+(M5/M15 `0.05`, M30 `0.25`, H1 `0.5`).
+
+### Why the upper bands moved
+
+The live build cuts H4 from 10.0% to 2.0% at 13000 — a 5x drop that
+**outran the equity growth which triggered it**:
+
+| | equity | total | money at risk |
+|--|--------|-------|---------------|
+| live build, band 2 floor | $7,000  | 18.50% | $1,295 |
+| live build, band 3 floor | $13,000 | 3.40%  | **$448** |
+
+An account that grew past 13000 traded *smaller in dollars* than it had at
+7000. That is the defect these bands fix.
+
+### Three things about the new bands that are easy to misread
+
+- **13000 is no longer a de-risking point — it is a step UP.** The band-3
+  floor risks **$1,684** against band 2's $1,295, so crossing 13000
+  *increases* money at risk by about 30%. De-risking now begins at 17000.
+  Intended, but it is the opposite of what the live build does at this edge,
+  and the first thing to re-read if drawdown past 13k looks wrong.
+- **M30 in band 3 rises 8.75x** (0.2 → 1.75), far more than the H4 anchor
+  alone implies. The live build's 13000+ band was the **one place** M30 broke
+  the ladder's own shape — `0.10 x H4` where every other band uses
+  `0.25 x H4`. Restoring the shape means M30 gains more here than its
+  neighbours. `InpRiskPctM30_T3 = 0.7` holds it at the old ratio.
+- **Band 5 merely matches the live build's old 13000+ risk** (H4 2.0%)
+  rather than going below it, so this ladder sits at or above the live one
+  **everywhere** past 13000.
+
+### What to watch
+
+- **This is the cleanest A/B in the family.** One variable changed against a
+  build with known live results, so any difference is the ladder and nothing
+  else. Compare it against `20260858` on identical data before drawing a
+  conclusion, and split the statistics at 13000 — above that edge the two
+  builds are running materially different risk.
+- **The equity curve gets riskier before it gets safer.** A run from 7k to
+  17k raises money at risk the whole way. Any drawdown figure taken across
+  that range is measuring two regimes at once.
+- **A band-1 H4 stop-out still costs ~80% of equity** (20% sized, 4x at the
+  disaster stop), and band 1 as a whole is 148%. Unchanged from the live
+  build, but it is the number that decides whether the top of this ladder is
+  survivable, and raising the upper bands does not touch it.
+- **Not yet compiled or backtested.** No MQL5 compiler on the machine it was
+  authored on. It was checked statically (brace/paren balance, `PrintFormat`
+  arity), the resolved ladder was simulated at every band floor against the
+  intended anchors and shape ratios, and a non-comment `diff` against the
+  live build was used to confirm nothing but the ladder changed. MetaEditor
+  is still the first step before any test run.
