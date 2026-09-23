@@ -662,9 +662,14 @@ Findings (3 years, 400 paths; medians):
 | Split at $5k into $1k accounts, only the newest splits | $133k | ~4.5% |
 | **Split at $5k into $1k accounts, every account splits** | **$207k** | ~5% |
 
-- **The Micro account's smaller minimum lot is what makes a $100 start
-  survivable.** On a standard account 0.01 lot is far above the intended risk
-  at $100.
+- **Correction (2026-09-24): a $100 start is NOT made safe by the Micro
+  account.** The real backtests (§50, §54) already ran on XM Micro (GOLDm#,
+  1 lot = 1 oz, 0.1 lot minimum), and both the live build and the M5 base
+  were ruined from $100 in 2024. The model treats trades as independent. The
+  EA can hold several tiers at once, and losses cluster, so the model's
+  first-account risk (the `micro` rows) is too optimistic. Treat the first
+  $100 account as something that can be lost in a 2024-like year. The
+  $1,000 child accounts are less exposed.
 - **Splitting works because the risk regime is per account.** An account
   past $7k or $13k de-risks, so splitting keeps more money in the high-risk
   regime. It is a choice to take more risk, not a free gain.
@@ -683,9 +688,8 @@ broker limits, slippage across many accounts, fees and taxes.
 The plan the simulator above was used to design. **It runs the live VPS EA**
 (`ichimoku-h4-m1-vps-ea.mq5`, M5 tier off). The simulator's trade statistics
 come from that build's backtests (notes §48, §50). The M5-base experiment
-(§54) has not been backtested, so none of these numbers apply to it. Backtest
-it first; if it does better, rerun the simulator with its figures before
-switching.
+(§54) was backtested and came out worse (deeper drawdowns, lower profit
+factor), so the plan stays on the live build.
 
 **Setup**
 
@@ -725,7 +729,7 @@ switching.
 | One account, no splitting | $32k |
 | Splitting at $5k into $1k accounts (rules 1–3) | $207k, all still in the accounts |
 | + harvesting at $7k down to $5k (rule 4) | ~$449k total, ~$416k of it already withdrawn |
-| Chance of ending below the $100 start | ~4–5%, mostly the first account in a bad first year |
+| Chance of ending below the $100 start | the model says ~4–5%, but **real backtests ruined a $100 Micro account in 2024**, so the true risk is much higher |
 
 **Risks.**
 - **One risk hits every account at once.** All 8 accounts trade the same
@@ -1046,7 +1050,7 @@ unless stated otherwise.
 | `experimental-bottomup-stack-scalp-capture-vps-ea.mq5` | `20260874` | The **live VPS build plus a scalp-capture exit layer and a per-tier report** — entries, bias gates, risk and every existing exit are the live build's byte for byte. The live build gives small moves back: BE arms at +1 x ATR but only moves the stop to entry + 15 points, and the M5/M15/M30 trail waits for a +2 x ATR spike, so a trade that runs +1.9 ATR and turns closes at break-even. Here, on M5..`InpScalpMaxTier` (default M30), at **+`InpScalpTP1ATR` x ATR-at-entry (1.0)** the EA **banks `InpScalpClosePct` (50%)**, locks the runner at **entry + 0.3 x ATR**, and arms the chandelier at once; the runner keeps the kumo-touch exit, so the trend tail is untouched. `InpScalpClosePct=100` makes it a pure fixed-target scalp; `InpScalpCapture=false` restores the live exits exactly. **OnDeinit prints a per-tier report** — trades, win %, net, PF, avg win/loss, MFE buckets in ATR, and **give-backs** (trades that reached +1 ATR and still closed <= 0) — so one run with capture off measures how many scalps the live logic leaves behind. Compiled clean in MetaEditor (0 errors, 0 warnings). **Backtested (GOLDm#, Jan–Sep 2026, $100, 1-min OHLC and real ticks): scalps are not worth it** — net stays within ±3% of the live build's $13.5k in every variant, while drawdown rises (real ticks: 21% live vs 35% partial, 37% pure M5 scalp) and pure scalping turns M5 negative. Also found: **MT5 empties the position comment on a partial close**, so the build matches tiers by position identifier as well; `InpScalpUnsplit` handles positions below 2x the 0.10 minimum lot | 47 |
 | `experimental-bottomup-stack-m5-tight-vps-ea.mq5` | `20260875` | The live VPS build (via §47, scalp capture off) with **switchable filters on the M5 tier only**: `InpM5Enabled`, `InpM5NeedH4` (no H1 stand-in), `InpM5NeedH1`, `InpM5CloudFull`, `InpM5MaxCloudATR`, `InpM5MaxSpread`. All off reproduces the live build to the cent. **Backtested on real ticks, 2026 and out-of-sample 2025:** `NeedH4` is the only filter that raised M5's profit factor in both years (1.10→1.29, 1.12→1.22) and is the default. The cloud-distance cap is backwards (entries near the cloud are the weak ones). **Dropping M5 entirely gave the best account profit factor both years** (1.38→1.52, 1.88→2.03) at the same net profit and 40–47% fewer trades Also carries **tier switches** (`InpTierM15/M30/H1/H4`, all on by default) for the §50 simulation: **the live logic at $100 is ruined in 2024** (stopped out 2024-08-02; +$4,973 at $10k). H4 and H1 are the only tiers profitable in all three years, and dropping M15 matched or beat live in 2025–26 | 48, 50 |
 | `experimental-bottomup-stack-liquidity-target-vps-ea.mq5` | `20260878` | The **live VPS build** (M5 tier off) with **one addition: a take profit at unraided liquidity**. On every entry the Ichimoku stack is climbed from M1 while each timeframe is **clear** — broken out, its **price and chikou both beyond the cloud** in the trade's direction — and the **highest clear timeframe** supplies the target (M1, M5, M15 clear but M30 in the cloud → M15): its **nearest** unraided swing high (long) or low (short) beyond the entry becomes a broker-side TP. Swings and raids are the `po3-levels` rules of §52 (fractal 6/6, last 100 candles, a wick beyond = raided). No unraided level on that timeframe: the trade opens without a TP as live does (`InpLiqNeedTarget` skips it instead). The target is **additive** — kumo-touch, BE, chandelier and the disaster stop still run — and every `PositionModify` now carries the TP back in. `InpLiqTarget=false` reproduces the live build. Compiled clean; not yet backtested | 53 |
-| `experimental-bottomup-stack-m5-base-vps-ea.mq5` | `20260879` | The **live VPS build** (M5 tier off) with the stack **starting at M5 instead of M1**: M1 takes no part in alignment, the chains are M5+M15 / +M30 / +H1 / +H4, and M5 alone never trades. Cloud gate, bias, risk and exits are live's; `InpBaseCloudFull` (off) gives M5 the full current+future cloud check M1 used to carry. Not yet backtested | 54 |
+| `experimental-bottomup-stack-m5-base-vps-ea.mq5` | `20260879` | The **live VPS build** (M5 tier off) with the stack **starting at M5 instead of M1**: M1 takes no part in alignment, the chains are M5+M15 / +M30 / +H1 / +H4, and M5 alone never trades. Cloud gate, bias, risk and exits are live's; `InpBaseCloudFull` (off) gives M5 the full current+future cloud check M1 used to carry. **Backtested ($100, real ticks): worse than live**: ruined in 2024 a month earlier, 2025 +$13,990 (PF 1.89 vs 2.03) with a **96% drawdown**, 2026 +$14,196 (PF 1.36 vs 1.52), about a third more trades. Do not promote | 54 |
 | `experimental-bottomup-stack-m5-base-keep-tiers-vps-ea.mq5` | `20260880` | The M5-base stack (§54) with **no supersede**: every aligned flat tier opens on the same bar, and a running lower-tier trade keeps going to its own exit when a bigger tier opens. Up to four positions per symbol (one per tier), up to 36% tier-1 risk at once. Needs a hedging account. `InpKeepLowerTiers=false` restores §54. **User report: detrimental** — performed worse than the M5 base; do not promote | 55 |
 | `experimental-bottomup-stack-m5-base-risk125-vps-ea.mq5` | `20260881` | The M5-base stack (§54) with **every risk % raised by 25%** in all three regimes: tier 1 M15 1.25 / M30 6.25 / H1 12.5 / H4 25. Regime thresholds, sizing distance and margin cap unchanged. Not yet backtested | 56 |
 | `experimental-bottomup-stack-m5-base-risk125-5regime-vps-ea.mq5` | `20260882` | **Newest.** The risk ×1.25 build (§56) with **five equity regimes** instead of three. Below $13000 the risk is §56's (M15 1.25 / M30 6.25 / H1 12.5 / H4 25 below $7000); the old $13000+ regime is split at $17000 and $20000 into H4 5 → 2.5 → 1.25 (half each step). A ×2.5 doubling was tried first and reduced back below $13000. Not yet backtested | 57 |

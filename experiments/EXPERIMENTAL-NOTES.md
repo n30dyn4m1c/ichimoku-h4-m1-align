@@ -6541,7 +6541,31 @@ checked as often as live. The M1 Ichimoku handle is still created but no
 longer read for entries. The parent's header comment is kept below a new
 experiment banner.
 
-Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
+Compiled clean in MetaEditor (0 errors, 0 warnings).
+
+### Results (2026-09-24): worse than the live build, do not promote
+
+GOLDm# (XMGlobal-MT5 5, Micro: 1 lot = 1 oz, 0.1 lot minimum), $100,
+1:1000, real ticks, default inputs, each year separately. The user ran it
+under the name `earthly-ea` (source identical to this file). Figures are
+rebuilt from the tester log: 4,588 positions, summing exactly to each run's
+final balance. Drawdown is on closed trades.
+
+| Year | Live build (§48/§50) | M5 base |
+|---|---|---|
+| 2024 | ruined, 2024-08-02 | **ruined, 2024-07-02** ($401 → $0.43), PF 0.92 |
+| 2025 | +$14,646, PF 2.03, 25% equity DD | +$13,990, PF 1.89, **96% DD** ($1,977 → $79, Jun–Aug) |
+| 2026 to 09-19 | +$13,295, PF 1.52, 44% equity DD | +$14,196, PF 1.36, **63% DD** ($10,333 → $3,868) |
+
+Per tier (trades, PF): 2026 M15 724 / 1.17, M30 427 / 1.33, H1 224 / 1.36,
+H4 42 / 2.02. 2025 M15 1,160 / 1.46, M30 628 / 1.71, H1 316 / 2.22, H4 67 /
+2.15. 2024 M15 0.92, M30 0.93, H1 1.12, H4 0.69.
+
+**Reading.** Without M1 in the chain, about a third more trades get through
+(2026: 1,417 against about 1,060) at a lower profit factor. Net profit is
+about the same, but the drawdowns are far deeper, and 2025 came within $79 of
+ruin. M1's agreement was filtering out weak entries, not just delaying good
+ones. The live build stays.
 
 ## 55. M5-base, keep tiers — a bigger tier no longer closes the smaller ones
 
