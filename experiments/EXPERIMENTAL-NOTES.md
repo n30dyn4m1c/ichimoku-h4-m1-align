@@ -6576,7 +6576,42 @@ no higher tier fired.
 `InpKeepLowerTiers = false` reproduces §54 exactly. Everything else (entries,
 cloud gate, bias, risk %, exits) is §54's.
 
-Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
-The questions for the tester: whether the lower-tier trades that used to be
+**Result (user report, 2026-09-24): detrimental.** The EA did not perform
+well; keeping the lower tiers open alongside the bigger one made it worse than
+the M5 base. The one-position-per-symbol supersede rule stays. Do not promote.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). The questions it was
+built to answer: whether the lower-tier trades that used to be
 cut at supersede add profit or just add drawdown on top of the higher tier,
 and how deep the drawdown goes with 36% stacked.
+
+## 56. M5-base, risk x1.25 — the same stack at a quarter more risk
+
+**File:** `experimental-bottomup-stack-m5-base-risk125-vps-ea.mq5`
+**Magic number:** `20260881`
+
+A fork of the M5-base stack (§54), written after the keep-tiers fork (§55)
+proved detrimental. The one change: **every risk % is multiplied by 1.25**,
+in every tier and every regime.
+
+| Tier | Regime 1 (< $7000) | Regime 2 ($7000–$13000) | Regime 3 ($13000+) |
+|---|---|---|---|
+| M5 (never trades) | 1 → 1.25 | 0.5 → 0.625 | 0.1 → 0.125 |
+| M15 | 1 → 1.25 | 0.5 → 0.625 | 0.1 → 0.125 |
+| M30 | 5 → 6.25 | 2.5 → 3.125 | 0.2 → 0.25 |
+| H1 | 10 → 12.5 | 5 → 6.25 | 1 → 1.25 |
+| H4 | 20 → 25 | 10 → 12.5 | 2 → 2.5 |
+
+**Unchanged:** the regime thresholds ($7000 and $13000), the sizing distance
+(ATR × 2, the reference the % is measured against), the 80% free-margin cap,
+and everything about entries and exits. Since there is still one position per
+symbol, the most at risk at once is the H4 tier's 25% in regime 1 (was 20%).
+The margin cap can trim the larger H1/H4 orders on a small account, so the
+real increase there may be less than 25%.
+
+The risk figures in the parent's header and `LevelRiskPct` comments are left
+as the parent's; a new banner at the top gives the x1.25 values.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
+Compare against §54 on the same period: net profit should rise roughly in
+proportion, and the question is how much the drawdown grows with it.
