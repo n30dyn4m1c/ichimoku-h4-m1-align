@@ -48,14 +48,18 @@
 //| GATE 2b — ICHIMOKU STRUCTURE TARGET (InpStructTarget). When the  |
 //| chain holds from M1 only part of the way — at least up to        |
 //| InpStructMinTop (M5) — the first timeframe that fails is read    |
-//| for where price is HEADING instead of being a veto. If its price |
-//| is inside its cloud and the cloud edge ahead is its SSB, the SSB |
-//| is the target (price is expected to bounce there). The road must |
-//| be free: no tenkan, kijun, SSA or SSB of that timeframe or any   |
-//| above it (up to InpAlignTop) between entry and the SSB, and each |
-//| of their chikous able to travel the same distance without a past |
-//| candle or line in the way (InpStructChikou, InpChikouPathBars).  |
-//| Fully aligned chains keep the PO3 target. Both use the PO3 stop. |
+//| for where price is HEADING instead of being a veto. Its nearest  |
+//| line ahead of price — tenkan, kijun, SSA or SSB — is the target  |
+//| (price is expected to bounce there). The road must be free: no   |
+//| tenkan, kijun, SSA or SSB of any timeframe above it (up to       |
+//| InpAlignTop) between entry and that line, and each of their      |
+//| chikous — and its own — able to travel the same distance without |
+//| a past candle or line in the way (InpStructChikou,               |
+//| InpChikouPathBars). When the line sits within                    |
+//| InpStructPO3TolPips of a PO3 number the PO3 number is the target |
+//| instead — the higher-probability case — and InpStructNeedPO3     |
+//| trades only those. Fully aligned chains keep the PO3 target.     |
+//| Both use the PO3 stop.                                           |
 //|                                                                  |
 //| M2 is REQUIRED here (unlike §39, which skipped it): the build is |
 //| defined by the M1+M2 trigger, so a broker that refuses an M2     |
@@ -115,10 +119,12 @@ input group  "Gate 2 - Alignment"
 input ENUM_TIMEFRAMES InpAlignTop = PERIOD_H4; // Highest timeframe that must agree (M2 = M1+M2 only)
 
 input group  "Gate 2b - Ichimoku Structure Target"
-input bool   InpStructTarget   = true;        // Trade a partial breakout toward the next TF's SSB
+input bool   InpStructTarget   = true;        // Trade a partial breakout toward the next TF's nearest line
 input ENUM_TIMEFRAMES InpStructMinTop = PERIOD_M5; // The breakout must reach at least this TF (M1+M2+..+this aligned)
 input bool   InpStructChikou   = true;        // The chikou of the target TF and every TF above must be free too
 input int    InpChikouPathBars = 3;           // Chikou path checked over this many bars (from its position toward now)
+input double InpStructPO3TolPips = 10.0;      // Target line within this of a PO3 number -> the PO3 number is the target
+input bool   InpStructNeedPO3  = false;       // Only trade structure targets whose line sits on a PO3 number
 
 input group  "Gate 3 - PO3 Range"
 input double InpPO3Scale     = 1.0;   // Scale divisor (1 = whole numbers, 100 = workbook 2dp) — as the indicator
@@ -509,7 +515,7 @@ int OnInit()
    Print("Alignment: " + chain + " all agreeing -> PO3 target.");
    if(InpStructTarget)
       Print("Structure target: ON — M1.." + tfName[structMinIdx] + " (at least) aligned with the next TF "
-            "inside its cloud heading for its SSB -> SSB target, road free up to " + tfName[alignTopIdx] +
+            "heading for its nearest line (tenkan/kijun/SSA/SSB) -> line target, road free up to " + tfName[alignTopIdx] +
             (InpStructChikou ? " (price and chikou)." : " (price only)."));
 
    if(InpKihonGateEnabled)
@@ -655,12 +661,11 @@ int ChainWalk(const int s, int &top)
 // Ichimoku structure target (gate 2b)
 //
 // A partial breakout: M1 up to some timeframe is aligned, and the
-// next timeframe up is not — its price is still INSIDE its cloud.
-// If the cloud edge ahead of the trade is that timeframe's SSB, the
-// SSB is where price is heading and where it is expected to bounce,
-// so it becomes the target. The trade is only taken when the road to
-// it is clear: no tenkan, kijun or cloud edge of the target timeframe
-// or of any timeframe above it lies between entry and the SSB, and
+// next timeframe up is not. Its nearest line ahead of price — tenkan,
+// kijun, SSA or SSB — is where price is heading and where it is
+// expected to bounce, so it becomes the target. The trade is only
+// taken when the road to it is clear: no tenkan, kijun or cloud edge
+// of any timeframe above it lies between entry and that line, and
 // (InpStructChikou) each of those timeframes' chikou can travel the
 // same distance without meeting a past candle or line.
 //==============================================================
@@ -718,37 +723,65 @@ bool ChikouFree(const int s, const int t, const int dir, const double dist, stri
 
 //+------------------------------------------------------------------+
 //| Gate 2b. 'tt' is the first timeframe above the aligned chain.    |
-//| Its price must be inside its cloud with the SSB as the edge      |
-//| ahead; the SSB is the target, and the road to it must be free on |
-//| tt and every timeframe above it up to InpAlignTop.               |
+//| Its nearest line ahead is the target, and the road to it must be |
+//| free on tt and every timeframe above it up to InpAlignTop.       |
 //+------------------------------------------------------------------+
 bool PlanStructure(const int s, const int dir, const int tt, const double entry, RangePlan &p)
 {
    p.target = 0; p.behind = 0; p.tgtPow = 0; p.tgtName = ""; p.tp = 0; p.sl = 0; p.rr = 0; p.why = "";
 
-   double sa[1], sb[1];
-   if(CopyBuffer(ich[s][tt], 2, 1, 1, sa) <= 0 || CopyBuffer(ich[s][tt], 3, 1, 1, sb) <= 0)
+   //--- The target is the NEAREST of tt's four lines ahead of entry —
+   //--- tenkan, kijun, SSA or SSB, whichever price reaches first.
+   string nm[4] = { "tenkan", "kijun", "SSA", "SSB" };
+   double line  = 0.0;
+   int    which = -1;
+   for(int b = 0; b < 4; b++)
    {
-      p.why = tfName[tt] + " cloud unreadable";
-      return(false);
+      double v[1];
+      if(CopyBuffer(ich[s][tt], b, 1, 1, v) <= 0) { p.why = tfName[tt] + " unreadable"; return(false); }
+      if(dir * (v[0] - entry) <= 0) continue;                  // behind price
+      if(which < 0 || dir * (v[0] - line) < 0) { line = v[0]; which = b; }
    }
-   double hi = MathMax(sa[0], sb[0]), lo = MathMin(sa[0], sb[0]);
-   if(entry <= lo || entry >= hi)     { p.why = tfName[tt] + " price not in its cloud"; return(false); }
-   if(dir * (sb[0] - sa[0]) <= 0)     { p.why = tfName[tt] + " SSB is behind, not ahead"; return(false); }
+   if(which < 0) { p.why = tfName[tt] + " has no line ahead"; return(false); }
 
    int d = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
-   p.target  = sb[0];
-   p.tgtName = tfName[tt] + " SSB " + DoubleToString(sb[0], d);
+   p.target  = line;
+   p.tgtName = tfName[tt] + " " + nm[which] + " " + DoubleToString(line, d);
 
-   double dist = dir * (p.target - entry);
+   //--- A line that coincides with a PO3 number is the higher-probability
+   //--- target, and the PO3 number is what the trade aims at. The nearest
+   //--- multiple of the range step counts when it is within the tolerance
+   //--- and still ahead of entry.
+   long   step = PO3Step(InpPO3Power);
+   long   raw  = (long)MathRound(line * InpPO3Scale / (double)step) * step;
+   double lvl  = (double)raw / InpPO3Scale;
+   bool   onPO3 = (raw > 0 && MathAbs(lvl - line) <= InpStructPO3TolPips * PipPrice(s) &&
+                   dir * (lvl - entry) > 0);
+   if(!onPO3 && InpStructNeedPO3) { p.why = p.tgtName + " not on a PO3 number"; return(false); }
+
+   //--- The road is checked to whichever of the line and the PO3 number comes
+   //--- first: a PO3 number just past the line must not count the line itself
+   //--- as an obstacle, and one just short of it is where the trade ends.
+   double roadTo = line;
+   if(onPO3 && dir * (lvl - line) < 0) roadTo = lvl;
+
+   double dist = dir * (roadTo - entry);
    for(int t = tt; t <= alignTopIdx; t++)
    {
-      if(!PriceFree(s, t, dir, entry, p.target, p.why)) return(false);
+      if(!PriceFree(s, t, dir, entry, roadTo, p.why)) return(false);
       if(InpStructChikou && !ChikouFree(s, t, dir, dist, p.why)) return(false);
    }
 
    double ahead;
-   if(!PO3Levels(dir, entry, ahead, p.behind, p.tgtPow)) { p.why = "no PO3 level behind"; return(false); }
+   int    pw;
+   if(!PO3Levels(dir, entry, ahead, p.behind, pw)) { p.why = "no PO3 level behind"; return(false); }
+
+   if(onPO3)
+   {
+      p.target  = lvl;
+      p.tgtPow  = PO3Power(raw);
+      p.tgtName += " = PO3 " + PO3Tag(s, lvl, p.tgtPow);
+   }
    return(FinishPlan(s, dir, entry, p));
 }
 
@@ -891,7 +924,7 @@ void OnTick()
       if(InpBreakoutOnly && (brkUsed[s] || brkTime[s] < winStart)) continue;
 
       // Gate 2 — structure. Fully aligned to InpAlignTop: PO3 target.
-      // Aligned only part of the way: the next TF's SSB, if the road is free.
+      // Aligned only part of the way: the next TF's nearest line (or the PO3 number on it), if the road is free.
       int top;
       int dir = ChainWalk(s, top);
       if(dir == 0) continue;

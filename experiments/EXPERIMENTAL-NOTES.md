@@ -5835,3 +5835,48 @@ Design choices that were not specified and are open to change:
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
 
+### Revision — an SSB on a PO3 number targets the PO3 number
+
+User direction: when the non-aligned timeframe's line **coincides with a PO3
+number**, the setup is higher probability, and the **PO3 level** is the
+target.
+
+- The nearest multiple of the range step (`3^InpPO3Power`) to the SSB counts
+  as coinciding when it is within **`InpStructPO3TolPips` (default 10 pips,
+  one dollar on gold)** of the SSB and still ahead of entry. The target is then
+  the **PO3 number**, not the SSB. The TP sits `InpTPBufferPips` in front of it
+  as usual, and the journal reads e.g. `M15 SSB 4490.40 = PO3 4491.00 (9)`.
+- The free-road check runs to **whichever comes first** of the SSB and the PO3
+  number. If the PO3 number is just past the SSB, the SSB itself is not
+  counted as an obstacle. If it is just short, that is where the road ends.
+- **`InpStructNeedPO3` (default off)** trades a structure target *only* when its
+  SSB sits on a PO3 number. Off, an SSB with no PO3 number near it still
+  targets the SSB, so the two can be compared in a backtest.
+- On the default 9-dollar grid, a one-dollar tolerance catches about 2 in 9
+  SSBs by chance alone (any price is within $1 of a level 2/9 of the time).
+  A real edge would show up as those trades beating that base rate. The
+  tolerance and the grid are the settings to tune.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
+
+### Revision — any of the four lines is a target
+
+User direction: the target line can be **SSA, kijun, tenkan or SSB**, not only
+the SSB.
+
+- The target timeframe's target is now its **nearest line ahead of price**,
+  whichever of tenkan, kijun, SSA and SSB price would reach first. The two
+  SSB-only preconditions are gone: price no longer has to be inside the
+  cloud, and the SSB no longer has to be the edge ahead. If the timeframe has
+  no line ahead of price, there is no structure target.
+- Because the target is the nearest line, none of the target timeframe's
+  *own* lines can be on the road. Its chikou still has to be free, and the
+  timeframes above it still have to be free on price and chikou.
+- The PO3 rule from the previous revision applies to whichever line is the
+  target: within `InpStructPO3TolPips` of a PO3 number, the PO3 number is the
+  target. The journal reads e.g. `M15 kijun 4490.40 = PO3 4491.00 (9)`.
+- The earlier sections' mentions of "the SSB" as the only target describe the
+  first cut. This revision replaces them.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
+
