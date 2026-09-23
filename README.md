@@ -884,9 +884,9 @@ Every experimental strategy lives in [`experiments/`](experiments/), prefixed
 repo root. They are newer and less tested than the main builds — treat them
 as research code and demo-test them first.
 
-The directory also holds two **indicators** (`po3-levels.mq5` and
-`unraided-liquidity.mq5`), which are chart tools rather than strategies: they
-carry no `experimental-` prefix because they place no orders. It is indexed at the end of this section.
+The directory also holds one **indicator** (`po3-levels.mq5`), which is a
+chart tool rather than a strategy: it carries no `experimental-` prefix
+because it places no orders. It is indexed at the end of this section.
 
 The full write-up for each family is in
 **[experiments/EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)**;
@@ -1007,8 +1007,7 @@ carry no magic number and the index has no magic column.
 
 | File (`experiments/`) | What it is | § |
 |---|---|---|
-| `po3-levels.mq5` | Power-of-Three support/resistance levels on the chart — every grid from 1 to 19683, each price owned by the **highest** power of three that lands on it, so the biggest numbers read as the strongest levels — together with Ichimoku **kihon suchi** candle counts, the kihon segment panel and a timetable of when this week's kihon candles open. It is the source of the level arithmetic and the counting convention the `kihon-po3` EA ports, so the EA and the chart agree on what "on a kihon number" means | 38 |
-| `unraided-liquidity.mq5` | Unraided liquidity: fractal-style swing highs and lows (6 candles each side by default, both settable) that price has not yet traded through, each drawn as a ray from the wick to the right edge — one colour for highs, one for lows — and removed the moment it is raided (by wick, or by close if chosen). Follows the chart timeframe or can be locked to one; a locked higher timeframe starts its line at the chart candle that printed the wick. Draws only `ULQ_` objects, so it shares a chart with `po3-levels.mq5` | 52 |
+| `po3-levels.mq5` | Power-of-Three support/resistance levels on the chart — every grid from 1 to 19683, each price owned by the **highest** power of three that lands on it, so the biggest numbers read as the strongest levels — together with Ichimoku **kihon suchi** candle counts, the kihon segment panel and a timetable of when this week's kihon candles open — and the **unraided liquidity**: fractal-style swing highs and lows (6 candles each side, last 100 candles, chart timeframe or a locked one) that price has not yet traded through, drawn from the wick to the right edge in light blue (highs) and purple (lows) until raided. It is the source of the level arithmetic and the counting convention the `kihon-po3` EA ports, so the EA and the chart agree on what "on a kihon number" means | 38, 52 |
 
 ---
 

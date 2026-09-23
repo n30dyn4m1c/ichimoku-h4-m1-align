@@ -81,20 +81,29 @@
 //|  whether it is done, NOW or due, are worked out from the         |
 //|  broker's own clock and do not move with it.                     |
 //|                                                                  |
+//|  It also draws the UNRAIDED LIQUIDITY - the swing highs and      |
+//|  lows price has not yet traded back through - as a line from     |
+//|  the tip of each wick to the right edge, light blue for highs    |
+//|  and purple for lows. A line goes the moment price takes its     |
+//|  level out. A swing is fractal-style, 6 candles each side by     |
+//|  default, on the chart's timeframe or on one locked timeframe.   |
+//|  The UNRAIDED LIQUIDITY section below sets out the rules.        |
+//|                                                                  |
 //|  Verified against the PO3 workbook's Gold sheet, 14 Mar 2025:    |
 //|    2187  around 2900 -> 2799.36 .. 3083.67   (row 35, x128..141) |
 //|    6561  around 2950 -> 2755.62 .. 3149.28   (row 39, x42..48)   |
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.41"
+#property version   "1.42"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
 #property description "Power of Three support and resistance levels on gold, by checkbox from 1 to 19683."
 #property description "Also counts candles from the year, month, week and day opens and marks the"
 #property description "Ichimoku kihon suchi numbers on that count, and times the ones this week"
-#property description "still has to come. Draws only - places no orders."
+#property description "still has to come, and draws the unraided swing highs and lows as liquidity"
+#property description "lines. Draws only - places no orders."
 #property indicator_chart_window
 #property indicator_buffers 0
 #property indicator_plots   0
@@ -579,6 +588,12 @@ datetime SchedProject(const string sym, const datetime from,
    return((datetime)t);
   }
 
+enum ENUM_LIQ_RAID
+  {
+   LIQ_RAID_WICK  = 0,   // Wick trades through the level
+   LIQ_RAID_CLOSE = 1    // A candle closes through the level
+  };
+
 input group "Grid";
 input double InpScale     = 1.0;   // Scale divisor (1 = whole numbers, 100 = workbook 2dp)
 input int    InpEachSide  = 3;     // Levels each side of price
@@ -777,6 +792,25 @@ input bool   InpSchedTzBoth  = false;  // ... and keep the server time beside it
 //--- anchor rather than a time anyone reads off and acts on.
 input bool   InpSchedAmPm    = true;   // Write the times as AM / PM, not 24-hour
 
+input group "Unraided liquidity";
+//--- Swing highs and lows that price has not yet traded through, drawn from
+//--- the wick to the right edge. A swing is a fractal with a wider window:
+//--- above (below) the candles either side of it. The timeframe follows the
+//--- chart unless locked. See the UNRAIDED LIQUIDITY section for the rules.
+input bool            InpShowLiq      = true;             // Show unraided liquidity
+input ENUM_TIMEFRAMES InpLiqTF        = PERIOD_CURRENT;   // Timeframe (current = follow the chart)
+input int             InpLiqLeft      = 6;                // Candles to the left of a swing
+input int             InpLiqRight     = 6;                // Candles to the right of a swing
+input int             InpLiqLookback  = 100;              // Candles of history to search
+input ENUM_LIQ_RAID   InpLiqRaid      = LIQ_RAID_WICK;    // What counts as a raid
+input bool            InpLiqHighs     = true;             // Show unraided highs
+input bool            InpLiqLows      = true;             // Show unraided lows
+input color           InpLiqHighColor = clrLightSkyBlue;  // Unraided highs - colour
+input color           InpLiqLowColor  = clrMediumPurple;  // Unraided lows  - colour
+input int             InpLiqWidth     = 1;                // Line width
+input ENUM_LINE_STYLE InpLiqStyle     = STYLE_SOLID;      // Line style
+input bool            InpLiqSnap      = true;             // Locked higher TF: start at the chart candle with the wick
+
 input group "PO3 levels to show";
 //--- Every grid from 3 up is on by default: the model is the whole nest of
 //--- powers, and a level's strength is meant to be read from how many grids
@@ -845,6 +879,10 @@ input color InpCol_19683 = clrCrimson;         // 19683  - colour
 //--- And again for the third block. "PO3_KC" shares no prefix with the other
 //--- three, so each panel's sweep takes only its own rows.
 #define PO3_KSCHED  "PO3_KC"
+//--- Unraided liquidity lines. "PO3_U" is no other sub-prefix's prefix, so
+//--- the level and marker sweeps cannot take them, and its own prune takes
+//--- nothing else.
+#define PO3_LIQ     "PO3_U"
 
 //--- The last number of the band that carries the reading. At or below it a
 //--- marker takes one of the two prominent colours; above it the recessive one.
@@ -2747,6 +2785,175 @@ void RefreshLevels()
   }
 
 //+------------------------------------------------------------------+
+//|  UNRAIDED LIQUIDITY - swing highs and lows price has not yet     |
+//|  traded back through, the resting orders a sweep is expected     |
+//|  to take. Each is a line from the tip of its wick to the right   |
+//|  edge; when price takes the level out, the line goes.            |
+//|                                                                  |
+//|  A swing is found the way a fractal is: a high is a swing high   |
+//|  when it stands above the InpLiqLeft candles before it and the   |
+//|  InpLiqRight candles after it (6 and 6 by default; a Williams    |
+//|  fractal is 2 and 2). Lows mirror it.                            |
+//|                                                                  |
+//|  Equal highs are liquidity too, so ties are settled one way:     |
+//|  the swing must be strictly above the candles on its left but    |
+//|  only as high as those on its right. Of a run of equal highs     |
+//|  the OLDEST is the swing, and a later candle that only matches   |
+//|  it has not raided it - to raid, price must trade beyond.        |
+//|                                                                  |
+//|  A swing is only confirmed once all its right-hand candles have  |
+//|  closed, so a line never appears and then vanishes because the   |
+//|  swing failed. A wick raid is read off the live candle, so a     |
+//|  line goes the moment price trades through; a close raid waits   |
+//|  for the candle to close.                                        |
+//|                                                                  |
+//|  InpLiqTF = PERIOD_CURRENT follows the chart; anything else      |
+//|  locks the swings and the raid check to that timeframe. When the |
+//|  locked timeframe is higher than the chart's, the line starts at |
+//|  the chart candle inside it that printed the wick, not at the    |
+//|  locked candle's open, so it sits on the wick you can see.       |
+//+------------------------------------------------------------------+
+string g_liqKeep[];     // names drawn this pass; anything else under PO3_LIQ is stale
+int    g_liqKeepN = 0;
+bool   g_liqChanged = false;
+
+ENUM_TIMEFRAMES LiqTF()
+  {
+   return (InpLiqTF == PERIOD_CURRENT) ? (ENUM_TIMEFRAMES)_Period : InpLiqTF;
+  }
+
+bool LiqIsSwing(const MqlRates &r[], const int i, const bool isHigh,
+                const int left, const int right)
+  {
+   double v = isHigh ? r[i].high : r[i].low;
+   for(int j = 1; j <= left; j++)                 // older: strictly beyond
+     {
+      double o = isHigh ? r[i + j].high : r[i + j].low;
+      if(isHigh ? (v <= o) : (v >= o))
+         return(false);
+     }
+   for(int j = 1; j <= right; j++)                // newer: at least as far
+     {
+      double o = isHigh ? r[i - j].high : r[i - j].low;
+      if(isHigh ? (v < o) : (v > o))
+         return(false);
+     }
+   return(true);
+  }
+
+//--- For a swing from a higher timeframe, the chart candle inside it that
+//--- printed the extreme. Falls back to the swing candle's open when the
+//--- chart's own history does not reach back that far.
+datetime LiqWickTime(const datetime t, const ENUM_TIMEFRAMES tf, const bool isHigh)
+  {
+   if(!InpLiqSnap || PeriodSeconds(_Period) >= PeriodSeconds(tf))
+      return(t);
+   MqlRates c[];
+   int m = CopyRates(_Symbol, _Period, t, t + PeriodSeconds(tf) - 1, c);
+   if(m <= 0)
+      return(t);
+   int best = 0;
+   for(int k = 1; k < m; k++)
+      if(isHigh ? (c[k].high > c[best].high) : (c[k].low < c[best].low))
+         best = k;
+   return(c[best].time);
+  }
+
+void LiqDraw(const datetime t, const double level, const ENUM_TIMEFRAMES tf, const bool isHigh)
+  {
+   string name = PO3_LIQ + (isHigh ? "H_" : "L_") + IntegerToString((long)t);
+   ArrayResize(g_liqKeep, g_liqKeepN + 1, 64);
+   g_liqKeep[g_liqKeepN++] = name;
+
+   if(ObjectFind(0, name) >= 0)
+      return;                                    // a confirmed swing never moves
+
+   datetime start = LiqWickTime(t, tf, isHigh);
+   if(!ObjectCreate(0, name, OBJ_TREND, 0, start, level, start + PeriodSeconds(_Period), level))
+      return;
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT,  true);
+   ObjectSetInteger(0, name, OBJPROP_RAY_LEFT,   false);
+   ObjectSetInteger(0, name, OBJPROP_COLOR,      isHigh ? InpLiqHighColor : InpLiqLowColor);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH,      InpLiqWidth);
+   ObjectSetInteger(0, name, OBJPROP_STYLE,      InpLiqStyle);
+   ObjectSetInteger(0, name, OBJPROP_BACK,       true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+   ObjectSetString(0, name, OBJPROP_TOOLTIP,
+                   "Unraided " + (isHigh ? "high " : "low ") + DoubleToString(level, _Digits) +
+                   "  " + TfNameOf(tf) + "  " + TimeToString(t, TIME_DATE | TIME_MINUTES));
+   g_liqChanged = true;
+  }
+
+//--- Walk from the newest candle back, carrying the furthest price traded
+//--- since. A swing is unraided when nothing newer has gone beyond it, so one
+//--- pass settles every swing at once.
+void LiqScan(const MqlRates &r[], const int n, const ENUM_TIMEFRAMES tf, const bool isHigh,
+             const int left, const int right)
+  {
+   double reach = isHigh ? -DBL_MAX : DBL_MAX;
+
+   for(int i = 0; i < n; i++)
+     {
+      //--- bars 1..right must all be closed, and `left` bars must exist behind
+      if(i > right && i + left < n && LiqIsSwing(r, i, isHigh, left, right))
+        {
+         double level  = isHigh ? r[i].high : r[i].low;
+         bool   raided = isHigh ? (reach > level) : (reach < level);
+         if(!raided)
+            LiqDraw(r[i].time, level, tf, isHigh);
+        }
+
+      if(InpLiqRaid == LIQ_RAID_CLOSE && i == 0)
+         continue;                               // the live candle has not closed yet
+      double probe = (InpLiqRaid == LIQ_RAID_WICK) ? (isHigh ? r[i].high : r[i].low) : r[i].close;
+      reach = isHigh ? MathMax(reach, probe) : MathMin(reach, probe);
+     }
+  }
+
+//--- Rescan and sync the lines. Cheap at the default 100 candles, so it runs
+//--- on every tick and every timer second; the timer is what fills in a
+//--- locked timeframe whose history was not loaded on the first call.
+//--- Returns true when a line was added or removed.
+bool RefreshLiquidity()
+  {
+   g_liqKeepN   = 0;
+   g_liqChanged = false;
+
+   if(InpShowLiq)
+     {
+      int left  = (int)MathMax(1, InpLiqLeft);
+      int right = (int)MathMax(1, InpLiqRight);
+      ENUM_TIMEFRAMES tf = LiqTF();
+      MqlRates r[];
+      ArraySetAsSeries(r, true);
+      int n = CopyRates(_Symbol, tf, 0, (int)MathMax(left + right + 2, InpLiqLookback), r);
+      if(n < left + right + 2)
+         return(false);                          // not loaded yet: keep what is drawn
+      if(InpLiqHighs)
+         LiqScan(r, n, tf, true, left, right);
+      if(InpLiqLows)
+         LiqScan(r, n, tf, false, left, right);
+     }
+
+   for(int i = ObjectsTotal(0, -1, -1) - 1; i >= 0; i--)
+     {
+      string name = ObjectName(0, i, -1, -1);
+      if(StringFind(name, PO3_LIQ) != 0)
+         continue;
+      bool keep = false;
+      for(int k = 0; k < g_liqKeepN && !keep; k++)
+         keep = (g_liqKeep[k] == name);
+      if(!keep)
+        {
+         ObjectDelete(0, name);
+         g_liqChanged = true;
+        }
+     }
+   return(g_liqChanged);
+  }
+
+//+------------------------------------------------------------------+
 //| Ticks are not guaranteed once a minute, so the clock runs off a  |
 //| timer instead. Without it the countdown would sit frozen through |
 //| a quiet session and read wrong.                                  |
@@ -2754,6 +2961,7 @@ void RefreshLevels()
 void OnTimer()
   {
    RefreshLevels();
+   RefreshLiquidity();
    UpdateCount();
    UpdatePanel();
    UpdateClock();
@@ -2782,9 +2990,11 @@ int OnCalculate(const int rates_total,
    //--- boundary. Leaving them here had every tick rewrite them. The clock
    //--- stays: it is anchored to price and rides it between seconds.
    RefreshLevels();
+   if(RefreshLiquidity())
+      ChartRedraw();
    UpdateCount();
    UpdateClock();
 
    return(rates_total);
   }
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
