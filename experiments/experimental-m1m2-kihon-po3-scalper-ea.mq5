@@ -133,7 +133,7 @@ input double InpPipPoints    = 10.0;  // Points per pip (2-decimal gold = 10; 3-
 input double InpTPBufferPips = 5.0;   // TP sits this far IN FRONT of the target level
 input double InpSLBufferPips = 10.0;  // SL sits this far BEYOND the level behind price
 input double InpMinSLPips    = 20.0;  // Stop never closer than this
-input double InpMinTPPips    = 20.0;  // Skip when the target is closer than this
+input double InpMinTPPips    = 30.0;  // Skip when the TP is closer than this (30 pips = 4000 -> 4003 on gold)
 input double InpMinRR        = 1.0;   // Skip when reward:risk is below this
 
 input group  "Risk & Filters"

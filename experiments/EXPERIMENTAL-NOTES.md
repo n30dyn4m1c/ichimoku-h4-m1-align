@@ -5672,7 +5672,7 @@ the indicator's scale (`InpPO3Scale`, 1 = whole numbers). At the default power
   placed `InpTPBufferPips` (5) **in front of** it.
 - **Stop:** the level one step behind, plus `InpSLBufferPips` (10) beyond it.
   It is widened to `InpMinSLPips` (20) when price is sitting on that level.
-- **Veto:** skipped when the reward is under `InpMinTPPips` (20) or reward:risk
+- **Veto:** skipped when the reward is under `InpMinTPPips` (20; raised to 30 below) or reward:risk
   under `InpMinRR` (1.0). A skip is journalled with the reason and the kihon
   reading.
 
@@ -5880,3 +5880,14 @@ the SSB.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
 
+
+### Revision — 30 pips minimum to the target
+
+User direction: a move of **less than 30 pips is not worth trading** (30 pips
+= 4000 → 4003 on gold). `InpMinTPPips` now defaults to **30** (was 20). It is
+measured from the fill price to the **TP itself**, i.e. after the 5-pip
+buffer in front of the level, so it is what the trade actually earns. The
+target level therefore has to be about 35 pips away. The rule applies to every
+target: PO3 levels, Ichimoku lines, and PO3 numbers on a line.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
