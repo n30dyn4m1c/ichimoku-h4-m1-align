@@ -5786,3 +5786,52 @@ Compiled clean in MetaEditor (0 errors, 0 warnings). Runs to make:
 breakout at x1 / x2 / x3, and state entry at x3. These are not yet backtested,
 because the local MT5 window was open.
 
+### Revision — Ichimoku structure targets (gate 2b)
+
+User direction: the multi-timeframe read should look beyond the question
+"is it broken out". It should also see where price is **moving toward**. The
+example: M1 and M5 have broken out, but M15 is still inside its cloud and
+heading for its SSB. The SSB becomes the target, because price will bounce
+there. That only holds if M15's price and chikou are free to reach it, and M30,
+H1 and H4 are free within that range too.
+
+How it is built (`InpStructTarget`, default on):
+
+- **The chain is walked, not just passed or failed.** `ChainWalk` reports how
+  far the M1-upward alignment holds. If it reaches `InpAlignTop` (H4), the
+  trade is the fully aligned case and keeps the **PO3 target**, as before.
+- **Partial chain.** If it holds at least to `InpStructMinTop` (default **M5**,
+  so M1+M2+M5 have broken out) but stops below the top, the first timeframe
+  that fails becomes the **target timeframe**. It qualifies when:
+  - its price (the fill price) is **inside its cloud**;
+  - the cloud edge **ahead** is its **SSB**: for a long, SSB above SSA; for a
+    short, below it.
+
+  The TP is that SSB, less `InpTPBufferPips`.
+- **"Free" means no Ichimoku structure is in the way:**
+  - *Price:* on the target timeframe and every timeframe above it up to
+    `InpAlignTop`, none of tenkan, kijun, SSA or SSB (last closed bar) lies
+    strictly between entry and the SSB.
+  - *Chikou* (`InpStructChikou`, default on): on those same timeframes, the
+    chikou (the last close, plotted Kijun bars back) must be able to move the
+    same distance. Its path is the column at its position plus the next
+    `InpChikouPathBars − 1` columns toward the present (3 in total by
+    default). The candle high (long) or low (short), and the four lines as
+    they stood in those columns, must not lie on that path.
+- **Stop and room are unchanged.** The stop is still the PO3 range stop
+  (beyond the level behind, minimum 20 pips), and `InpMinTPPips` / `InpMinRR`
+  still veto. The journal names the target: `M15 SSB 4488.20` or
+  `4491.00 (9)`.
+- **Breakout and kihon rules still apply.** The M1+M2 breakout must fall inside
+  the kihon window, and the confluence minimum holds.
+- Structure vetoes ("M30 kijun in the way", "price not in its cloud") are
+  routine, so they are not journalled. Only a chain that reached a target and
+  failed on room is logged.
+
+Design choices that were not specified and are open to change:
+- only the **SSB** counts as a target, not SSA or a kijun;
+- only the **first** failing timeframe is read;
+- the stop stays the PO3 stop rather than an Ichimoku level behind.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
+
