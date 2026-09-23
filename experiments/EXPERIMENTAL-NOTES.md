@@ -6366,7 +6366,8 @@ The PO3 levels indicator (§38) also marks the swing highs and lows that price
 has not yet traded through — the resting liquidity a sweep is expected to
 take — as a ray from the tip of the wick to the right edge, **light blue**
 for highs (`InpLiqHighColor`, `clrLightSkyBlue`) and **purple** for lows
-(`InpLiqLowColor`, `clrMediumPurple`). When a level is raided its line is
+(`InpLiqLowColor`, `clrMediumPurple`), at width 2 (`InpLiqWidth`) so they
+stand out from the width-1 PO3 grid. When a level is raided its line is
 removed. It was first written as a separate `unraided-liquidity.mq5`, then
 folded into `po3-levels.mq5` so the levels, the kihon counts and the
 liquidity come from one indicator on one chart.

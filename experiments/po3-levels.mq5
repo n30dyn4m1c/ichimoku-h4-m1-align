@@ -807,7 +807,7 @@ input bool            InpLiqHighs     = true;             // Show unraided highs
 input bool            InpLiqLows      = true;             // Show unraided lows
 input color           InpLiqHighColor = clrLightSkyBlue;  // Unraided highs - colour
 input color           InpLiqLowColor  = clrMediumPurple;  // Unraided lows  - colour
-input int             InpLiqWidth     = 1;                // Line width
+input int             InpLiqWidth     = 2;                // Line width (styles other than solid need 1)
 input ENUM_LINE_STYLE InpLiqStyle     = STYLE_SOLID;      // Line style
 input bool            InpLiqSnap      = true;             // Locked higher TF: start at the chart candle with the wick
 
