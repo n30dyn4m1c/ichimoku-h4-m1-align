@@ -5747,3 +5747,42 @@ Next runs to make, in order:
 `InpAlignTop = M2`. They were not run because the tester needs the local
 MT5 window to be closed.
 
+### Revision — the whole kihon candle, confluence, and breakouts
+
+User direction after the first run: a kihon time is the **whole candle**, so a
+trade can come at any minute of the H1 hour (or the M30/M15 candle). The
+strongest times are when **all three** timeframes are on a number together,
+and the EA should **watch for breakouts** during those times.
+
+- **The whole candle was already the rule.** At `InpKihonTol = 0` the gate
+  stays open for the full candle. The first run's entries were spread across
+  every minute of the hour, not bunched at the open. The header now says so
+  explicitly.
+- **Confluence — `InpKihonMinTFs` (1–3, default 1).** This is how many of H1,
+  M30 and M15 must be on a number at the same moment. On a midnight-rollover
+  broker, **all three** coincide at 08:00–08:15 (H1 9, M30 17, M15 33) and
+  16:00–16:15 (H1 17, M30 33, M15 65). The journal tags each reading with its
+  count, e.g. `H1:9* M30:17* M15:33* x3`. In the first run, the 34 trades taken
+  at x3 won **41%**, against 25% at x1 and 23% at x2. With wins averaging 2.4×
+  the loss, 41% is profitable. The sample is small, so this needs the
+  dedicated runs below.
+- **Breakout entry — `InpBreakoutOnly` (default on).** On every closed M1 bar,
+  whether or not a window is open and whether or not a trade is running, the
+  EA records the bar on which the **M1+M2 pair turns aligned** in a
+  direction: from not aligned, or from the opposite side. An entry then needs:
+  - that breakout to fall **inside the current kihon window**;
+  - the full chain to M5–H4 aligned the same way;
+  - the PO3 room check to pass.
+
+  Each breakout is traded **once**. The window being judged starts at the
+  **latest** of the hit timeframes' window starts, i.e. when the current
+  confluence began. So at x3 the breakout must come inside the 15 minutes
+  where all three overlap. A breakout skipped for lack of PO3 room stays
+  available for the rest of the window, in case price pulls back into room.
+  `InpBreakoutOnly = false` restores the first run's behaviour: any minute the
+  chain is aligned.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Runs to make:
+breakout at x1 / x2 / x3, and state entry at x3. These are not yet backtested,
+because the local MT5 window was open.
+

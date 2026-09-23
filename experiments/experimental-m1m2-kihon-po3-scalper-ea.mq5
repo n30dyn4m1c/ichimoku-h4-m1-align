@@ -25,9 +25,17 @@
 //| The reach cap is §38's "26 trap" solved in general: a nearest-   |
 //| number test would otherwise open the gate on a number the day    |
 //| never gets to once a tolerance is set. With the default          |
-//| InpKihonTol = 0 the gate is open for exactly the candle carrying |
-//| the number — one hour on H1, 30 minutes on M30, 15 on M15.       |
-//| Outside those candles the EA does not open trades. Running       |
+//| InpKihonTol = 0 the gate is open for the WHOLE candle carrying   |
+//| the number — one hour on H1, 30 minutes on M30, 15 on M15 — and  |
+//| a trade can come at any minute inside it, not only at the open.  |
+//| CONFLUENCE: the strongest times are when all three counts sit on |
+//| a number at once (08:00-08:15 and 16:00-16:15 on a midnight     |
+//| rollover). InpKihonMinTFs (1-3) sets how many must agree.        |
+//| BREAKOUT: with InpBreakoutOnly the M1+M2 pair must TURN aligned  |
+//| inside the window (it was not aligned that way on the bar        |
+//| before), and each breakout is traded once. Off, any minute the   |
+//| chain is aligned inside the window will do.                      |
+//| Outside the windows the EA does not open trades. Running         |
 //| trades are never gated; their SL and TP are on the order.        |
 //|                                                                  |
 //| GATE 2 — STRUCTURE (top-down). The family's CheckAlign on every  |
@@ -88,6 +96,8 @@ input bool   InpKihonH1  = true;         // H1 count on a kihon number opens the
 input bool   InpKihonM30 = true;         // M30 count on a kihon number opens the gate
 input bool   InpKihonM15 = true;         // M15 count on a kihon number opens the gate
 input int    InpKihonTol = 0;            // Candles either side of the number (0 = on it exactly)
+input int    InpKihonMinTFs = 1;         // How many of H1/M30/M15 must be on a number at once (1-3)
+input bool   InpBreakoutOnly = true;     // M1+M2 must TURN aligned inside the kihon window (one trade per breakout)
 
 input group  "Gate 2 - Alignment"
 input ENUM_TIMEFRAMES InpAlignTop = PERIOD_H4; // Highest timeframe that must agree (M2 = M1+M2 only)
@@ -119,6 +129,10 @@ string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
 int      state[MAX_SYMS];        // 0 = flat, 1 = long, -1 = short
+int      pairPrev[MAX_SYMS];     // M1+M2 direction on the previous bar (-99 = not read yet)
+datetime brkTime[MAX_SYMS];      // open time of the bar the last M1+M2 breakout closed on
+int      brkDir[MAX_SYMS];
+bool     brkUsed[MAX_SYMS];      // that breakout has been traded
 double   slPrice[MAX_SYMS];      // the stop placed at entry — the self-heal target
 double   tpPrice[MAX_SYMS];
 int      lastMinuteKey = -1;
@@ -184,11 +198,15 @@ int KihonHit(const int n, const ENUM_TIMEFRAMES tf, const int tol)
    return(0);
 }
 
-//--- One timeframe's reading, appended to info: "M15:33" on the number,
-//--- "M15:34(33)" off it by the tolerance, "M15:28" when not on one.
+//--- One timeframe's reading, appended to info: "M15:33*" on the number,
+//--- "M15:34(33)*" off it by the tolerance, "M15:28" when not on one. On a
+//--- hit, 'start' is the open of the first candle of that timeframe's window
+//--- (candle K - tol), so a trade anywhere inside the window can be dated
+//--- against it — the gate covers the whole candle, not just its open.
 bool KihonTfOK(const string sym, const ENUM_TIMEFRAMES tf, const string name,
-               const datetime dayOpen, string &info)
+               const datetime dayOpen, string &info, datetime &start)
 {
+   start = 0;
    int c = KihonCount(sym, tf, dayOpen);
    if(c <= 0)
    {
@@ -200,29 +218,63 @@ bool KihonTfOK(const string sym, const ENUM_TIMEFRAMES tf, const string name,
    info += " " + name + ":" + IntegerToString(c) +
            ((k > 0 && k != c) ? "(" + IntegerToString(k) + ")" : "") +
            (k > 0 ? "*" : "");
-   return(k > 0);
+   if(k <= 0) return(false);
+
+   int first = (int)MathMax(1, k - tol);
+   start = iTime(sym, tf, 0) - (datetime)((c - first) * PeriodSeconds(tf));
+   return(true);
 }
 
 //+------------------------------------------------------------------+
-//| Gate 1. Open while any enabled timeframe's day count is on a     |
-//| kihon number. 'info' records every reading, starred where it     |
-//| hit — "H1:10 M30:19 M15:37" is shut, "H1:9* M30:17* M15:33*"     |
-//| is open on all three.                                            |
+//| Gate 1. How many of H1, M30 and M15 are on a kihon number right  |
+//| now (the CONFLUENCE, 0-3), and since when. The gate is open when |
+//| that count reaches InpKihonMinTFs. 'winStart' is the latest of   |
+//| the hit timeframes' window starts — the moment the current       |
+//| confluence began — which is what a breakout is dated against.    |
+//| 'info' records every reading, starred where it hit, with the     |
+//| count: "H1:9* M30:17* M15:33* x3".                               |
 //+------------------------------------------------------------------+
-bool KihonGateOK(const int s, string &info)
+int KihonConfluence(const int s, string &info, datetime &winStart)
 {
-   info = "";
-   if(!InpKihonGateEnabled) { info = "off"; return(true); }
+   info = ""; winStart = 0;
+   if(!InpKihonGateEnabled) { info = "off"; return(3); }
 
    datetime dayOpen = iTime(syms[s], PERIOD_D1, 0);
-   if(dayOpen <= 0) { info = "no D1 bar"; return(false); }
+   if(dayOpen <= 0) { info = "no D1 bar"; return(0); }
 
-   bool ok = false;
-   if(InpKihonH1  && KihonTfOK(syms[s], PERIOD_H1,  "H1",  dayOpen, info)) ok = true;
-   if(InpKihonM30 && KihonTfOK(syms[s], PERIOD_M30, "M30", dayOpen, info)) ok = true;
-   if(InpKihonM15 && KihonTfOK(syms[s], PERIOD_M15, "M15", dayOpen, info)) ok = true;
+   int n = 0;
+   datetime st;
+   if(InpKihonH1  && KihonTfOK(syms[s], PERIOD_H1,  "H1",  dayOpen, info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonM30 && KihonTfOK(syms[s], PERIOD_M30, "M30", dayOpen, info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonM15 && KihonTfOK(syms[s], PERIOD_M15, "M15", dayOpen, info, st)) { n++; winStart = MathMax(winStart, st); }
+   info += " x" + IntegerToString(n);
    StringTrimLeft(info);
-   return(ok);
+   return(n);
+}
+
+//==============================================================
+// Breakout tracking — the moment M1 and M2 TURN aligned.
+//
+// Read on every closed M1 bar, in or out of a kihon window and in or
+// out of a trade, so the EA always knows when the current M1+M2
+// alignment began. A breakout is the bar on which the pair goes from
+// anything else to aligned one way (flat -> long, or short -> long).
+// With InpBreakoutOnly the entry needs that bar to fall INSIDE the
+// current kihon window, and each breakout is traded at most once.
+//==============================================================
+
+void TrackBreakout(const int s, const datetime barTime)
+{
+   int a1   = CheckAlign(s, 0);
+   int pair = (a1 != 0 && CheckAlign(s, 1) == a1) ? a1 : 0;
+
+   if(pairPrev[s] != -99 && pair != 0 && pair != pairPrev[s])
+   {
+      brkTime[s] = barTime;
+      brkDir[s]  = pair;
+      brkUsed[s] = false;
+   }
+   pairPrev[s] = pair;
 }
 
 //==============================================================
@@ -367,6 +419,11 @@ int OnInit()
       Print("Alignment: InpAlignTop must be one of M2, M5, M15, M30, H1, H4. Aborting.");
       return(INIT_FAILED);
    }
+   if(InpKihonMinTFs < 1 || InpKihonMinTFs > 3)
+   {
+      Print("Kihon gate: InpKihonMinTFs must be 1-3. Aborting.");
+      return(INIT_FAILED);
+   }
    if(InpPipPoints <= 0 || InpPO3Scale <= 0 || InpPO3Power < 0 || InpPO3Power > 9)
    {
       Print("PO3: InpPipPoints and InpPO3Scale must be positive and InpPO3Power 0-9. Aborting.");
@@ -376,6 +433,10 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       lastM1bar[s] = 0;
+      pairPrev[s]  = -99;
+      brkTime[s]   = 0;
+      brkDir[s]    = 0;
+      brkUsed[s]   = true;
       state[s]     = 0;
       slPrice[s]   = 0.0;
       tpPrice[s]   = 0.0;
@@ -406,11 +467,13 @@ int OnInit()
    Print("Alignment: " + chain + " must all agree (price and chikou clear).");
 
    if(InpKihonGateEnabled)
-      PrintFormat("Kihon gate: ON — entries only while the day's%s%s%s count is within %d of a "
-                  "reachable kihon number.", InpKihonH1 ? " H1" : "", InpKihonM30 ? " M30" : "",
-                  InpKihonM15 ? " M15" : "", InpKihonTol);
+      PrintFormat("Kihon gate: ON — entries anywhere inside a candle where at least %d of the day's%s%s%s "
+                  "counts are within %d of a reachable kihon number.", InpKihonMinTFs,
+                  InpKihonH1 ? " H1" : "", InpKihonM30 ? " M30" : "", InpKihonM15 ? " M15" : "", InpKihonTol);
    else
       Print("Kihon gate: OFF — entries run at any hour.");
+   Print(InpBreakoutOnly ? "Entry: BREAKOUT — M1+M2 must turn aligned inside the kihon window, one trade per breakout."
+                         : "Entry: STATE — any minute the chain is aligned inside the kihon window.");
 
    trade.SetDeviationInPoints(Slippage);
    trade.SetExpertMagicNumber(MAGIC);
@@ -658,16 +721,24 @@ void OnTick()
 
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
+      TrackBreakout(s, m1[1].time);
+
       if(state[s] != 0) { ManagePosition(s); continue; }
 
-      // Gate 1 — time. Market-wide and the cheapest, so it goes first.
-      string kInfo;
-      if(!KihonGateOK(s, kInfo)) continue;
+      // Gate 1 — time: enough of H1/M30/M15 on a kihon number, anywhere
+      // inside the candle. Market-wide and the cheapest, so it goes first.
+      string   kInfo;
+      datetime winStart;
+      if(KihonConfluence(s, kInfo, winStart) < InpKihonMinTFs) continue;
       if(!SpreadOK(syms[s])) continue;
+
+      // The breakout must have happened inside this window and not been traded.
+      if(InpBreakoutOnly && (brkUsed[s] || brkTime[s] < winStart)) continue;
 
       // Gate 2 — structure.
       int dir = ChainAligned(s);
       if(dir == 0) continue;
+      if(InpBreakoutOnly && dir != brkDir[s]) continue;
 
       // Gate 3 — the PO3 range.
       double entry = (dir == 1) ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
@@ -680,7 +751,11 @@ void OnTick()
          continue;
       }
 
-      if(!OpenScalp(s, dir, p, entry, kInfo))
+      if(InpBreakoutOnly)
+         kInfo += " | breakout " + TimeToString(brkTime[s], TIME_MINUTES);
+      if(OpenScalp(s, dir, p, entry, kInfo))
+         brkUsed[s] = true;
+      else
          Print(PCTime() + " | " + syms[s] + " entry signal but order failed, retcode " +
                IntegerToString(trade.ResultRetcode()));
    }
