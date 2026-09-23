@@ -6286,7 +6286,7 @@ the rejection trade makes money with and without the bias.
 
 ### Caveats
 
-- **Not compiled or backtested.** No MQL5 compiler on this machine.
+- Compiled and backtested in the local Bottles MT5 install (results below).
 - **The turtle soup test is loose when the level sits beyond the prior
   extreme**: crossing the level then takes out the extreme by definition, so
   any close back through the level qualifies. The engulfing-only setting is
@@ -6296,3 +6296,63 @@ the rejection trade makes money with and without the bias.
 - Levels are fixed multiples of `3^InpLevelPower` scaled by `InpPO3Scale`, as
   in the indicator; check they line up with `po3-levels.mq5` on the chart
   before reading results.
+
+### Backtests
+
+GOLDm#, **real ticks**, $10,000, 1% risk, M5 chart, compiled clean (0
+errors, 0 warnings). 2024 and 2025 are full years; 2026 runs to 09-19. The
+first eight rows use the original defaults (all hours, either pattern, H4
+bias, 27 levels on M5) with one input changed per row.
+
+| Setting | 2024 | 2025 | 2026 |
+|---|---|---|---|
+| defaults | −$486, PF 0.95 | +$7,759, PF 1.27 | +$1,300, PF 1.03, 36% DD |
+| no bias | −$2,593, PF 0.80 | +$2,303, PF 1.06 | −$4,516, PF 0.93, 55% DD |
+| H1 bias | −$666, PF 0.92 | +$7,958, PF 1.31 | −$1,397, PF 0.96 |
+| engulfing only | −$673, PF 0.92 | +$8,598, PF 1.45 | +$2,561, PF 1.13 |
+| New York 15–20 server | +$1,130, PF 1.17 | +$3,225, PF 1.29 | +$1,280, PF 1.10 |
+| M1 signals | +$247, PF 1.02 | +$2,633, PF 1.07 | −$1,555, PF 0.98, 51% DD |
+| 81 levels | +$17, PF 1.01 (22 trades) | +$895, PF 1.17 | +$333, PF 1.03 |
+| 9 levels | −$3,948, PF 0.87 | −$3,175, PF 0.94 | −$3,293, PF 0.91 |
+| **New York + engulfing** (new default) | **+$584, PF 1.14, 12% DD** | **+$4,453, PF 1.85, 9% DD** | **+$974, PF 1.20, 7% DD** |
+| New York + engulfing, no bias | −$2,134, PF 0.66 | +$1,319, PF 1.14 | +$1,410, PF 1.15 |
+
+**What the sweeps did** (27 levels on M5, every sweep, not only traded ones):
+
+| Year | 27-level sweeps | Accepted (past the midpoint) | Rejected (turtle soup or engulfing) | Avg overshoot of a rejected sweep |
+|---|---|---|---|---|
+| 2024 | 1,498 | 4% | 74% | 8% of a range |
+| 2025 | 2,891 | 14% | 70% | 13% |
+| 2026 | 3,946 | 26% | 65% | 20% |
+
+### Reading
+
+- **The midpoint rule holds as a description.** Most breaks of a 27 level
+  never close past the next range's midpoint, and the rejected ones turn
+  early, 8–20% of a range past the level. Acceptance grows with volatility,
+  from 4% in 2024 to 26% in 2026.
+- **A rejection alone is not an edge.** Traded at all hours, the rejection
+  wins about 40% at R:R ≥ 1 and roughly breaks even. The turtle soup test is
+  too loose (see caveats); engulfing-only is better in 2025 and 2026.
+- **New York is where it works.** It is the only single change profitable in
+  all three years, and with engulfing it is the only setting profitable every
+  year at a low drawdown. Sweeps are most frequent at 15–18 server time and
+  are *accepted* there most often (about 60% rejected against 65–70% in other
+  hours), which fits the user's note that New York plays out bigger ranges.
+  The trades that survive the filter are the fewer, larger moves.
+- **The cloud bias is required.** Removing it turns every good setting into a
+  loser in at least one year (New York + engulfing: 2024 goes from +$584 to
+  −$2,134). This agrees with §7: fade a pop only against the trend.
+- **The level's power made no difference.** 27, 81 and 243 levels were
+  rejected at the same rate in every year (65–74%), and 2187 was, if
+  anything, accepted *more* often. On this measure a higher power is not a
+  stronger level. Samples above 243 are small.
+- **9 ranges lose every year**, which matches "the minimum is a 3, New York is
+  a 9 or 27": a 9 range is noise on M5 at these prices. **81 ranges** are
+  flat with few trades.
+- **Sample size.** The best setting trades 73–110 times a year, so each year's
+  PF has a wide error band. Treat it as a lead worth combining with the stack,
+  not a finished system.
+- **The session window is in server hours** (GOLDm# broker, GMT+3 in summer),
+  so 15–20 is New York there and must be re-set for another broker or
+  across DST changes.

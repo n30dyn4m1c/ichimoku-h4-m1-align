@@ -65,14 +65,14 @@ input double InpAcceptPct  = 50.0;  // Acceptance line, % into the next range (5
 
 input group  "Rejection"
 input ENUM_TIMEFRAMES InpSignalTF = PERIOD_M5; // Timeframe the sweep and pattern are read on
-input PatternMode     InpPattern  = PAT_EITHER; // Rejection pattern required
+input PatternMode     InpPattern  = PAT_ENGULF; // Rejection pattern required (engulfing: best in the §51 backtests)
 input int    InpTSLookback   = 20;  // Turtle soup: the sweep must take out this many bars' extreme
 input int    InpSweepMaxBars = 24;  // Sweep expires after this many signal bars undecided
 
 input group  "Filters"
 input BiasMode InpBias          = BIAS_H4; // Trade only with the cloud bias (a sell needs price below the cloud)
-input int    InpSessionStart    = 0;    // Server hour trades may open from (0-23)
-input int    InpSessionEnd      = 24;   // Server hour trades stop opening (24 = end of day; start > end wraps midnight)
+input int    InpSessionStart    = 15;   // Server hour trades may open from (0-23; 15-20 = New York on GOLDm#)
+input int    InpSessionEnd      = 20;   // Server hour trades stop opening (24 = end of day; start > end wraps midnight)
 input int    InpMaxSpreadPoints = 60;   // Max spread in points to allow entry (0 = no limit)
 
 input group  "Trade"
