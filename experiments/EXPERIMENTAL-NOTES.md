@@ -6139,3 +6139,81 @@ GOLDm#, $10,000, real ticks, `InpEntryMode = ENTRY_PULLBACK`:
   at the level itself rather than at the dip's extreme.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings).
+
+---
+
+## 50. The live logic, tier by tier, over 2024–2026 at $100
+
+**File:** `experimental-bottomup-stack-m5-tight-vps-ea.mq5` (the §48 build)
+**Magic number:** `20260875`
+
+User direction: stop adding tiers. Simulate the live build with only its
+profitable tiers, H4 first, over **2024, 2025 and 2026**, with the VPS
+build's risk regime and a **$100** start.
+
+**Method.** The §48 build with `InpM5Enabled = false` reproduces the live VPS
+build to the cent: the 2026 run below returns $13,294.55, the §48 figure.
+This build gained four tier switches, `InpTierM15/M30/H1/H4` (all on by
+default, so behaviour is unchanged). A tier switched off never opens, and
+the scan moves on to the next tier down. The risk regime is the live one:
+- tier 1 (< $7k): M15 1% / M30 5% / H1 10% / H4 20%;
+- then halved to 13k;
+- then 0.1 / 0.2 / 1 / 2% above 13k.
+
+The live VPS file was not touched.
+
+GOLDm#, 1:1000, **real ticks**, each year run separately. 2026 runs to 09-19.
+The 2024 runs load 2023 history for warm-up (27M ticks), so the data is
+complete.
+
+### $100 start
+
+| Tiers | 2024 | 2025 | 2026 |
+|---|---|---|---|
+| **live** (M15+M30+H1+H4) | **ruin**: −$100.72, stopped out 2024-08-02 | +$14,646, PF 2.03 | +$13,295, PF 1.52 |
+| H4+H1+M30 | **ruin**: −$99.99 | +$14,188, PF 2.24 | +$13,378, PF 1.61 |
+| H4+H1 | **ruin**: −$99.93 | +$13,176, PF 3.44 | +$226, PF 1.03 (92% DD) |
+| H4 only | −$44, PF 0.89, 87% DD | +$303, PF 1.11 | +$76, PF 1.11 |
+
+### 2024 at $10,000 (no minimum-lot distortion)
+
+| Tiers | Net | PF | Max DD |
+|---|---|---|---|
+| live | +$4,973 | 1.09 | 55.4% |
+| H4+H1+M30 | +$4,645 | 1.10 | 52.3% |
+
+### Per tier, from the live runs
+
+| Tier | 2024 ($10k) | 2025 ($100) | 2026 ($100) |
+|---|---|---|---|
+| **H4** | **+$6,812, PF 2.03** | +$3,965, PF 2.13 | +$1,813, PF 1.61 |
+| **H1** | +$1,397, PF 1.08 | +$5,172, PF 2.50 | +$4,495, PF 1.53 |
+| M30 | **−$2,137, PF 0.90** | +$4,612, PF 2.00 | +$5,917, PF 1.62 |
+| M15 | **−$1,098, PF 0.87** | +$925, PF 1.36 | +$1,070, PF 1.25 |
+
+### Reading
+
+- **At $100, 2024 ruins every combination that includes the H1 tier.** That
+  includes the live build, which is stopped out on 2024-08-02. H4 alone
+  survives, but only just (87% drawdown). The data is complete, so this is a
+  real out-of-sample warning for the live build.
+- **The ruin is mostly the account size.** The same 2024 at $10,000 makes
+  +$4,973 (PF 1.09), though with a 55% drawdown. At $100, GOLDm#'s 0.10
+  minimum lot and the 20% / 10% tier-1 risk on H4 / H1 mean an early losing
+  run leaves the account unable to size down. The last two positions stopped
+  out were both 0.10 lots.
+- **H4 and H1 are the only tiers profitable in all three years.** M30 and M15
+  lost in 2024 and won in 2025–26. M15 has the lowest PF of the four tiers
+  every year.
+- **But H4+H1 alone is not the best account.** In 2026 it made only $226 at a
+  92% drawdown. The M30 tier adds most of the 2025–26 compounding.
+  **H4+H1+M30 (dropping M15) matched or beat the live build in 2025 and 2026**
+  (+$14,188 / +$13,378, PF 2.24 / 1.61 vs 2.03 / 1.52) with fewer trades. It
+  was ruined in 2024 at $100 like the live build, and at $10k made about the
+  same as live.
+- **H4 alone is too slow to compound from $100** (37–67 trades a year,
+  +$76 to +$303).
+- Each year was run separately from $100. Compounding and the drop from 20%
+  to 10% to 2% H4 risk at $7k and $13k make each run strongly path-dependent,
+  so differences of a few percent mean nothing. The 2024 ruin and the per-tier
+  signs are the robust findings.

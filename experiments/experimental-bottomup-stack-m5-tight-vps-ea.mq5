@@ -253,6 +253,12 @@ input bool   InpM5CloudFull    = false;  // M5 cloud must agree now AND at the f
 input double InpM5MaxCloudATR  = 0.0;    // Max entry distance from the M5 cloud edge, x ATR(M5) (0 = off)
 input int    InpM5MaxSpread    = 0;      // Max spread in points for M5 entries (0 = the general cap)
 
+input group  "Tier switches (tier-subset simulation, §50)"
+input bool   InpTierM15 = true;   // M15 tier opens trades
+input bool   InpTierM30 = true;   // M30 tier opens trades
+input bool   InpTierH1  = true;   // H1 tier opens trades
+input bool   InpTierH4  = true;   // H4 tier opens trades
+
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
 input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the rejection candle must sweep
@@ -1569,6 +1575,10 @@ void OnTick()
 
             // M5 tier: the extra tightening filters (EXPERIMENT)
             if(l == 0 && !M5TierOK(s, st, via)) continue;
+            // Tier switches (§50): a tier switched off never opens; the scan
+            // moves on to the next lower tier. Running trades are unaffected.
+            if((l == 1 && !InpTierM15) || (l == 2 && !InpTierM30) ||
+               (l == 3 && !InpTierH1)  || (l == 4 && !InpTierH4)) continue;
 
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
