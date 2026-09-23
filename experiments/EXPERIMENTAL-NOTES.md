@@ -5699,8 +5699,8 @@ TP or SL the EA can re-enter on the next minute if all three gates still pass.
 
 ### Status & caveats
 
-- **Compiled clean in MetaEditor** (0 errors, 0 warnings) on 2026-09-23.
-  **Not yet backtested.**
+- **Compiled clean in MetaEditor** (0 errors, 0 warnings) and backtested
+  on 2026-09-23 with the defaults. The result is below: **it loses**.
 - **The defaults are a starting point, not a result.** The power (cell size),
   both buffers, the minimum stop and the minimum rr all interact. A 9-dollar
   cell with a 1.0 rr floor admits longs only in the bottom ~3.75 dollars
@@ -5712,3 +5712,38 @@ TP or SL the EA can re-enter on the next minute if all three gates still pass.
   against a 10-dollar stop risks ~$100. A $100 test account cannot size down to
   1%, so test on a larger deposit to see the idea's real effect.
 - Do not run it beside the live build on the same account and symbol.
+
+### Results — GOLDm#, 2026-01-01 → 2026-09-19, $10,000, 1:1000, defaults
+
+| Model | Net | PF | Trades | Won | Avg win / loss | Max balance DD |
+|---|---|---|---|---|---|---|
+| 1-minute OHLC | −$1,760 | 0.90 | 252 | 26.6% | $231 / −$93 | 40.4% |
+| real ticks | **−$2,882** | **0.84** | 253 | 26.1% | $222 / −$94 | 45.1% |
+
+A $10,000 deposit was used so the 1% sizing is not overridden by the
+minimum lot. 588 aligned signals at kihon times were skipped by the room
+check (349 no room, 239 rr too low). The entries split fairly evenly across
+the three clocks: 122 on an H1 number, 149 on M30, 106 on M15.
+
+Breaking down the 1-minute OHLC run's trades by entry rr shows where it
+loses:
+
+| entry rr | trades | won |
+|---|---|---|
+| < 1.5 | 44 | 50% |
+| 1.5 – 2.5 | 58 | 22% |
+| ≥ 2.5 | 150 | 21% |
+
+**Most trades (60%) are rr ≥ 2.5, and those lose.** A high rr here means
+price was sitting on the level behind it, so the stop fell back to the
+2-dollar minimum (`InpMinSLPips` 20), which gold's normal M1 noise takes out.
+The trades that had to hold a stop beyond a real distance won half the time.
+The H1/M30/M15 trigger made no difference (25–28% wins on each), so the time
+gate is not what is failing.
+
+Next runs to make, in order:
+`InpMinSLPips` 40–60 (or a cap on rr), `InpPO3Power = 3`,
+`InpKihonGateEnabled = false` (to measure the time gate), and
+`InpAlignTop = M2`. They were not run because the tester needs the local
+MT5 window to be closed.
+
