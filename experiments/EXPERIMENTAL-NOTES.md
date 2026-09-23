@@ -5891,3 +5891,58 @@ target level therefore has to be about 35 pips away. The rule applies to every
 target: PO3 levels, Ichimoku lines, and PO3 numbers on a line.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
+
+### Results — the revised build (whole candle, confluence, breakouts, line targets, 30-pip minimum)
+
+GOLDm#, $10,000, 1:1000, **real ticks**, default settings unless the variant
+says otherwise. 2026 = 2026-01-01 → 2026-09-19; 2025 = the full year, out of
+sample.
+
+| Run | Window | Net | PF | Trades | Won | Max balance DD |
+|---|---|---|---|---|---|---|
+| **defaults** (breakout, x1, line targets on, chikou on) | 2026 | −$2,668 | 0.78 | 192 | 26.6% | 40.3% |
+| **defaults** | **2025** | **+$4,846** | **1.23** | 235 | 35.7% | 13.6% |
+| line targets off | 2026 | −$2,056 | 0.78 | 130 | 25.4% | 35.5% |
+| line targets, chikou check off | 2026 | −$4,222 | 0.76 | 283 | 23.3% | 54.3% |
+| line targets on PO3 numbers only | 2026 | −$2,138 | 0.79 | 145 | 26.2% | 35.5% |
+| breakout, x3 confluence | 2026 | −$68 | 0.96 | 23 | 30.4% | 9.8% |
+| **no breakout rule, x3** | 2026 | **+$661** | **1.18** | 51 | 35.3% | 11.8% |
+| no breakout rule, x3 | **2025** | −$1,026 | 0.79 | 71 | 28.2% | 14.0% |
+| no breakout rule, x3, min stop 40 | 2026 | +$462 | 1.16 | 46 | 41.3% | 7.3% |
+
+Per-trade breakdown of the defaults. R is +rr for a win and −1 for a loss:
+
+| Split | 2026 | 2025 |
+|---|---|---|
+| PO3 target (full chain) | 130 trades, 25% won, −15.2 R | 189, 33%, **+26.6 R** |
+| Ichimoku line target | 47, 28%, −5.5 R | 32, 47%, +9.2 R |
+| line on a PO3 number | 15, 33%, −1.0 R | 14, 43%, +9.6 R |
+| stop ≤ 25 pips | 80, 21%, −4.2 R | 113, 25%, +13.0 R |
+| stop 26–45 pips | 83, 24%, −25.1 R | 93, 46%, +31.9 R |
+| stop > 45 pips | 29, 48%, +7.7 R | 29, 45%, +0.5 R |
+| confluence x1 / x2 / x3 | −14.1 / −7.6 / +0.0 R | +27.7 / +17.0 / +0.8 R |
+
+### Reading
+
+- **Nothing holds across both years.** The defaults lose 27% in 2026 and
+  gain 48% in 2025. The best 2026 variant (x3 confluence without the breakout
+  rule, PF 1.18) loses in 2025 (PF 0.79). The earlier "x3 wins 41%" finding
+  was a 2026 effect.
+- **Line targets beat full-chain PO3 targets in both years**, per trade:
+  - 2026: −0.10 R vs −0.12 R;
+  - 2025: +0.41 R vs +0.14 R.
+
+  This is the only split that points the same way twice. The sample is
+  46–62 line trades per year, so treat it as a lead, not a result.
+- **A line sitting on a PO3 number is not clearly better** than a plain line:
+  33% vs 28% won in 2026, 43% vs 47% in 2025, on about 15 trades each.
+- **The chikou check on the free road helps.** Turning it off added 91 trades
+  and $1,550 of loss in 2026.
+- **The breakout rule cut trades without improving them** in 2026 (x3: 23
+  trades, PF 0.96, vs 51 trades, PF 1.18 without it). It was not tested
+  separately in 2025.
+- **2026 losses are mostly shorts.** In 2026 the defaults' shorts won 23% and
+  longs 30%. In 2025 shorts won 47% and longs 33%. That reads as the year's
+  trend, not a rule.
+- One symbol, one broker feed, two windows. The year-to-year swing is larger
+  than any filter's effect, so no default was changed on this evidence.
