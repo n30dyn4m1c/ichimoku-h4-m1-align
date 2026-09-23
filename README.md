@@ -108,7 +108,7 @@ Both builds carry their own magic number, so they can run on the same account
 - `archives/` — retired builds, including the 2026-08-18 top-down VPS and desktop originals and the 2026-08-14 pre-merge pair
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `ICHIMOKU-THEORIES.md` — the time/wave/price theory research the filters are drawn from
-- `utilities/` — deployment scripts and the Python monitor
+- `utilities/` — deployment scripts, the Python monitor and the account-split simulator
 
 > The repository is still named `ichimoku-h4-m1-align` after the original
 > top-down H4→M1 build. The name is kept so existing clones, deploy scripts
@@ -630,6 +630,53 @@ the order fits free margin instead of being rejected.
 > account that could afford to lose it. Edit the `InpRiskPct*` inputs to fit
 > your own balance and risk appetite before running this anywhere near real
 > money.
+
+### Account-split simulator (`utilities/account-split-sim.py`)
+
+A Monte Carlo **model** (not a backtest) of the money management above:
+one account against splitting profit into new accounts, and what to do with
+the money once the accounts are maxed out. Trades are drawn from the per-tier
+backtest statistics in the notes (§47, §48, §50), and one year in three is
+2024-like (the year that ruined a $100 account). Every account on a path takes
+the same trades, so a bad year hits them all at once. Calibrated against the
+real $100 and $10k backtests. Needs `numpy`.
+
+```bash
+python3 utilities/account-split-sim.py                     # the default plan below
+python3 utilities/account-split-sim.py --split-at 3000 --years 2
+python3 utilities/account-split-sim.py --harvest-at 7000 --keep 5000
+python3 utilities/account-split-sim.py --compare-harvest   # what to do once maxed
+python3 utilities/account-split-sim.py --help
+```
+
+Defaults: an XM Micro account (0.1-lot minimum = 0.1 oz of gold), the live
+risk regime, a $100 start, every account that reaches $5,000 opens a new
+$1,000 account, at most 8 accounts (XM's limit per profile), 3 years.
+
+Findings (3 years, 400 paths; medians):
+
+| Plan | Median | Chance of ending below the start |
+|---|---|---|
+| One account from $100 (standard 0.01 lot) | $30k | ~28% |
+| One account from $100 (Micro) | $32k | ~3.5% |
+| Split at $5k into $1k accounts, only the newest splits | $133k | ~4.5% |
+| **Split at $5k into $1k accounts, every account splits** | **$207k** | ~5% |
+
+- **The Micro account's smaller minimum lot is what makes a $100 start
+  survivable.** On a standard account 0.01 lot is far above the intended risk
+  at $100.
+- **Splitting works because the risk regime is per account.** An account
+  past $7k or $13k de-risks, so splitting keeps more money in the high-risk
+  regime. It is a choice to take more risk, not a free gain.
+- **Once the 8 accounts are full, withdraw rather than let them run.**
+  Withdrawing whenever an account reaches $7k, back down to $5k, gave a median
+  of about $449k with about $416k of it already banked, against $213k (none
+  banked) when the accounts were left to grow. That is the same effect again:
+  an account held under a threshold keeps trading at the higher risk, and its
+  gains leave as they are made.
+
+All of this assumes the 2025–26 edge continues live. The model ignores
+broker limits, slippage across many accounts, fees and taxes.
 
 ### Weekly Equity Reminder
 
