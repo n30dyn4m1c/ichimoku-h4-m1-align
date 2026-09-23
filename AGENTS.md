@@ -92,6 +92,6 @@ grep -hoE '^(int|input +int|const +int) +MAGIC[A-Z_0-9]* *= *[0-9]+' \
   *.mq5 experiments/*.mq5 | grep -oE '[0-9]+$' | sort | uniq -c | sort -rn
 ```
 
-The highest number in use is `20260873` (the live VPS build with the
-five-band risk ladder and nothing else). This line goes stale every time an
+The highest number in use is `20260874` (the live VPS build plus the
+scalp-capture exit layer and per-tier report). This line goes stale every time an
 experiment is added — re-run the command above rather than trusting it.

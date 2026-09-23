@@ -5288,3 +5288,139 @@ An account that grew past 13000 traded *smaller in dollars* than it had at
   intended anchors and shape ratios, and a non-comment `diff` against the
   live build was used to confirm nothing but the ladder changed. MetaEditor
   is still the first step before any test run.
+
+---
+
+## 47. Bottom-Up Stack EA — scalp capture on the small tiers, and a per-tier report
+
+**File:** `experimental-bottomup-stack-scalp-capture-vps-ea.mq5`
+**Forked from:** `ichimoku-h4-m1-vps-ea.mq5` — the **live VPS build** (magic
+`20260858`), which is left untouched
+**Magic number:** `20260874` — fresh, so it never manages another file's
+positions
+
+### The question
+
+"I am not able to pick up small scalps — are they worth trading?" Sections
+39 and 42–45 answered it by adding *new, faster tiers* (M1, M2) and *fixed
+targets*. None of them has a recorded result. This build asks the question
+the other way round: the live build already *enters* plenty of trades on
+M5/M15/M30 — how much of the small profit those trades show does the exit
+logic hand back, and does banking it pay?
+
+### Why the live build misses small scalps
+
+Reading the live exit stack for an M5/M15/M30 trade:
+
+| Move in profit, then reverses | Live build's exit | Result |
+|---|---|---|
+| < +1 x ATR | nothing armed — rides back to the **kumo edge** (or the 8 x ATR disaster stop) | full loss, often more than the 2 x ATR the trade was sized on |
+| +1 to +2 x ATR | BE armed — stop at **entry + 15 points** | a scratch, ~$0.15 on gold |
+| >= +2 x ATR | spike-lock trail at **peak - 1 x ATR** | a win of >= 1 x ATR |
+
+So a small-tier trade only ever keeps money when it runs at least two ATRs.
+Everything between +0.1 and +1.9 ATR is a loss or a scratch. That is the
+"missed scalp". It is an exit problem, not an entry problem — the trades are
+there; the profit is not kept.
+
+Two structural points shape whether scalps are *worth* it:
+
+- **Entries are late by construction.** Price *and* chikou must clear
+  tenkan, kijun and the cloud on M1 and on the tier TF, and the chikou must
+  clear the high/low of 26 bars ago. By the time that holds, the easy part of
+  a short move is usually over. A trend-follower's edge sits in the few long
+  runs, not in the win rate, so hard targets on *every* trade (§§39, 44, 45)
+  risk cutting off exactly the tail the $100 → $14000 run was made of.
+- **Costs scale against small targets.** Spread plus slippage on gold is a
+  fixed cost per round trip; against a 1 x ATR(M5) target it is a
+  noticeable fraction, against a kumo-edge winner it is noise. A scalp
+  layer only makes sense on tiers whose ATR is many times the spread —
+  which is why M1/M2 tiers are not the answer and M5 is the floor here.
+
+### What the build does
+
+Everything from the live build is kept — entries, the H4/H1/D1 bias gates,
+the cloud gate, sizing, the kumo-touch exit, BE, the chandelier, the
+disaster stop, R2–R6. On tiers **M5 .. `InpScalpMaxTier`** (default M30;
+H1/H4 already trail from +0.5 x ATR):
+
+1. At **+`InpScalpTP1ATR` x ATR(level TF, at entry)** (default 1.0) the EA
+   closes **`InpScalpClosePct` %** (default 50) of the position.
+2. The runner's stop moves to **entry + `InpScalpLockATR` x ATR** (0.3) — a
+   locked profit, not the 15-point BE.
+3. The runner's chandelier is **armed immediately**, `InpScalpTrailATR`
+   (1.0) behind the peak, instead of waiting for the +2 x ATR spike.
+4. The runner still has the kumo-touch exit, so a trade that becomes a trend
+   still rides it.
+
+The target is measured on the **ATR at entry**, stored per trade, so it does
+not drift while the trade is open (the live BE arming uses the current ATR).
+
+`InpScalpClosePct = 100` turns the layer into a pure fixed-target scalp —
+the whole trade closes at +1 x ATR. `InpScalpCapture = false` restores the
+live exits exactly.
+
+**Unsplittable positions:** at the broker minimum lot (0.01) a 50% close is
+impossible. The EA logs it, skips the partial, and still applies the lock
+and the early trail to the whole position.
+
+**Restart:** the entry ATR is approximated by the current ATR, and a
+position whose volume is below its entry deal volume is treated as already
+banked, so a restart never takes the scalp twice.
+
+### The per-tier report
+
+`OnDeinit` prints one line per tier to the journal (the Strategy Tester
+journal after a test run):
+
+```
+tier | trades | win% | net | PF | avg win | avg loss | MFE<0.5 / 0.5-1 / 1-2 / 2-3 / 3+ ATR | give-backs | scalps banked
+```
+
+- **MFE** is the best open profit the trade reached, in ATRs at entry,
+  taken from the level-TF bar highs/lows checked once a minute.
+- **give-backs** are trades that reached **+1 ATR** and still closed at or
+  below zero — the direct count of missed scalps.
+- **scalps banked** counts trades on which a partial close happened.
+- Only closed trades are counted; anything the tester force-closes at the
+  end of the run is missing.
+
+The report is collected whether capture is on or off, so it is also a
+diagnostic for the live logic.
+
+### How to run the test
+
+Same symbol, same window, same deposit, every-tick modelling:
+
+1. `InpScalpCapture = false` — the baseline. Read the M5/M15/M30 lines:
+   how many trades sit in the 1-2 ATR MFE bucket, and how many give-backs.
+   If give-backs are rare, there is nothing to capture and the answer is
+   "no, not worth it".
+2. `InpScalpCapture = true`, defaults (50% at +1 ATR). Compare **net and PF
+   per tier** and the account's max drawdown against run 1.
+3. `InpScalpClosePct = 100` — pure scalping on the small tiers. If this
+   beats run 2, the small tiers are scalp tiers; if it loses to both, the
+   small tiers earn their keep only on the occasional trend and the scalp
+   is not worth taking.
+4. Optional: `InpScalpTP1ATR` 0.75 / 1.5 to see how sensitive it is.
+
+Judge the H1/H4 lines too: they should be identical across runs 1–3 *only*
+if no small-tier trade changes a later entry. They can differ, because a
+small tier that closes earlier frees its level for a new entry sooner.
+
+### Status & caveats
+
+- **Compiled clean in MetaEditor** (0 errors, 0 warnings) on 2026-09-23.
+  **Not yet backtested** — no result is claimed.
+- **Do not run it beside the live build** on the same account and symbol:
+  the magics differ, so both would trade and exposure would double.
+- **A partial close reduces the win the runner can make.** With 50% banked,
+  a trade that would have run to a big kumo-edge exit earns roughly half
+  of it plus the scalp. Whether the extra scalps outweigh that is exactly
+  what run 1 vs run 2 measures.
+- **Inherited from the live build, unchanged:** the risk sizing basis is
+  2 x ATR while real losers exit at the kumo edge or 8 x ATR, so a losing
+  small-tier trade can cost several times its stated percentage; and the
+  BE/trail modify tests for shorts assume a stop already exists (the
+  disaster stop provides it — with `InpDisasterStopEnabled = false` a short
+  would never get its BE or trail).
