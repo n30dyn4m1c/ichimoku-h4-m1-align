@@ -6404,6 +6404,20 @@ objects, a sub-prefix no other sweep in the indicator matches. Hovering a line
 shows its price, timeframe and swing time. `InpShowLiq` turns the whole
 feature off.
 
+**The last raided level.** `InpLiqLastRaid` (on by default) keeps the most
+recently raided high and the most recently raided low on the chart as a
+**dashed** line in the same colour and width, running from the wick to the
+candle that raided it (on a locked higher timeframe, the chart candle inside
+it that went beyond, or closed beyond for a close raid). "Most recent" is by
+the raid candle; when one candle takes several levels, the furthest one is
+kept, since price reached it last. Only swings inside the lookback count.
+MT5 renders a dashed style **only at width 1**, so at width 1 it is one native
+dashed line; wider, it is a row of short solid segments at `InpLiqWidth`,
+cut to about 12 px on and 8 px off at the chart's zoom (never shorter than one
+bar, never more than 150 dashes) and re-cut when the zoom changes. These are
+`PO3_UR` objects; the tooltip gives the level, timeframe, swing and raid
+times.
+
 **Lighter redraws (same change).** Three costs elsewhere in the indicator were
 cut at the same time, with nothing on the chart changing:
 

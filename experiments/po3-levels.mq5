@@ -87,6 +87,8 @@
 //|  and purple for lows. A line goes the moment price takes its     |
 //|  level out. A swing is fractal-style, 6 candles each side by     |
 //|  default, on the chart's timeframe or on one locked timeframe.   |
+//|  The last raided high and low stay, dashed, from the wick to    |
+//|  the candle that took them out.                                  |
 //|  The UNRAIDED LIQUIDITY section below sets out the rules.        |
 //|                                                                  |
 //|  Verified against the PO3 workbook's Gold sheet, 14 Mar 2025:    |
@@ -95,7 +97,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.42"
+#property version   "1.43"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -810,6 +812,7 @@ input color           InpLiqLowColor  = clrMediumPurple;  // Unraided lows  - co
 input int             InpLiqWidth     = 2;                // Line width (styles other than solid need 1)
 input ENUM_LINE_STYLE InpLiqStyle     = STYLE_SOLID;      // Line style
 input bool            InpLiqSnap      = true;             // Locked higher TF: start at the chart candle with the wick
+input bool            InpLiqLastRaid  = true;             // Show the last raided high and low (dashed, same width)
 
 input group "PO3 levels to show";
 //--- Every grid from 3 up is on by default: the model is the whole nest of
@@ -883,6 +886,10 @@ input color InpCol_19683 = clrCrimson;         // 19683  - colour
 //--- the level and marker sweeps cannot take them, and its own prune takes
 //--- nothing else.
 #define PO3_LIQ     "PO3_U"
+//--- The last raided high and low, drawn dashed. "PO3_UR" cannot be the start
+//--- of an unraided name ("PO3_UH_" / "PO3_UL_"), so neither prune takes the
+//--- other's objects, and OnDeinit's PO3_PREFIX sweep takes both.
+#define PO3_LIQR    "PO3_UR"
 
 //--- The last number of the band that carries the reading. At or below it a
 //--- marker takes one of the two prominent colours; above it the recessive one.
@@ -927,6 +934,16 @@ bool     g_liqDirty  = true;
 datetime g_liqBar    = 0;
 double   g_liqHiNear = DBL_MAX;    // lowest unraided high
 double   g_liqLoNear = -DBL_MAX;   // highest unraided low
+int      g_liqScale  = -1;         // chart zoom the dashes were cut for
+//--- The last raided swing per side, [0] highs and [1] lows: the one whose
+//--- raid is the newest. Set by the scan, drawn by LiqDrawRaided, which
+//--- redraws only when the key (swing, raid, zoom) changes.
+bool     g_rdHas[2];
+datetime g_rdSwing[2];
+datetime g_rdRaid[2];
+double   g_rdLevel[2];
+int      g_rdAge[2];               // source candles since the raid, 0 = live
+string   g_rdKey[2];
 
 bool     g_logged   = false;
 
@@ -1068,6 +1085,9 @@ int OnInit()
    g_lvlLabN  = 0;
    g_liqDirty = true;
    g_liqNamesN = 0;
+   g_liqScale  = -1;
+   g_rdKey[0]  = "";
+   g_rdKey[1]  = "";
    g_pLast    = 0;
    g_pUnknown = true;
    g_pDirty   = true;
@@ -2883,6 +2903,11 @@ void RefreshLevels()
 //|  locked timeframe is higher than the chart's, the line starts at |
 //|  the chart candle inside it that printed the wick, not at the    |
 //|  locked candle's open, so it sits on the wick you can see.       |
+//|                                                                  |
+//|  The LAST RAIDED high and low - of the raided swings, the one    |
+//|  whose raid is newest on each side - stay on the chart, dashed,  |
+//|  from the wick to the candle that raided them, at the same       |
+//|  colour and width (InpLiqLastRaid).                              |
 //+------------------------------------------------------------------+
 ENUM_TIMEFRAMES LiqTF()
   {
@@ -2956,6 +2981,136 @@ void LiqDraw(const datetime t, const double level, const ENUM_TIMEFRAMES tf, con
    g_liqChanged = true;
   }
 
+//--- A raided swing: find the candle that first went beyond it, and keep the
+//--- swing if that raid is the newest seen on its side. When one candle takes
+//--- several levels, the furthest one is kept - it was the last to go.
+void LiqNoteRaid(const MqlRates &r[], const int i, const double level, const bool isHigh)
+  {
+   int j = i - 1;
+   for(; j >= 0; j--)
+     {
+      if(InpLiqRaid == LIQ_RAID_CLOSE && j == 0)
+         continue;
+      double probe = (InpLiqRaid == LIQ_RAID_WICK) ? (isHigh ? r[j].high : r[j].low) : r[j].close;
+      if(isHigh ? (probe > level) : (probe < level))
+         break;
+     }
+   if(j < 0)
+      return;
+   int side = isHigh ? 0 : 1;
+   if(g_rdHas[side])
+     {
+      if(j > g_rdAge[side])
+         return;
+      if(j == g_rdAge[side] && (isHigh ? (level <= g_rdLevel[side]) : (level >= g_rdLevel[side])))
+         return;
+     }
+   g_rdHas[side]   = true;
+   g_rdSwing[side] = r[i].time;
+   g_rdRaid[side]  = r[j].time;
+   g_rdLevel[side] = level;
+   g_rdAge[side]   = j;
+  }
+
+//--- For a raid on a higher timeframe, the chart candle inside it that went
+//--- beyond the level (a wick raid), or the one it closed on (a close raid).
+datetime LiqRaidTime(const datetime t, const ENUM_TIMEFRAMES tf, const double level, const bool isHigh)
+  {
+   if(!InpLiqSnap || PeriodSeconds(_Period) >= PeriodSeconds(tf))
+      return(t);
+   MqlRates c[];
+   int m = CopyRates(_Symbol, _Period, t, t + PeriodSeconds(tf) - 1, c);
+   if(m <= 0)
+      return(t);
+   if(InpLiqRaid == LIQ_RAID_CLOSE)
+      return(c[m - 1].time);
+   for(int k = 0; k < m; k++)
+      if(isHigh ? (c[k].high > level) : (c[k].low < level))
+         return(c[k].time);
+   return(t);
+  }
+
+//--- One dash of a raided line.
+void LiqDash(const string name, const datetime a, const datetime b, const double level,
+             const bool isHigh, const string tip)
+  {
+   if(!ObjectCreate(0, name, OBJ_TREND, 0, a, level, b, level))
+      return;
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT,  false);
+   ObjectSetInteger(0, name, OBJPROP_RAY_LEFT,   false);
+   ObjectSetInteger(0, name, OBJPROP_COLOR,      isHigh ? InpLiqHighColor : InpLiqLowColor);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH,      InpLiqWidth);
+   ObjectSetInteger(0, name, OBJPROP_STYLE,      InpLiqWidth <= 1 ? STYLE_DASH : STYLE_SOLID);
+   ObjectSetInteger(0, name, OBJPROP_BACK,       true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+   ObjectSetString(0, name, OBJPROP_TOOLTIP,     tip);
+  }
+
+//--- The last raided level on one side, from its wick to the candle that
+//--- raided it. MT5 draws a dashed style only at width 1, so at width 1 it is
+//--- one native dashed line; wider, the dashes are separate solid segments of
+//--- InpLiqWidth, cut to ~12 px on and ~8 px off at the chart's zoom (a bar
+//--- is 2^CHART_SCALE px wide) and never fewer than one bar each. A long span
+//--- - a locked higher timeframe on a low chart - stretches the dashes rather
+//--- than drawing more than 150 of them.
+//--- Returns true when anything was drawn or removed.
+bool LiqDrawRaided(const int side, const ENUM_TIMEFRAMES tf, const int scale)
+  {
+   bool   isHigh = (side == 0);
+   string pre    = PO3_LIQR + (isHigh ? "H_" : "L_");
+   string key    = "";
+   if(g_rdHas[side])
+      key = StringFormat("%I64d_%I64d_%d", (long)g_rdSwing[side], (long)g_rdRaid[side], scale);
+   if(key == g_rdKey[side])
+      return(false);
+
+   bool had = (g_rdKey[side] != "");
+   ObjectsDeleteAll(0, pre, -1, -1);
+   g_rdKey[side] = "";
+   if(key == "")
+      return(had);
+
+   double   level = g_rdLevel[side];
+   datetime from  = LiqWickTime(g_rdSwing[side], tf, isHigh);
+   datetime to    = LiqRaidTime(g_rdRaid[side], tf, level, isHigh);
+   int      s     = iBarShift(_Symbol, _Period, from, false);
+   int      e     = iBarShift(_Symbol, _Period, to, false);
+   if(s < 0 || e < 0)
+      return(had);                               // history not loaded: retry next pass
+   string tip = "Raided " + (isHigh ? "high " : "low ") + DoubleToString(level, _Digits) +
+                "  " + TfNameOf(tf) + "  " + TimeToString(g_rdSwing[side], TIME_DATE | TIME_MINUTES) +
+                " -> " + TimeToString(g_rdRaid[side], TIME_DATE | TIME_MINUTES);
+
+   if(InpLiqWidth <= 1 || s <= e)
+     {
+      datetime end = (s <= e) ? from + PeriodSeconds(_Period) : iTime(_Symbol, _Period, e);
+      LiqDash(pre + "0", from, end, level, isHigh, tip);
+     }
+   else
+     {
+      double px   = (double)(1 << (int)MathMax(0, MathMin(5, scale)));
+      int    dash = (int)MathMax(1, MathRound(12.0 / px));
+      int    gap  = (int)MathMax(1, MathRound(8.0 / px));
+      int    span = s - e;
+      if(span > 150 * (dash + gap))
+        {
+         double f = (double)span / (150.0 * (dash + gap));
+         dash = (int)MathCeil(dash * f);
+         gap  = (int)MathCeil(gap * f);
+        }
+      int n = 0;
+      for(int k = s; k > e; k -= dash + gap)
+        {
+         int b = (int)MathMax(e, k - dash);
+         LiqDash(pre + IntegerToString(n++), iTime(_Symbol, _Period, k),
+                 iTime(_Symbol, _Period, b), level, isHigh, tip);
+        }
+     }
+   g_rdKey[side] = key;
+   return(true);
+  }
+
 //--- Walk from the newest candle back, carrying the furthest price traded
 //--- since. A swing is unraided when nothing newer has gone beyond it, so one
 //--- pass settles every swing at once.
@@ -2973,6 +3128,8 @@ void LiqScan(const MqlRates &r[], const int n, const ENUM_TIMEFRAMES tf, const b
          bool   raided = isHigh ? (reach > level) : (reach < level);
          if(!raided)
             LiqDraw(r[i].time, level, tf, isHigh);
+         else if(InpLiqLastRaid)
+            LiqNoteRaid(r, i, level, isHigh);
         }
 
       if(InpLiqRaid == LIQ_RAID_CLOSE && i == 0)
@@ -2996,7 +3153,9 @@ bool RefreshLiquidity()
    if(bar == 0)
       return(false);                             // history not ready
 
-   if(!g_liqDirty && bar == g_liqBar)
+   //--- a zoom change re-cuts the dashes, so it opens the gate too
+   int scale = (int)ChartGetInteger(0, CHART_SCALE);
+   if(!g_liqDirty && bar == g_liqBar && scale == g_liqScale)
      {
       if(InpLiqRaid == LIQ_RAID_CLOSE)
          return(false);                          // a close raid needs a new candle
@@ -3018,6 +3177,8 @@ bool RefreshLiquidity()
    g_liqChanged = false;
    g_liqHiNear  = DBL_MAX;
    g_liqLoNear  = -DBL_MAX;
+   g_rdHas[0]   = false;
+   g_rdHas[1]   = false;
    if(InpLiqHighs)
       LiqScan(r, n, tf, true, left, right);
    if(InpLiqLows)
@@ -3040,6 +3201,13 @@ bool RefreshLiquidity()
       g_liqNames[k] = g_liqKeep[k];
    g_liqNamesN = g_liqKeepN;
 
+   //--- with InpLiqLastRaid off nothing is noted, so both sides clear
+   if(LiqDrawRaided(0, tf, scale))
+      g_liqChanged = true;
+   if(LiqDrawRaided(1, tf, scale))
+      g_liqChanged = true;
+
+   g_liqScale = scale;
    g_liqBar   = bar;
    g_liqDirty = false;
    return(g_liqChanged);
@@ -3089,4 +3257,4 @@ int OnCalculate(const int rates_total,
 
    return(rates_total);
   }
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
