@@ -131,8 +131,10 @@ This EA is provided **for educational and research purposes only**. Trading leve
 
 ## What It Does
 
-Each EA trades a symbol (defaults to `GOLDm#`, configurable) through **five
-tiers stacked bottom-up from M1**. A tier opens only when every timeframe
+Each EA trades a symbol (defaults to `GOLDm#`, configurable) through **four
+tiers (M15, M30, H1, H4) stacked bottom-up from M1**. M1 and M5 form the
+foot of every chain but do not trade; the M5 tier was dropped on
+2026-09-23 (`InpM5Tier`, see below). A tier opens only when every timeframe
 from M1 up to that tier is aligned in one direction — Ichimoku price *and*
 Chikou Span confirmation on each — and only when a **bias timeframe grants
 the direction**: H4 primarily, with H1 standing in for the lower tiers while
@@ -142,7 +144,7 @@ along the way. Every trade risks a fixed percentage of *actual equity*, and
 that percentage steps down as the account grows.
 
 **Highlights:**
-- ✅ Five bottom-up tiers (M5 / M15 / M30 / H1 / H4) — each one trades its own aligned chain, so a clean fast chain no longer waits on the slow timeframes
+- ✅ Four bottom-up tiers (M15 / M30 / H1 / H4; the M5 tier is switchable and off by default) — each one trades its own aligned chain, so a clean fast chain no longer waits on the slow timeframes
 - ✅ Bias gate — H4 grants direction to the whole stack, with an H1 stand-in so an undecided H4 doesn't freeze the lower tiers; the H4 tier is additionally gated by D1
 - ✅ Per-timeframe Ichimoku alignment (trend + Chikou confirmation) on every rung of the chain
 - ✅ Touch-based kumo exit — the trade is cut when price reaches the tier's cloud edge, without waiting for a candle to close
@@ -294,6 +296,44 @@ SHA is stored in `/tmp/last_deploy_sha` (override with `STATE_FILE=`).
 > in MetaEditor — auto-deploy only drops the updated source into
 > `MQL5/Experts/`; it cannot reload a running EA.
 
+#### The VPS host (how the live build actually runs)
+
+The live terminal runs on an Ubuntu VPS under Wine, set up like this:
+
+- **Portable install:** `~/.wine/drive_c/Program Files/XM Global MT5/`,
+  with the EA at `MQL5/Experts/ichimoku-h4-m1-vps-ea.{mq5,ex5}`, attached to
+  a GOLDm# chart in the `ichimoku-live` profile.
+- **systemd:** `mt5.service` starts `terminal64.exe /profile:ichimoku-live`
+  on the virtual display `:1` (`xvfb.service`), with `Restart=always`.
+  `x11vnc.service` serves that display on `localhost:5900`; reach it through
+  an SSH tunnel (`ssh -L 5900:localhost:5900 …`).
+- **The auto-update trap, and the fix.** When MetaTrader auto-updates, the
+  terminal launches its LiveUpdate helper and then exits. With systemd's
+  default `KillMode=control-group`, that exit takes the helper down with it,
+  so the update never lands and the service restart-loops every ~2 minutes
+  with the EA never loading. That happened from **2026-09-18 to 2026-09-23**
+  (build 6182), and the EA did not run for five days. The fix is a drop-in
+  so systemd only stops the main process:
+
+  ```bash
+  sudo mkdir -p /etc/systemd/system/mt5.service.d
+  printf '[Service]\nKillMode=process\n' | sudo tee /etc/systemd/system/mt5.service.d/override.conf
+  sudo systemctl daemon-reload
+  systemctl show mt5 -p KillMode      # -> KillMode=process
+  ```
+
+  Applied on the live VPS on 2026-09-23. **If the EA goes quiet, first
+  check the terminal log** (`logs/YYYYMMDD.log`, UTF-16) for `LiveUpdate
+  start` repeating every couple of minutes. To clear a stuck update by
+  hand: `sudo systemctl stop mt5`, start `terminal64.exe /portable
+  /profile:ichimoku-live` on `DISPLAY=:1` so it can update itself, confirm
+  `terminal64.exe` has a new date, then `pkill` it and `sudo systemctl start
+  mt5`.
+- **Deploying without MetaEditor on the VPS:** back up the old files, copy
+  the new `.mq5` over with `scp`, and copy a `.ex5` compiled from the same
+  source by a terminal on the **same MT5 build** (so the VPS loads it
+  directly). Then restart the service or re-attach the EA.
+
 > **Migrating from an older build.** The filename never changes, so an
 > existing `deploy.sh` / `auto-deploy.sh` setup picks a new build up with no
 > changes — but the magic number has moved twice: `20260846`/`20260847`
@@ -386,19 +426,32 @@ so the "only notify on change" behavior works across the ephemeral runners.
 ### The bottom-up tier stack
 
 The stack has six timeframes — **M1, M5, M15, M30, H1, H4** — and five
-*tradable tiers*. A tier is named after its top timeframe, and it opens only
+*tiers*, four of which trade by default (M5 is off since 2026-09-23). A tier is named after its top timeframe, and it opens only
 when the **whole chain from M1 up to that timeframe** is aligned in one
 direction:
 
 | Tier | Chain that must align | Notes |
 |------|-----------------------|-------|
-| **M5** | M1 + M5 | Fastest tier |
+| **M5** | M1 + M5 | **Off by default** (`InpM5Tier = false`) — dropped 2026-09-23, see below |
 | **M15** | M1 + M5 + M15 | |
 | **M30** | M1 + M5 + M15 + M30 | Default ceiling for the H1 stand-in bias |
 | **H1** | M1 + M5 + M15 + M30 + H1 | |
 | **H4** | M1 + M5 + M15 + M30 + H1 + H4 | Additionally gated by the D1 bias |
 
 **M1 never trades on its own** — it is only the foot of the chain.
+
+**Why M5 is off.** Real-tick backtests on GOLDm#
+([notes §47–48](experiments/EXPERIMENTAL-NOTES.md)) found the M5 tier was
+about half of all trades at a profit factor of ~1.1 — the most spread paid
+for the thinnest edge. Without it, the account's profit factor rose from
+1.38 to 1.52 (Jan–Sep 2026) and from 1.88 to 2.03 (2025, out of sample) at
+the same net profit, on 40–47% fewer trades. Tightening M5 instead (H4-only
+bias, H1 confirmation, a full M5 cloud check, a cloud-distance cap, a spread
+cap) never beat dropping it. Scalping the small tiers with partial or fixed
+targets was also tested and rejected: net profit stayed flat while drawdown
+rose. `InpM5Tier = true` restores the tier. Since M5 was the only tier whose
+cloud gate checked M1 with the full current-and-future rule, that rule now
+applies to no tier.
 
 This is the inverse of the retired top-down builds. There, one trade opened
 only when *everything* down to M1 agreed, so a single disagreeing high
@@ -438,8 +491,8 @@ An aligned chain is *permission to consider* a trade; the **bias** decides
 whether it is allowed and in which direction.
 
 **H4 is the bias for the whole stack** (`InpH4Bias`, default on): H4 bullish
-allows buys only, H4 bearish sells only. On its own that rule freezes all
-five tiers whenever H4 is unaligned, M5 included — and H4 spends a large
+allows buys only, H4 bearish sells only. On its own that rule freezes every
+tier whenever H4 is unaligned — and H4 spends a large
 share of its time neither clearly above nor clearly below its own
 tenkan/kijun/cloud, so a perfectly clean M1→M30 chain produced nothing at
 all during those stretches.
@@ -560,7 +613,7 @@ The percentage steps down as the account grows, across three regimes:
 
 | Tier | Regime 1 — equity < `InpRiskTier2At` ($7,000) | Regime 2 — $7,000 to $13,000 | Regime 3 — equity ≥ `InpRiskTier3At` ($13,000) |
 |------|------------------------------------------------|------------------------------|------------------------------------------------|
-| M5 | 1.0% | 0.5% | 0.1% |
+| M5 *(unused while `InpM5Tier = false`)* | 1.0% | 0.5% | 0.1% |
 | M15 | 1.0% | 0.5% | 0.1% |
 | M30 | 5.0% | 2.5% | 0.2% |
 | H1 | 10.0% | 5.0% | 1.0% |
@@ -713,7 +766,7 @@ upward, and the tier is named after the highest timeframe in its chain.
 | Index | Timeframe | Role |
 |-------|-----------|------|
 | 0 | M1 | Foot of every chain — never trades on its own |
-| 1 | M5 | Tier 1 |
+| 1 | M5 | Tier 1 — rung of every chain, **not traded by default** (`InpM5Tier`) |
 | 2 | M15 | Tier 2 |
 | 3 | M30 | Tier 3 — default ceiling for the H1 stand-in bias |
 | 4 | H1 | Tier 4, and the **stand-in bias** timeframe |
@@ -778,7 +831,10 @@ timeframe from the anchor down to M1 must agree before one trade opens:
   positions filtered by magic number, using the position comment
   (`Exp Buy M15`, `Exp Sell M30`, …) to tell tiers apart. A terminal restart,
   VPS reboot, or a position closed manually mid-trade therefore resumes on
-  the right tier with no stale state.
+  the right tier with no stale state. **Caution for any future build that
+  partially closes:** MT5 empties the position comment on a partial close,
+  so comment-only identification loses the tier. Match on the position
+  identifier as well, the way the scalp-capture experiment (§47) does.
 - **Per-symbol M1 gating:** the whole loop runs at most once a minute, and
   each symbol re-evaluates only on a newly closed M1 bar of its own.
 - **Chikou Span handling:** the Chikou value is read directly from `close[1]`

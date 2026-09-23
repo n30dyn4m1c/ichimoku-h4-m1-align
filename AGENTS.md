@@ -34,6 +34,15 @@ The pre-change builds are archived as the `-archived20260923` pair.
 Unless the user explicitly states that a VPS file should be updated, leave
 them untouched — even when a change applies to all other EAs.
 
+## The VPS host
+
+The live terminal runs under Wine as `mt5.service` on the user's VPS; the
+README section "The VPS host" documents the layout, the deploy method and
+the MetaTrader auto-update restart loop (fixed with `KillMode=process` on
+2026-09-23). Treat anything on the VPS as production: back up before
+replacing a file, and never restart or stop the service without the user
+asking.
+
 ## MT5 desktop EA file — editable
 
 - `ichimoku-h4-m1-mt5pc-ea.mq5` — the single desktop build, the same
