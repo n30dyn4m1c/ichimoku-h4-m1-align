@@ -5592,3 +5592,123 @@ reproduces the live build to the cent ($13,463.81).
   archived as the `-archived20260923` pair.
 - Do not run it beside the live build on the same account and symbol.
 
+
+---
+
+## 49. M1+M2 kihon / PO3 range scalper
+
+**File:** `experimental-m1m2-kihon-po3-scalper-ea.mq5`
+**Magic number:** `20260876`
+
+A standalone scalper, not a fork of the live build. It uses the **top-down**
+model: one trade, only when every timeframe agrees. The new parts are *when*
+it may trade (kihon suchi times of the day) and *where* it exits (a PO3
+number). Three gates, cheapest first:
+
+| | Gate | Question |
+|---|---|---|
+| 1 | **TIME** | Is the day's H1, M30 or M15 count on a kihon number? |
+| 2 | **STRUCTURE** | Are M1 and M2 clear on price and chikou, and do M5–H4 agree? |
+| 3 | **PRICE** | Is there room inside the PO3 range to the next level? |
+
+### Gate 1 — kihon times on H1, M30 and M15
+
+Each timeframe is counted from the **day open** (the D1 bar, so the broker's
+own rollover). The counting is §38's, ported from `po3-levels.mq5`: inclusive,
+so the candle at the open is candle 1, with `Bars()` over `[day open, now]`.
+The gate is open while **any** enabled timeframe's count is within
+`InpKihonTol` of a kihon number **that a trading day can reach on that
+timeframe**:
+
+| TF | candles a day | numbers used |
+|---|---|---|
+| H1 | ~24 | 9, 17 |
+| M30 | ~48 | 9, 17, 26, 33, 42 |
+| M15 | ~96 | 9, 17, 26, 33, 42, 51, 65, 76 |
+
+The reach cap is the general form of §38's "26 trap". Without it, a tolerance
+would let the gate open near the end of the day on a number the count never
+gets to.
+
+With the default `InpKihonTol = 0` the gate is open for the candle carrying
+the number and nothing else: one hour for each H1 number, 30 minutes for
+each M30 one, 15 minutes for each M15 one. Some of these overlap, because
+M30 candle 17 and H1 candle 9 both cover 08:00–08:30. On a midnight-rollover
+broker the open windows are roughly:
+
+- H1: 08:00–09:00 and 16:00–17:00
+- M30: 04:00, 08:00, 12:30, 16:00 and 20:30, 30 minutes each
+- M15: 02:00, 04:00, 06:15, 08:00, 10:15, 12:30, 16:00 and 18:45, 15 minutes each
+
+After removing overlaps that is about 4½ hours a day. Each toggle (`InpKihonH1/M30/M15`) removes one
+timeframe's windows, so their effects can be tested separately. An unknown
+count (history still loading) does not open the gate.
+
+The gate applies to **entries only**. A running trade has its SL and TP on the
+order, and the broker closes it at any hour.
+
+### Gate 2 — M1 + M2 trigger, top-down confirmation
+
+The family's `CheckAlign`, unchanged, on M1, M2, M5, M15, M30, H1 and H4, all in
+the same direction. The last closed close must be beyond tenkan, kijun and the
+whole cloud, and the chikou must be beyond that bar's high or low and beyond
+tenkan, kijun and the cloud as they stood there. M1 is checked first because it
+is the cheapest to fail. `InpAlignTop` sets the highest timeframe that has to
+agree. `H4` is the full M1-to-H4 alignment, and `M2` leaves only the scalp
+trigger.
+
+Unlike §39, **M2 is required**. The build is defined by its M1+M2 trigger, so a
+broker without an M2 feed fails init with a journal line instead of quietly
+trading a different chain.
+
+### Gate 3 — the PO3 range
+
+The range is the cell between two adjacent multiples of `3^InpPO3Power`, using
+the indicator's scale (`InpPO3Scale`, 1 = whole numbers). At the default power
+2 that is a **9-dollar cell on gold**.
+
+- **Target:** the next level strictly beyond the fill price in the trade's
+  direction, so a price sitting on a level targets the next one. The TP is
+  placed `InpTPBufferPips` (5) **in front of** it.
+- **Stop:** the level one step behind, plus `InpSLBufferPips` (10) beyond it.
+  It is widened to `InpMinSLPips` (20) when price is sitting on that level.
+- **Veto:** skipped when the reward is under `InpMinTPPips` (20) or reward:risk
+  under `InpMinRR` (1.0). A skip is journalled with the reason and the kihon
+  reading.
+
+At `InpMinRR = 1.0` this effectively means longs from the lower part of the
+cell and shorts from the upper part: the trade must have more room ahead than
+behind. The journal labels the target level with its real power, the same
+number the indicator shows (e.g. `4374.00 (2187)`).
+
+### Position and risk
+
+- **One position per symbol.** Both levels ride on the order, and the EA never
+  trails, never moves the stop and has no break-even. Its only upkeep is
+  re-attaching a missing stop. After a restart, that stop is the position's own
+  or, if it is already gone, the range stop rebuilt from the open price.
+- **Sizing:** `InpRiskPct` (1%) of equity against **this trade's** stop
+  distance. That distance varies with where price sits in the cell, so the
+  money lost on a stop-out is the same either way.
+
+### What it deliberately does not have
+
+No robustness pack, no bias ladder, no cloud-bias gate, no kumo-touch exit, no
+trail and no margin cap. There is also no limit on trades per kihon window: after a
+TP or SL the EA can re-enter on the next minute if all three gates still pass.
+
+### Status & caveats
+
+- **Compiled clean in MetaEditor** (0 errors, 0 warnings) on 2026-09-23.
+  **Not yet backtested.**
+- **The defaults are a starting point, not a result.** The power (cell size),
+  both buffers, the minimum stop and the minimum rr all interact. A 9-dollar
+  cell with a 1.0 rr floor admits longs only in the bottom ~3.75 dollars
+  of the cell: a target of $4.75–$8.50 against a stop of $2–$4.75. Try power 3 (27) before concluding the idea does not work.
+- **Full H4-to-M1 agreement plus about 4½ hours a day plus a room veto is
+  very selective.** Expect few trades. `InpAlignTop` and `InpKihonTol` are the
+  first two settings to loosen if a test produces too few trades to read.
+- **Minimum lot versus a small account.** On GOLDm# the 0.10 minimum lot
+  against a 10-dollar stop risks ~$100. A $100 test account cannot size down to
+  1%, so test on a larger deposit to see the idea's real effect.
+- Do not run it beside the live build on the same account and symbol.
