@@ -693,10 +693,11 @@ switching.
   0.1 oz of gold). XM allows up to **8 live accounts per profile**, with free
   instant transfers between them. Check the GOLD contract size and minimum
   volume under Market Watch → Specification. The plan assumes 0.1 lot = 0.1 oz.
-- **EA:** the live VPS build, unchanged, on every account. Set the `Symbols`
-  input to XM's gold symbol (the default `GOLDm#` is another broker's name, and
-  the EA will not start with it). The same magic number on every account is
-  fine, since accounts never see each other's positions.
+- **EA:** the live VPS build, unchanged, on every account. Its default
+  `Symbols = GOLDm#` is already XM's gold symbol on Micro accounts (the
+  backtests ran on `XMGlobal-MT5 5`), so no input needs changing. The same
+  magic number on every account is fine, since accounts never see each other's
+  positions.
 - **VPS:** one MT5 terminal per account, each installed in its own folder,
   about 300–500 MB of RAM each (about 4 GB for 8). XM's VPS is free with $5k
   of equity and 5 standard lots a month, counted across accounts under one
