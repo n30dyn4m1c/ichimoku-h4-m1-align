@@ -1,8 +1,9 @@
 //+------------------------------------------------------------------+
 //| EXPERIMENT — LIQUIDITY TARGET (notes §53, magic 20260878)         |
 //| The live VPS build (ichimoku-h4-m1-vps-ea.mq5, 2026-09-23, M5     |
-//| tier off) byte for byte, plus ONE addition: every entry (the      |
-//| breakout — the bottom-up chain aligning) gets a broker-side TAKE  |
+//| tier off) byte for byte, plus ONE addition: every entry (a        |
+//| breakout — price and chikou out of the cloud up the chain) gets a |
+//| broker-side TAKE                                                  |
 //| PROFIT at an UNRAIDED LIQUIDITY level, the same swings the        |
 //| po3-levels indicator draws (§52):                                 |
 //|   * a swing high/low is fractal-style, InpLiqLeft candles on the  |
@@ -11,14 +12,17 @@
 //|     unraided while no later wick has traded BEYOND it.            |
 //|   * a long targets an unraided HIGH above price, a short an       |
 //|     unraided LOW below it.                                        |
-//|   * the target timeframe is the HIGHEST one that is CLEAR: the    |
-//|     timeframes are walked from InpLiqMaxTF down to the tier's own |
-//|     TF (or M1, InpLiqNotBelowTier = false), and the first one     |
-//|     holding an unraided level at least InpLiqMinATR x ATR(tier TF)|
-//|     beyond the entry wins. On that TF the NEAREST such level is   |
-//|     the target.                                                   |
+//|   * the target timeframe is the HIGHEST CLEAR one in the Ichimoku |
+//|     stack. A timeframe is CLEAR when it has BROKEN OUT: its last  |
+//|     closed price AND its chikou are both beyond the cloud in the  |
+//|     trade's direction. The stack is climbed from M1 (M1, M5, M15, |
+//|     M30, H1, H4) and stops at the first one that is not clear —   |
+//|     e.g. M1, M5, M15 clear but M30 in the cloud: M15 is the       |
+//|     highest clear TF. Its NEAREST unraided level beyond the entry |
+//|     is the target. The traded tier's chain is always clear, so    |
+//|     the target TF is the tier's TF or higher.                     |
 //|   * TP = the level, pulled InpLiqTPOffsetPoints toward price.     |
-//|   * no clear target on any TF: the trade opens without a TP as   |
+//|   * no unraided level on that TF: the trade opens without a TP as|
 //|     the live build does (InpLiqNeedTarget = true skips it).       |
 //| The target is ADDITIVE: kumo-touch exit, BE, chandelier and the   |
 //| disaster stop all run as before, so it can only shorten a trade.  |
@@ -239,14 +243,11 @@ input double InpDisasterATRMult     = 8.0;    // Disaster stop distance = ATR(le
 
 input group  "Liquidity Target (take profit at unraided liquidity)"
 input bool            InpLiqTarget         = true;       // Set a TP at an unraided liquidity level on entry (false = live build)
-input ENUM_TIMEFRAMES InpLiqMaxTF          = PERIOD_D1;  // Highest timeframe searched for a target (walked down from here)
-input bool            InpLiqNotBelowTier   = true;       // Never target a timeframe below the tier's own TF
 input int             InpLiqLeft           = 6;          // Swing: candles to the left (po3-levels default)
 input int             InpLiqRight          = 6;          // Swing: candles to the right (po3-levels default)
 input int             InpLiqLookback       = 100;        // Candles of history searched per timeframe (po3-levels default)
-input double          InpLiqMinATR         = 1.0;        // A target must be at least this x ATR(tier TF) beyond the entry
 input int             InpLiqTPOffsetPoints = 0;          // Pull the TP this many points in front of the level
-input bool            InpLiqNeedTarget     = false;      // Skip the entry when no timeframe has a clear target
+input bool            InpLiqNeedTarget     = false;      // Skip the entry when the highest clear TF has no unraided level
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
@@ -895,12 +896,6 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
 // live candle counts, so a level taken out this minute is gone.
 //==============================================================
 
-// Walk-down order for the target search, highest first.
-#define LIQ_TFS 8
-ENUM_TIMEFRAMES liqTfs[LIQ_TFS] = { PERIOD_W1, PERIOD_D1, PERIOD_H4, PERIOD_H1,
-                                    PERIOD_M30, PERIOD_M15, PERIOD_M5, PERIOD_M1 };
-string          liqTfName[LIQ_TFS] = { "W1", "D1", "H4", "H1", "M30", "M15", "M5", "M1" };
-
 bool LiqIsSwing(const MqlRates &r[], const int i, const bool isHigh,
                 const int left, const int right)
 {
@@ -950,40 +945,66 @@ double LiqNearest(string sym, ENUM_TIMEFRAMES tf, int dir, double price, double 
    return best;
 }
 
-// The take profit for a new entry: the highest timeframe (InpLiqMaxTF down
-// to the tier's TF, or M1) that holds a clear unraided level wins, and its
-// nearest such level is the target. 'tgt' names it for the journal. Returns
-// 0.0 when no timeframe is clear or the TP would break the broker distance.
+// Breakout test for the target search: has this timeframe broken out of
+// its cloud the trade's way? Price (last closed bar) beyond the current
+// cloud AND chikou (that close, plotted Kijun bars back) beyond the cloud
+// there — the cloud half of CheckAlign, without tenkan/kijun.
+bool CloudBreakout(int s, int tfIdx, int dir)
+{
+   int sh      = 1;
+   int chShift = sh + Kijun;
+
+   MqlRates rt[];
+   ArraySetAsSeries(rt, true);
+   if(CopyRates(syms[s], tfs[tfIdx], sh, 1, rt) <= 0) return false;
+   double closeP = rt[0].close;
+
+   double aNow[1], bNow[1], aCh[1], bCh[1];
+   if(CopyBuffer(ich[s][tfIdx], 2, sh,      1, aNow) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 3, sh,      1, bNow) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 2, chShift, 1, aCh)  <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 3, chShift, 1, bCh)  <= 0) return false;
+
+   if(dir == 1)
+      return closeP > MathMax(aNow[0], bNow[0]) && closeP > MathMax(aCh[0], bCh[0]);
+   return closeP < MathMin(aNow[0], bNow[0]) && closeP < MathMin(aCh[0], bCh[0]);
+}
+
+// The highest clear timeframe: climb the stack from M1 while each timeframe
+// has broken out the trade's way; the last one that has is the answer.
+// Never below the traded tier — its chain passed CheckAlign, which already
+// requires the breakout on every timeframe up to it.
+int HighestClearTF(int s, int lvl, int dir)
+{
+   int top = lvl + 1;
+   for(int t = 0; t < TFS; t++)
+   {
+      if(!CloudBreakout(s, t, dir)) break;
+      if(t > top) top = t;
+   }
+   return top;
+}
+
+// The take profit for a new entry: the nearest unraided level on the
+// highest clear timeframe, beyond the broker's minimum distance. 'tgt'
+// names it for the journal. Returns 0.0 when that timeframe has none.
 double LiqTargetTP(int s, int lvl, int dir, string &tgt)
 {
-   tgt = "none";
-   string sym   = syms[s];
-   double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
-                             : SymbolInfoDouble(sym, SYMBOL_BID);
-   double a[1];
-   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return 0.0;
+   int    tf     = HighestClearTF(s, lvl, dir);
+   string sym    = syms[s];
+   double price  = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                              : SymbolInfoDouble(sym, SYMBOL_BID);
+   double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
+   double offset = InpLiqTPOffsetPoints * point;
+   double stops  = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
 
-   double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
-   double stops   = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
-   int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   double offset  = InpLiqTPOffsetPoints * point;
-   double minDist = MathMax(InpLiqMinATR * a[0], stops + offset + point);
+   tgt = tfName[tf] + " none";
+   double level = LiqNearest(sym, tfs[tf], dir, price, stops + offset + point);
+   if(level == 0.0) return 0.0;
 
-   int maxSec  = PeriodSeconds(InpLiqMaxTF);
-   int tierSec = PeriodSeconds(tfs[lvl + 1]);
-   for(int t = 0; t < LIQ_TFS; t++)
-   {
-      int sec = PeriodSeconds(liqTfs[t]);
-      if(sec > maxSec) continue;
-      if(InpLiqNotBelowTier && sec < tierSec) break;
-
-      double level = LiqNearest(sym, liqTfs[t], dir, price, minDist);
-      if(level == 0.0) continue;
-
-      tgt = liqTfName[t] + " " + DoubleToString(level, digits);
-      return NormalizeDouble((dir == 1) ? level - offset : level + offset, digits);
-   }
-   return 0.0;
+   tgt = tfName[tf] + " " + DoubleToString(level, digits);
+   return NormalizeDouble((dir == 1) ? level - offset : level + offset, digits);
 }
 
 //==============================================================
@@ -1399,9 +1420,10 @@ void OnTick()
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
 
-            // Liquidity target: the highest clear timeframe's nearest
-            // unraided level. With InpLiqNeedTarget, no target = no entry
-            // on this tier (a lower tier may still find one).
+            // Liquidity target: the nearest unraided level on the highest
+            // timeframe that has broken out of its cloud. With
+            // InpLiqNeedTarget, no target = no entry on this tier (a lower
+            // tier may still find one).
             if(InpLiqTarget)
             {
                topTP = LiqTargetTP(s, l, st, topTgt);

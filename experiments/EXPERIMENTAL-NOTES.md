@@ -6437,19 +6437,24 @@ an unraided liquidity level.**
   included, so a level taken out this minute is no longer a target.
 - A **long targets an unraided high** above price, a **short an unraided low**
   below it — the resting stops the move is expected to run into.
-- **The highest clear timeframe wins.** The timeframes W1, D1, H4, H1, M30,
-  M15, M5, M1 are walked from `InpLiqMaxTF` (**D1** by default) downward, and
-  stop at the tier's own TF (`InpLiqNotBelowTier`; off lets an M15 trade fall
-  to M5/M1 swings). A timeframe is **clear** when it holds an unraided level
-  in the trade's direction at least `InpLiqMinATR` (1.0) x ATR(tier TF) beyond
-  the entry — and never inside the broker's minimum stop distance. The first
-  clear timeframe supplies the target; on it, the **nearest** qualifying level
-  is used.
+- **The highest clear timeframe supplies it.** A timeframe is **clear** when
+  it has **broken out**: its last closed price *and* its chikou (that close,
+  plotted Kijun bars back) are both beyond the cloud in the trade's
+  direction. The stack M1, M5, M15, M30, H1, H4 is climbed from M1 and stops
+  at the first timeframe that is not clear. Example: M1, M5 and M15 have
+  broken out but M30 is still in its cloud, so M15 is the highest clear
+  timeframe and the **nearest** unraided M15 level beyond the entry is the
+  target. The test is the cloud half of `CheckAlign` (no tenkan/kijun), and
+  the traded tier's chain passed `CheckAlign`, so the target timeframe is
+  always the tier's own or higher — an M15 trade whose M30 and H1 have also
+  broken out targets H1 liquidity. The level only has to clear the broker's
+  minimum stop distance.
 - **TP** = the level, pulled `InpLiqTPOffsetPoints` (0) toward price. At 0 the
   TP fills when price *matches* the level, a hair before the raid itself
   (which needs price to trade beyond).
-- **No clear timeframe:** by default the trade opens without a TP, exactly as
-  the live build does. `InpLiqNeedTarget = true` skips that tier instead, and
+- **No unraided level on that timeframe** (price is beyond every swing in
+  the lookback): by default the trade opens without a TP, exactly as the
+  live build does. Lower timeframes are not tried. `InpLiqNeedTarget = true` skips that tier instead, and
   the tier loop goes on to the next lower tier, which may then open — so with
   it on, the consolidation rule can open a smaller tier where live would have
   opened a larger one.
@@ -6465,7 +6470,7 @@ all still run, so the TP can only shorten a trade. The live build calls
 `PositionModify(ticket, sl, 0)`, which would strip a TP on the first BE,
 trail or disaster-stop repair; here every modify passes the position's
 current TP back in (the same fix §44 needed). The entry journal line and push
-now end in `target <TF> <level>` or `target none`.
+now end in `target <TF> <level>` or `target <TF> none`.
 
 `InpLiqTarget = false` reproduces the live build exactly.
 
