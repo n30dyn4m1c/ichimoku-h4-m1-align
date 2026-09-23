@@ -6542,3 +6542,41 @@ longer read for entries. The parent's header comment is kept below a new
 experiment banner.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
+
+## 55. M5-base, keep tiers — a bigger tier no longer closes the smaller ones
+
+**File:** `experimental-bottomup-stack-m5-base-keep-tiers-vps-ea.mq5`
+**Magic number:** `20260880`
+
+A fork of the M5-base stack (§54). The live family runs **one position per
+symbol**: when several tiers align only the largest opens, and any smaller
+tier still running is closed ("superseded"). This build drops that
+consolidation. With `InpKeepLowerTiers` on (the default):
+
+- **Every aligned flat tier opens on the same bar.** If M15 and M30 align
+  together, both open, each with its own risk % and its own comment.
+- **Nothing is superseded.** A running M15 trade keeps going when M30 (or
+  H1, H4) opens, and leaves only through its own exits: cloud touch on M15,
+  break-even, trail or disaster stop.
+- A tier that is already in a trade still does not open a second one; it is
+  one position per tier, so at most four per symbol (M15, M30, H1, H4).
+
+**Exposure.** Risk is still sized per tier, but the positions now stack: in
+the tier-1 regime (equity below $7000) M15 1% + M30 5% + H1 10% + H4 20% can
+all be open at once, 36% of equity against the 2 × ATR reference distance.
+The per-order margin cap (80% of free margin) is applied to each order in
+turn, so later orders on a busy bar may be cut down.
+
+**Account type.** It needs a **hedging** account: on a netting account the
+tiers would merge into one position. Tiers can also end up on opposite sides
+(for example, a lower tier opening on the H1 stand-in against an older H4
+trade after H4 goes flat). The live build could do this too, but only while
+no higher tier fired.
+
+`InpKeepLowerTiers = false` reproduces §54 exactly. Everything else (entries,
+cloud gate, bias, risk %, exits) is §54's.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
+The questions for the tester: whether the lower-tier trades that used to be
+cut at supersede add profit or just add drawdown on top of the higher tier,
+and how deep the drawdown goes with 36% stacked.
