@@ -28,16 +28,7 @@
 //| disaster stop all run as before, so it can only shorten a trade.  |
 //| Every PositionModify now carries the TP back in (the live build  |
 //| passes 0, which would strip it on the first BE or trail move).    |
-//| COUNTER TRADE (InpCtrEnabled): the breakout's target level is    |
-//| watched; once a wick trades BEYOND it (the liquidity is raided) a |
-//| trade opens the OTHER way, targeting the nearest unraided level   |
-//| InpCtrTFsLower (2) timeframes below the raided one on the ladder  |
-//| M1, M5, M15, M30, H1, H4 — an M30 high raided: sell to the nearest|
-//| unraided M5 low. Tight SL InpCtrSLPoints beyond the raid extreme, |
-//| InpCtrRiskPct risk, fixed SL/TP, needs InpCtrMinRR. One counter   |
-//| per symbol; comment "Exp Ctr ...". Needs a HEDGING account.       |
-//| InpLiqTarget = false and InpCtrEnabled = false reproduce the live |
-//| build exactly.                                                    |
+//| InpLiqTarget = false reproduces the live build exactly.           |
 //+------------------------------------------------------------------+
 //| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
 //| The live VPS build since 2026-08-23. The M1-strict cloud-bias     |
@@ -258,14 +249,6 @@ input int             InpLiqLookback       = 100;        // Candles of history s
 input int             InpLiqTPOffsetPoints = 0;          // Pull the TP this many points in front of the level
 input bool            InpLiqNeedTarget     = false;      // Skip the entry when the highest clear TF has no unraided level
 
-input group  "Counter Trade (fade the raid, two timeframes lower)"
-input bool   InpCtrEnabled        = true;   // After the breakout's target is raided, trade back the other way
-input int    InpCtrTFsLower       = 2;      // Counter target: unraided liquidity this many timeframes below the raided one
-input int    InpCtrSLPoints       = 100;    // Tight SL: this many points beyond the raid's extreme
-input double InpCtrRiskPct        = 1.0;    // Risk per counter trade, % of equity, on the SL distance
-input double InpCtrMinRR          = 1.0;    // Skip the counter unless target distance >= this x SL distance
-input int    InpCtrExpiryBars     = 12;     // Watch for the raid for this many bars of the raided TF after entry
-
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
 input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the rejection candle must sweep
@@ -304,19 +287,6 @@ bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-// Counter trade: one raid watch per symbol, armed when a breakout opens
-// with a liquidity TP. 'touched' = price reached the level (the TP can fill
-// there); the RAID is a wick strictly BEYOND it. Not persisted: a restart
-// drops a pending watch (an open counter position is still recognised).
-bool     watchOn[MAX_SYMS];
-int      watchDir[MAX_SYMS];        // direction of the breakout that set it
-int      watchLvl[MAX_SYMS];        // breakout tier
-int      watchTf[MAX_SYMS];         // tfs[] index of the target's timeframe
-double   watchLevel[MAX_SYMS];      // the unraided level itself (not the offset TP)
-bool     watchTouched[MAX_SYMS];
-datetime watchExpire[MAX_SYMS];
-bool     ctrOpen[MAX_SYMS];         // a counter position is open on the symbol
-
 int MAGIC = 20260878;   // liquidity-target experiment (the live VPS build it forks runs 20260858)
 
 CTrade trade;
@@ -353,8 +323,6 @@ int OnInit()
    for(int s = 0; s < symsCount; s++)
    {
       lastM1bar[s] = 0;
-      watchOn[s]   = false;
-      ctrOpen[s]   = false;
       symBlockedUnknown[s] = false;
       for(int l = 0; l < LEVELS; l++)
       {
@@ -403,8 +371,6 @@ void OnDeinit(const int reason)
 // Position State Sync (recover after restart)
 //==============================================================
 
-#define CTR_PREFIX "Exp Ctr "
-
 string LevelComment(int lvl, int dir)
 {
    return (dir == 1 ? "Exp Buy " : "Exp Sell ") + tfName[lvl + 1];
@@ -435,7 +401,6 @@ void SyncStateFromPositions()
    for(int s = 0; s < symsCount; s++)
    {
       symBlockedUnknown[s] = false;              // R2: re-evaluated every sync
-      ctrOpen[s]           = false;
       for(int l = 0; l < LEVELS; l++)
       {
          state[s][l] = 0;
@@ -460,14 +425,6 @@ void SyncStateFromPositions()
       for(int s = 0; s < symsCount; s++)
       {
          if(syms[s] != sym) continue;
-
-         // Counter trades carry their own comment and fixed SL/TP; they
-         // are not a level and must not trip the R2 block.
-         if(StringFind(comm, CTR_PREFIX) == 0)
-         {
-            ctrOpen[s] = true;
-            break;
-         }
 
          // R2: resolve the level from the comment; an unmatched comment on
          // a magic position means the identity is lost (broker rewrite,
@@ -1031,9 +988,9 @@ int HighestClearTF(int s, int lvl, int dir)
 // The take profit for a new entry: the nearest unraided level on the
 // highest clear timeframe, beyond the broker's minimum distance. 'tgt'
 // names it for the journal. Returns 0.0 when that timeframe has none.
-double LiqTargetTP(int s, int lvl, int dir, string &tgt, double &level, int &tf)
+double LiqTargetTP(int s, int lvl, int dir, string &tgt)
 {
-   tf            = HighestClearTF(s, lvl, dir);
+   int    tf     = HighestClearTF(s, lvl, dir);
    string sym    = syms[s];
    double price  = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                               : SymbolInfoDouble(sym, SYMBOL_BID);
@@ -1043,7 +1000,7 @@ double LiqTargetTP(int s, int lvl, int dir, string &tgt, double &level, int &tf)
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
 
    tgt = tfName[tf] + " none";
-   level = LiqNearest(sym, tfs[tf], dir, price, stops + offset + point);
+   double level = LiqNearest(sym, tfs[tf], dir, price, stops + offset + point);
    if(level == 0.0) return 0.0;
 
    tgt = tfName[tf] + " " + DoubleToString(level, digits);
@@ -1058,7 +1015,7 @@ double LiqTargetTP(int s, int lvl, int dir, string &tgt, double &level, int &tf)
 // "H1x" counter-H4 stand-in, "--" none) — logged so the H1-bias trades
 // are separable from the H4 ones when reviewing the journal. 'tp' is the
 // liquidity target (0 = none) and 'tgt' names it for the journal.
-bool OpenLevel(int s, int lvl, int dir, double lots, string via, double &tp, string tgt)
+bool OpenLevel(int s, int lvl, int dir, double lots, string via, double tp, string tgt)
 {
    string sym = syms[s];
    string comment = LevelComment(lvl, dir);
@@ -1386,130 +1343,6 @@ bool ExitLevel(int s, int l, string reason)
 }
 
 //==============================================================
-// Counter Trade (EXPERIMENT). When a breakout opens with a
-// liquidity TP, that level is watched. Once price trades BEYOND
-// it — the liquidity is raided — a trade opens the OTHER way,
-// aimed at the nearest unraided liquidity InpCtrTFsLower (2)
-// timeframes below the raided one on the standard ladder M1, M5,
-// M15, M30, H1, H4 (an M30 high raided -> short to the nearest
-// unraided M5 low). Its stop is tight: InpCtrSLPoints beyond the
-// raid's extreme, just past the liquidity area. Sized at
-// InpCtrRiskPct of equity on that stop; fixed SL/TP, no BE, trail
-// or kumo exit. One counter per symbol at a time.
-// The watch ends on the raid, at expiry, or when the breakout
-// trade closes before price ever reached the level (a kumo-touch
-// or trailed-stop exit short of the target — no raid is coming
-// from that move).
-//==============================================================
-
-void ArmWatch(int s, int lvl, int dir, int tf, double level)
-{
-   watchOn[s]      = true;
-   watchDir[s]     = dir;
-   watchLvl[s]     = lvl;
-   watchTf[s]      = tf;
-   watchLevel[s]   = level;
-   watchTouched[s] = false;
-   watchExpire[s]  = TimeCurrent() + InpCtrExpiryBars * PeriodSeconds(tfs[tf]);
-}
-
-double CtrLots(int s, double slDist)
-{
-   string sym       = syms[s];
-   double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
-   if(tickValue <= 0 || tickSize <= 0 || slDist <= 0) return InpFixedLots;
-
-   double lots = AccountInfoDouble(ACCOUNT_EQUITY) * (InpCtrRiskPct / 100.0) /
-                 ((slDist / tickSize) * tickValue);
-
-   double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
-   double lotMin  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
-   double lotMax  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
-   if(lotStep > 0) lots = MathFloor(lots / lotStep) * lotStep;
-   return MathMax(lotMin, MathMin(lotMax, lots));
-}
-
-// The raid happened; 'extreme' is the furthest price the raid reached.
-void OpenCounter(int s, double extreme)
-{
-   string sym    = syms[s];
-   int    dir    = -watchDir[s];                        // fade the raid
-   int    tf     = (int)MathMax(0, watchTf[s] - InpCtrTFsLower);
-   double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
-   double stops  = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
-   int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   double price  = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
-                              : SymbolInfoDouble(sym, SYMBOL_BID);
-   string what   = tfName[watchTf[s]] + " " + DoubleToString(watchLevel[s], digits) +
-                   (watchDir[s] == 1 ? " high" : " low") + " raided";
-
-   // Tight stop just past the raid, never inside the broker distance
-   double sl = (dir == 1) ? extreme - InpCtrSLPoints * point
-                          : extreme + InpCtrSLPoints * point;
-   if(dir == 1) sl = MathMin(sl, SymbolInfoDouble(sym, SYMBOL_BID) - stops - point);
-   else         sl = MathMax(sl, SymbolInfoDouble(sym, SYMBOL_ASK) + stops + point);
-   sl = NormalizeDouble(sl, digits);
-   double slDist = MathAbs(price - sl);
-
-   double level = LiqNearest(sym, tfs[tf], dir, price, stops + point);
-   if(level == 0.0)
-   {
-      Print(PCTime() + " | " + sym + " " + what + " — no unraided " + tfName[tf] + " level to counter to, no trade");
-      return;
-   }
-   double tp = NormalizeDouble(level, digits);
-   if(MathAbs(tp - price) < InpCtrMinRR * slDist)
-   {
-      Print(PCTime() + " | " + sym + " " + what + " — " + tfName[tf] + " target " +
-            DoubleToString(tp, digits) + " under " + DoubleToString(InpCtrMinRR, 1) + "R, no trade");
-      return;
-   }
-
-   double lots = CtrLots(s, slDist);
-   CapLotsToMargin(sym, (dir == 1), lots);
-   trade.SetTypeFillingBySymbol(sym);
-   string comment = CTR_PREFIX + (dir == 1 ? "Buy " : "Sell ") + tfName[tf];
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, tp, comment)
-                        : trade.Sell(lots, sym, price, sl, tp, comment);
-   if(ok)
-   {
-      ctrOpen[s] = true;
-      string msg = PCTime() + " | Counter " + (dir == 1 ? "Buy " : "Sell ") + sym +
-                   " @ " + DoubleToString(lots, 2) + " (" + what + ", target " + tfName[tf] + " " +
-                   DoubleToString(tp, digits) + ", SL " + DoubleToString(sl, digits) + ")";
-      Print(msg); SendNotification(msg);
-   }
-   else
-      Print(PCTime() + " | " + sym + " counter signal (" + what + ") but order failed, retcode " +
-            IntegerToString(trade.ResultRetcode()));
-}
-
-// Once per new M1 bar: touch/raid/expiry bookkeeping for the symbol's watch.
-// hi/lo span the bar just closed and the one forming.
-void CheckRaid(int s, double hi, double lo)
-{
-   if(!watchOn[s]) return;
-   bool   up    = (watchDir[s] == 1);
-   double level = watchLevel[s];
-
-   if(up ? (hi >= level) : (lo <= level)) watchTouched[s] = true;
-
-   if(up ? (hi > level) : (lo < level))                  // raided
-   {
-      watchOn[s] = false;
-      if(!ctrOpen[s] && SpreadOK(syms[s]) && !symBlockedUnknown[s])
-         OpenCounter(s, up ? hi : lo);
-      return;
-   }
-
-   // The breakout closed short of the level — the move that was to raid
-   // it is over. Or the watch simply ran out of time.
-   if((state[s][watchLvl[s]] == 0 && !watchTouched[s]) || TimeCurrent() > watchExpire[s])
-      watchOn[s] = false;
-}
-
-//==============================================================
 // Main Loop
 //==============================================================
 
@@ -1534,10 +1367,6 @@ void OnTick()
       // Sync position state once per tick on the first new M1 bar instead of
       // rebuilding it on every single tick.
       if(!synced) { SyncStateFromPositions(); synced = true; }
-
-      // Counter trade: has the breakout's liquidity target been raided?
-      if(InpCtrEnabled)
-         CheckRaid(s, MathMax(m1[0].high, m1[1].high), MathMin(m1[0].low, m1[1].low));
 
       // Exits and profit protection per level
       for(int l = 0; l < LEVELS; l++)
@@ -1569,8 +1398,6 @@ void OnTick()
       string topVia  = "--";
       double topTP   = 0.0;
       string topTgt  = "none";
-      double topLevel = 0.0;
-      int    topTf    = 0;
       // R2: never add exposure while an unmanageable (unparseable-comment)
       // magic position sits on this symbol; exits/protection still run.
       if(!symBlockedUnknown[s] && SpreadOK(syms[s]))
@@ -1599,7 +1426,7 @@ void OnTick()
             // tier may still find one).
             if(InpLiqTarget)
             {
-               topTP = LiqTargetTP(s, l, st, topTgt, topLevel, topTf);
+               topTP = LiqTargetTP(s, l, st, topTgt);
                if(topTP == 0.0 && InpLiqNeedTarget) continue;
             }
 
@@ -1635,8 +1462,6 @@ void OnTick()
          if(!OpenLevel(s, topTier, topDir, lots, topVia, topTP, topTgt))
             Print(PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
                   " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
-         else if(InpCtrEnabled && topTP > 0.0)
-            ArmWatch(s, topTier, topDir, topTf, topLevel);   // wait for the raid
       }
    }
 }

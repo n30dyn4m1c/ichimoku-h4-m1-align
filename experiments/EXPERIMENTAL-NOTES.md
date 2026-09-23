@@ -6472,56 +6472,12 @@ trail or disaster-stop repair; here every modify passes the position's
 current TP back in (the same fix §44 needed). The entry journal line and push
 now end in `target <TF> <level>` or `target <TF> none`.
 
-### Counter trade — fading the raid
-
-Once the breakout's target has been **raided** — a wick strictly *beyond* the
-level, not just a touch — the build trades back the other way, on the idea
-that the resting orders have been taken and price now reverses into the
-liquidity left behind on a smaller scale.
-
-- **Watch.** A breakout that opens with a liquidity TP arms one watch per
-  symbol on that level (a newer breakout replaces it). Each new M1 bar
-  checks the bar just closed and the one forming. The watch ends on the raid,
-  after `InpCtrExpiryBars` (12) bars of the raided timeframe, or when the
-  breakout trade closes before price ever *reached* the level (a kumo-touch
-  or trailed-stop exit short of the target: the move that was to raid it is
-  over). A trade closed by its TP counts as reached, so the watch carries on
-  after it waiting for the wick beyond.
-- **Direction and target.** Opposite to the breakout. The target is the
-  nearest unraided level **`InpCtrTFsLower` (2) timeframes below** the raided
-  one on the ladder M1, M5, M15, M30, H1, H4: an M30 high raided → sell to
-  the nearest unraided **M5 low**; an H4 low raided → buy to the nearest
-  unraided **M30 high**. (The target timeframe is never below the tier's,
-  which is M15 or higher, so two lower always exists.)
-- **Tight stop.** `InpCtrSLPoints` (100) beyond the raid's extreme — the
-  furthest the raid had reached when it was detected — just past the
-  liquidity area, pushed out only if the broker's minimum distance demands
-  it.
-- **Filters and size.** Skipped unless the target is at least `InpCtrMinRR`
-  (1.0) × the stop distance away, or when there is no unraided level to aim
-  at, the spread is over the limit, a counter is already open, or the R2
-  guard has the symbol blocked. Sized at `InpCtrRiskPct` (1%) of equity on
-  the actual stop distance, margin-capped like every other order.
-- **Management.** Fixed SL and TP on the order and nothing else — no BE,
-  trail or kumo exit. The comment is `Exp Ctr Buy|Sell <TF>`; the position
-  sync recognises it so it neither trips the R2 unknown-position block nor
-  counts as a tier.
-- **Account type.** The counter can open while a breakout tier is still
-  running on the symbol (a newer tier's trade, or a breakout whose TP was
-  refused), so this needs a **hedging** account; on netting it would net
-  against that position.
-- **Restart.** The watch lives in memory only; a restart drops a pending
-  watch. An open counter position is still recognised.
-
-`InpLiqTarget = false` and `InpCtrEnabled = false` together reproduce the live
-build exactly.
+`InpLiqTarget = false` reproduces the live build exactly.
 
 ### Status
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet
 backtested.** The questions for the tester: how often each timeframe supplies
-the target, how often the TP is hit before the kumo-touch exit, whether
+the target, how often the TP is hit before the kumo-touch exit, and whether
 cutting the H1/H4 runners at the target costs more of the trend tail than it
-saves on trades that reverse after taking the liquidity — and, for the
-counter, how often a raid follows the TP inside the expiry, and the counter's
-win rate against its tight stop.
+saves on trades that reverse after taking the liquidity.
