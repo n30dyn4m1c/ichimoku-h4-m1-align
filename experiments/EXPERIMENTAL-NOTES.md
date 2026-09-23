@@ -6040,3 +6040,62 @@ VPS-mode trades, by exit timeframe and by how they closed:
   trades.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings).
+
+### Revision — a pullback entry mode, and a 2024 test
+
+User direction, after the recommendation to trade the lower timeframes *with*
+the higher trend rather than fade it: build a **pullback mode** and backtest
+**2024–2026**.
+
+**`InpEntryMode`:** `ENTRY_BREAKOUT` (default, everything above), `ENTRY_PULLBACK`,
+or `ENTRY_BOTH` (pullback checked first; still one position per symbol).
+A pullback entry needs:
+
+1. **Trend:** H4 aligned (`CheckAlign`, price and chikou), and H1 aligned the
+   same way (`InpPBNeedH1`, default on).
+2. **A real counter move:** M1+M2 aligned *against* the trend at some bar
+   within the last `InpPBLookbackMins` (30) minutes.
+3. **A level:** the extreme of the M1 bars in that window (the low for a
+   long) within `InpPBLevelTolPips` (15) of a PO3 number (the 3^power grid),
+   or of a tenkan, kijun, SSA or SSB on M5, M15, M30 or H1.
+4. **The turn:** M1+M2 turning back *with* the trend inside a kihon window.
+   This is the same breakout tracking the breakout entry uses, once per turn.
+
+Exits:
+- a hard stop `InpSLBufferPips` beyond the pullback extreme (at least
+  `InpMinSLPips`, skipped beyond `InpPBMaxSLPips` = 150);
+- no take profit, and no cloud-touch exit, since the dip usually sits in a
+  lower cloud;
+- the VPS build's BE and chandelier, on `InpPBManageTF`'s ATR (M15).
+
+The position comment carries ` PB ` so a restart manages it the same way.
+
+### Results — 2024–2026, VPS exits
+
+GOLDm#, $10,000, 1:1000, real ticks. 2026 runs to 09-19.
+
+| Entry | 2024 | 2025 | 2026 |
+|---|---|---|---|
+| **breakout** (default) | **+$680**, PF 1.38, 115 trades, 5.0% DD | **+$910**, PF 1.39, 143, 4.6% | **+$70**, PF 1.03, 120, 4.6% |
+| pullback | −$14, PF 0.98, 26 trades | −$28, PF 0.97, 23 | −$588, PF 0.00, 8 |
+| both | +$535, PF 1.24, 120 | +$567, PF 1.20, 150 | −$132, PF 0.95, 122 |
+| pullback, managed on H1 ATR | +$116, PF 1.11, 26 | −$334, PF 0.59, 23 | −$588, PF 0.00, 8 |
+
+### Reading
+
+- **The breakout entry with VPS exits is profitable in all three years.** 2024
+  is a year it was never tuned on. PF runs 1.38 / 1.39 / 1.03 at about 5%
+  drawdown. It is still small money (+7%, +9%, +0.7% a year at 1% risk), but
+  it is the first setting of this scalper to hold up across three windows.
+- **The pullback mode has no edge.** It loses slightly in every year on very
+  few trades. Its losers take the full swing stop (about −$80 to −$100),
+  while BE and the trail close its winners early (about $55–61, and around $0
+  in 2026). Managing on H1's wider ATR does not fix it. Adding it to the
+  breakout lowers the result in all three years.
+- The levels the dips reached were mostly PO3 numbers (29 of 57 trades),
+  then SSA and tenkan.
+- **The default stays `ENTRY_BREAKOUT`.** The pullback mode is kept, off, for
+  further work. The next lever would be its exit (a target at the prior swing
+  extreme instead of BE/trail), not more entry filters.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings).
