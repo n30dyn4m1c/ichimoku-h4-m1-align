@@ -5360,9 +5360,21 @@ not drift while the trade is open (the live BE arming uses the current ATR).
 the whole trade closes at +1 x ATR. `InpScalpCapture = false` restores the
 live exits exactly.
 
-**Unsplittable positions:** at the broker minimum lot (0.01) a 50% close is
-impossible. The EA logs it, skips the partial, and still applies the lock
-and the early trail to the whole position.
+**Unsplittable positions:** GOLDm# has a **0.10 minimum lot**, so anything
+under 0.20 lots cannot be halved. `InpScalpUnsplit` decides what happens:
+`0` (default) leaves the trade on the live exits, `1` applies the lock and
+early trail to the whole position, `2` closes it all. `1` was the original
+behaviour and it was ruinous in the backtest (see results) — tightening the
+whole trade at +1 ATR strangles exactly the runs the system lives on.
+
+**Identity after a partial close:** MT5 **empties the position comment** on
+a partial close. The live family identifies a tier by its comment, so the
+first backtest orphaned every runner: R2 flagged it as unknown and blocked
+all entries until the disaster stop closed it. The build now matches a
+position by comment **or** by the position identifier recorded at entry
+(`IsLevelPosition`), and after a restart falls back to the opening deal's
+comment (`LevelFromIdentity`). Any future build that partially closes must
+do the same.
 
 **Restart:** the entry ATR is approximated by the current ATR, and a
 position whose volume is below its entry deal volume is treated as already
@@ -5410,8 +5422,8 @@ small tier that closes earlier frees its level for a new entry sooner.
 
 ### Status & caveats
 
-- **Compiled clean in MetaEditor** (0 errors, 0 warnings) on 2026-09-23.
-  **Not yet backtested** — no result is claimed.
+- **Compiled clean in MetaEditor** (0 errors, 0 warnings) and backtested on
+  2026-09-23 — results below.
 - **Do not run it beside the live build** on the same account and symbol:
   the magics differ, so both would trade and exposure would double.
 - **A partial close reduces the win the runner can make.** With 50% banked,
@@ -5424,3 +5436,73 @@ small tier that closes earlier frees its level for a new entry sooner.
   BE/trail modify tests for shorts assume a stop already exists (the
   disaster stop provides it — with `InpDisasterStopEnabled = false` a short
   would never get its BE or trail).
+
+### Results — GOLDm#, 2026-01-01 → 2026-09-19, $100, 1:1000, 1-minute OHLC
+
+XM `XMGlobal-MT5 5` history, run from the Bottles MT5 install. The baseline
+reproduces the user's live report ($100 → ~$14,000), so the setup is sound.
+
+| Run | Settings | Net | PF | Max balance DD |
+|---|---|---|---|---|
+| **off** | live exits | **$13,681** | **1.40** | **29.1%** |
+| half | 50% at +1 ATR, lock 0.3, early trail | $14,030 | 1.39 | 28.9% |
+| bare | 50% at +1 ATR, no lock, live trail | $13,899 | 1.42 | 29.1% |
+| full M5 | pure scalp on M5 only | $13,927 | 1.36 | 42.1% |
+| full M5+M15 | pure scalp on M5 and M15 | $13,461 | 1.32 | 41.3% |
+| full M5–M30 | pure scalp on M5, M15, M30 | $13,421 | 1.23 | 49.6% |
+| *(first draft)* | 50%, unsplittable = lock+trail, comment bug | $182 | — | 78% |
+
+Baseline per tier (capture off):
+
+| Tier | Trades | Win % | Net | PF | Give-backs |
+|---|---|---|---|---|---|
+| M5 | 933 | 64.3 | $912 | 1.11 | 47 (5%) |
+| M15 | 515 | 70.5 | $1,143 | 1.27 | 20 (4%) |
+| M30 | 325 | 76.0 | $5,002 | 1.51 | 8 |
+| H1 | 184 | 83.2 | $4,692 | 1.53 | 1 |
+| H4 | 37 | 83.8 | $1,933 | 1.61 | 0 |
+
+Reading:
+
+- **The give-back leak is small.** Only ~5% of M5 and ~4% of M15 trades
+  reached +1 ATR and closed at or below zero. Most trades that run 1–2 ATR
+  are already scratched at break-even + 15 points (counted as small wins —
+  that is where the 64% M5 win rate comes from).
+- **Partial banking is roughly neutral**: +1.6% to +2.6% net at the same
+  drawdown. On one price path that is inside the noise, not an edge.
+- **Pure scalping does not pay.** Net is flat to lower, and drawdown rises
+  from 29% to 41–50%. Scalping M5 turns that tier's net negative; the
+  money moves to other tiers only because equity paths diverge.
+- **M5 is the weakest tier** in every run — PF 1.11, 47% of all trades for
+  7% of the profit. M30 and H1 carry the account.
+
+### Results — the same window on real ticks (Model 4)
+
+| Run | Net | PF | Max balance DD | Max equity DD |
+|---|---|---|---|---|
+| **off** (live exits) | **$13,464** | **1.38** | **21.4%** | **43.5%** |
+| half (50% at +1 ATR, lock, early trail) | $13,524 | 1.37 | 35.4% | 47.2% |
+| full M5 (pure scalp on M5) | $13,470 | 1.34 | 36.8% | 48.6% |
+
+Per tier, capture off: M5 929 trades, PF 1.10, $836, **116 give-backs
+(12.5%)**; M15 512, PF 1.25, $1,081, 66 give-backs; M30 325, PF 1.64,
+$6,270; H1 183, PF 1.40, $3,717; H4 37, PF 1.52, $1,559.
+
+On real ticks the give-back count doubles (spread and wicks now hit the
+break-even + 15-point stop, which OHLC modelling often skipped). The 50%
+partial does cut M5 give-backs from 116 to 50, **but net is unchanged and
+the balance drawdown rises from 21% to 35%**. Pure M5 scalping turns the
+M5 tier negative (PF 0.94, −$817).
+
+### Verdict
+
+**Scalps are not worth trading with this entry signal.** Across both tick
+models and six settings, net profit stays within ±3% of the live build's.
+Every scalping variant pays for that with more drawdown, and the pure
+scalp loses money on the tier it is applied to. The live exits stay as
+they are. The partial-close machinery and the per-tier report stay in this
+file for future tests. The per-tier numbers point at a different question
+worth testing next: **M5 is 47% of all trades for ~6% of the profit at PF
+~1.10**, so removing or restricting the M5 tier may cut drawdown and costs
+at little cost to profit.
+

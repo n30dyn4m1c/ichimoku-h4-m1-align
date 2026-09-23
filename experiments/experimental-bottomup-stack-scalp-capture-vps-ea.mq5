@@ -231,13 +231,20 @@ input double InpDisasterATRMult     = 8.0;    // Disaster stop distance = ATR(le
 // +0.5 x ATR, so the default leaves them alone).
 enum ENUM_SCALP_TIER { SCALP_M5 = 0, SCALP_M15 = 1, SCALP_M30 = 2, SCALP_H1 = 3, SCALP_H4 = 4 };
 
+// What to do when the partial cannot be split off (e.g. 0.13 lots at a
+// 0.10 minimum). First backtest (2026-09-23): applying the lock + early
+// trail to these whole positions choked the winners — $100 ended at $182
+// against the live exits' $13,781 — so the default leaves them alone.
+enum ENUM_SCALP_UNSPLIT { UNSPLIT_LEAVE = 0, UNSPLIT_LOCK = 1, UNSPLIT_CLOSE = 2 };
+
 input group  "Scalp Capture (EXPERIMENT — bank small moves on the lower tiers)"
 input bool            InpScalpCapture  = true;      // false = live build's exits exactly
 input ENUM_SCALP_TIER InpScalpMaxTier  = SCALP_M30; // Highest tier managed (0=M5, 1=M15, 2=M30, 3=H1, 4=H4)
 input double          InpScalpTP1ATR   = 1.0;       // Bank the scalp at +this x ATR(level TF, at entry)
 input double          InpScalpClosePct = 50.0;      // % of the position closed there (100 = pure scalp, full close)
-input double          InpScalpLockATR  = 0.3;       // Runner's stop moves to entry +this x ATR (locks profit, not just BE)
-input double          InpScalpTrailATR = 1.0;       // Runner's chandelier distance behind the peak, x ATR
+input double          InpScalpLockATR  = 0.3;       // Runner's stop moves to entry +this x ATR (0 = no lock, live BE only)
+input double          InpScalpTrailATR = 1.0;       // Runner's chandelier armed at once, this x ATR behind the peak (0 = live trail)
+input ENUM_SCALP_UNSPLIT InpScalpUnsplit = UNSPLIT_LEAVE; // Position too small to split at the broker min lot: 0=live exits, 1=lock+trail, 2=close all
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
@@ -271,6 +278,7 @@ bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even 
 
 // Scalp capture + per-tier report
 bool     scalpDone[MAX_SYMS][LEVELS];    // scalp target already banked on this trade (one-shot)
+bool     scalpLeft[MAX_SYMS][LEVELS];    // target hit but unsplittable and left on the live exits
 double   atrEntry[MAX_SYMS][LEVELS];     // ATR(level TF) at entry — fixes the target and the MFE unit
 ulong    posIdOf[MAX_SYMS][LEVELS];      // position identifier of the level's trade (report join key)
 int      posDir[MAX_SYMS][LEVELS];       // direction of that trade (state[] is zeroed before it is filed)
@@ -333,6 +341,7 @@ int OnInit()
          peakLow[s][l]    = 0.0;
          beMoved[s][l]    = false;
          scalpDone[s][l]  = false;
+         scalpLeft[s][l]  = false;
          atrEntry[s][l]   = 0.0;
          posIdOf[s][l]    = 0;
          posDir[s][l]     = 0;
@@ -484,6 +493,36 @@ void PrintTierReport()
    Print("give-backs = reached +1 ATR in profit, closed <= 0. Trades still open at test end are not counted.");
 }
 
+// Does the SELECTED position belong to this level? By comment, or — since a
+// partial close empties the comment — by the identifier recorded at entry.
+bool IsLevelPosition(int s, int lvl)
+{
+   string comm = PositionGetString(POSITION_COMMENT);
+   if(comm == LevelComment(lvl, 1) || comm == LevelComment(lvl, -1)) return true;
+   return posIdOf[s][lvl] != 0 &&
+          (ulong)PositionGetInteger(POSITION_IDENTIFIER) == posIdOf[s][lvl];
+}
+
+// Level of a position whose comment names none: the identifier recorded at
+// entry first, then the comment on its opening deal (which a partial close
+// leaves intact). -1 when neither resolves — the R2 guard then applies.
+int LevelFromIdentity(int s, ulong posId)
+{
+   for(int l = 0; l < LEVELS; l++)
+      if(posIdOf[s][l] != 0 && posIdOf[s][l] == posId) return l;
+
+   if(!HistorySelectByPosition(posId)) return -1;
+   for(int d = 0; d < HistoryDealsTotal(); d++)
+   {
+      ulong dt = HistoryDealGetTicket(d);
+      if(HistoryDealGetInteger(dt, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      string dc = HistoryDealGetString(dt, DEAL_COMMENT);
+      for(int l = 0; l < LEVELS; l++)
+         if(dc == LevelComment(l, 1) || dc == LevelComment(l, -1)) return l;
+   }
+   return -1;
+}
+
 // Rebuild per-level state from the positions on the account so a restart
 // mid-trade resumes the correct levels. The position comment carries the
 // level (e.g. "Exp Buy M15"). Entry/peak/BE memory is rebuilt for a
@@ -530,6 +569,11 @@ void SyncStateFromPositions()
                lvlMatch = l;
                break;
             }
+         // SCALP CAPTURE: a partial close wipes the position comment (seen
+         // in the Strategy Tester), so fall back to the identifier this EA
+         // recorded, then — after a restart — to the opening deal's comment.
+         if(lvlMatch < 0)
+            lvlMatch = LevelFromIdentity(s, (ulong)PositionGetInteger(POSITION_IDENTIFIER));
 
          if(lvlMatch < 0)
          {
@@ -603,6 +647,7 @@ void SyncStateFromPositions()
          {
             RecordClosedTrade(s, l);   // report: the level's trade has closed
             scalpDone[s][l]  = false;
+            scalpLeft[s][l]  = false;
             atrEntry[s][l]   = 0.0;
             entryPrice[s][l] = 0.0;
             peakHigh[s][l]   = 0.0;
@@ -1069,6 +1114,7 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
       peakLow[s][lvl]    = price;
       beMoved[s][lvl]    = false;
       scalpDone[s][lvl]  = false;
+      scalpLeft[s][lvl]  = false;
       posDir[s][lvl]     = dir;
       double ae[1];
       atrEntry[s][lvl]   = (CopyBuffer(atr[s][lvl], 0, 1, 1, ae) > 0 && ae[0] > 0) ? ae[0] : 0.0;
@@ -1095,8 +1141,7 @@ bool CloseLevelPositions(int s, int lvl)
 
       if(PositionGetString(POSITION_SYMBOL) == sym &&
          (int)PositionGetInteger(POSITION_MAGIC) == MAGIC &&
-         (PositionGetString(POSITION_COMMENT) == LevelComment(lvl, 1) ||
-          PositionGetString(POSITION_COMMENT) == LevelComment(lvl, -1)))
+         IsLevelPosition(s, lvl))
       {
          if(!trade.PositionClose(ticket))
             Print(PCTime() + " | " + sym + " " + tfName[lvl + 1] + " close failed, retcode " +
@@ -1110,8 +1155,7 @@ bool CloseLevelPositions(int s, int lvl)
       if(!PositionSelectByTicket(ticket)) continue;
       if(PositionGetString(POSITION_SYMBOL) == sym &&
          (int)PositionGetInteger(POSITION_MAGIC) == MAGIC &&
-         (PositionGetString(POSITION_COMMENT) == LevelComment(lvl, 1) ||
-          PositionGetString(POSITION_COMMENT) == LevelComment(lvl, -1))) return false;
+         IsLevelPosition(s, lvl)) return false;
    }
    return true;
 }
@@ -1141,8 +1185,7 @@ bool LevelTicket(int s, int lvl, ulong &ticket)
       if(!PositionSelectByTicket(ticket)) continue;
       if(PositionGetString(POSITION_SYMBOL) != syms[s]) continue;
       if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
-      string comm = PositionGetString(POSITION_COMMENT);
-      if(comm == LevelComment(lvl, 1) || comm == LevelComment(lvl, -1)) return true;
+      if(IsLevelPosition(s, lvl)) return true;
    }
    return false;
 }
@@ -1217,53 +1260,61 @@ void ManageLevelProtection(int s, int lvl)
                         : (ask <= entryPrice[s][lvl] - InpScalpTP1ATR * atrE);
       if(hit)
       {
-         if(InpScalpClosePct >= 100.0)
-         {
-            ExitLevel(s, lvl, "scalp target");   // pure scalp: the whole trade
-            return;
-         }
-
          if(!LevelTicket(s, lvl, ticket)) return;   // re-select: a disaster-SL modify may have run
          double vol     = PositionGetDouble(POSITION_VOLUME);
          double lotStep = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_STEP);
          double lotMin  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN);
          double cut     = vol * InpScalpClosePct / 100.0;
          if(lotStep > 0) cut = MathFloor(cut / lotStep + 1e-9) * lotStep;
+         bool splittable = (cut >= lotMin && vol - cut >= lotMin - 1e-9);
 
-         if(cut >= lotMin && vol - cut >= lotMin - 1e-9)
+         if(!splittable && InpScalpClosePct < 100.0 && InpScalpUnsplit == UNSPLIT_LEAVE)
          {
-            trade.SetTypeFillingBySymbol(syms[s]);
-            if(trade.PositionClosePartial(ticket, cut))
+            // Too small to split: the live exits keep this trade (one-shot)
+            scalpDone[s][lvl] = true;
+            scalpLeft[s][lvl] = true;
+         }
+         else if(InpScalpClosePct >= 100.0 || (!splittable && InpScalpUnsplit == UNSPLIT_CLOSE))
+         {
+            ExitLevel(s, lvl, "scalp target");   // pure scalp: the whole trade
+            return;
+         }
+         else
+         {
+            if(splittable)
             {
+               trade.SetTypeFillingBySymbol(syms[s]);
+               if(!trade.PositionClosePartial(ticket, cut))
+               {
+                  Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " scalp partial close failed, retcode " +
+                        IntegerToString(trade.ResultRetcode()) + " — will retry");
+                  return;
+               }
                string msg = PCTime() + " | Scalp banked " + syms[s] + " " + tfName[lvl + 1] +
                             " " + DoubleToString(cut, 2) + " of " + DoubleToString(vol, 2) +
                             " lots at +" + DoubleToString(InpScalpTP1ATR, 2) + " ATR";
                Print(msg); SendNotification(msg);
             }
             else
+               Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " " + DoubleToString(vol, 2) +
+                     " lots cannot be split — no partial, lock + trail on the whole position");
+
+            // Lock the runner (or the whole unsplittable position, UNSPLIT_LOCK)
+            scalpDone[s][lvl] = true;
+            if(!LevelTicket(s, lvl, ticket)) return;
+            slCur = PositionGetDouble(POSITION_SL);
+            if(InpScalpLockATR > 0)
             {
-               Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " scalp partial close failed, retcode " +
-                     IntegerToString(trade.ResultRetcode()) + " — will retry");
-               return;
+               double lock = NormalizeDouble(isLong ? entryPrice[s][lvl] + InpScalpLockATR * atrE
+                                                    : entryPrice[s][lvl] - InpScalpLockATR * atrE, digits);
+               bool okL = isLong ? ((slCur == 0.0 || lock > slCur + point) && lock < bid - minDist)
+                                 : ((slCur == 0.0 || lock < slCur - point) && lock > ask + minDist);
+               if(okL && !trade.PositionModify(ticket, lock, 0))
+                  Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " scalp lock SL modify failed, retcode " +
+                        IntegerToString(trade.ResultRetcode()));
+               beMoved[s][lvl] = true;   // the lock supersedes the BE move
             }
          }
-         else
-            Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " " + DoubleToString(vol, 2) +
-                  " lots cannot be split — no partial, runner lock only");
-
-         // Lock the runner (or the whole unsplittable position)
-         if(!LevelTicket(s, lvl, ticket)) return;
-         slCur = PositionGetDouble(POSITION_SL);
-         double lock = NormalizeDouble(isLong ? entryPrice[s][lvl] + InpScalpLockATR * atrE
-                                              : entryPrice[s][lvl] - InpScalpLockATR * atrE, digits);
-         bool okL = isLong ? ((slCur == 0.0 || lock > slCur + point) && lock < bid - minDist)
-                           : ((slCur == 0.0 || lock < slCur - point) && lock > ask + minDist);
-         if(okL && !trade.PositionModify(ticket, lock, 0))
-            Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " scalp lock SL modify failed, retcode " +
-                  IntegerToString(trade.ResultRetcode()));
-
-         scalpDone[s][lvl] = true;
-         beMoved[s][lvl]   = true;   // the lock supersedes the BE move
       }
    }
 
@@ -1305,7 +1356,7 @@ void ManageLevelProtection(int s, int lvl)
    // SCALP CAPTURE: once the scalp is banked the runner's trail is armed
    // at once, InpScalpTrailATR behind the peak, instead of waiting for the
    // +InpSpikeLockATR spike.
-   bool   runner   = scalpTier && scalpDone[s][lvl];
+   bool   runner   = scalpTier && scalpDone[s][lvl] && !scalpLeft[s][lvl] && InpScalpTrailATR > 0;
    double armATR   = (lvl >= 3) ? InpTrailActivateATR : InpSpikeLockATR;
    double trailATR = runner ? InpScalpTrailATR : InpTrailATR;
    bool armed = runner ||
