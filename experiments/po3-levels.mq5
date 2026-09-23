@@ -97,7 +97,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.43"
+#property version   "1.45"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -813,6 +813,8 @@ input int             InpLiqWidth     = 2;                // Line width (styles 
 input ENUM_LINE_STYLE InpLiqStyle     = STYLE_SOLID;      // Line style
 input bool            InpLiqSnap      = true;             // Locked higher TF: start at the chart candle with the wick
 input bool            InpLiqLastRaid  = true;             // Show the last raided high and low (dashed, same width)
+input bool            InpLiqValues    = true;             // Write the price beside each unraided / last raided swing
+input string          InpLiqFont      = "Segoe UI Light"; // Price font (size follows the PO3 labels)
 
 input group "PO3 levels to show";
 //--- Every grid from 3 up is on by default: the model is the whole nest of
@@ -2951,11 +2953,36 @@ datetime LiqWickTime(const datetime t, const ENUM_TIMEFRAMES tf, const bool isHi
    return(c[best].time);
   }
 
+//--- The swing's price, written at the wick in the line's colour, for the
+//--- unraided lines and the last raided ones alike: above a
+//--- high and below a low, so it sits clear of the candles that made the
+//--- swing. Same size as the PO3 labels, a lighter face so it reads as a
+//--- note on the line rather than a level of its own.
+void LiqDrawValue(const string name, const datetime at, const double level, const bool isHigh)
+  {
+   if(!InpLiqValues || ObjectFind(0, name) >= 0)
+      return;
+   if(!ObjectCreate(0, name, OBJ_TEXT, 0, at, level))
+      return;
+   ObjectSetString (0, name, OBJPROP_TEXT,       DoubleToString(level, _Digits));
+   ObjectSetString (0, name, OBJPROP_FONT,       InpLiqFont);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE,   (int)MathMax(5, MathMin(20, InpFontSize)));
+   ObjectSetInteger(0, name, OBJPROP_COLOR,      isHigh ? InpLiqHighColor : InpLiqLowColor);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR,     isHigh ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_BACK,       false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTED,   false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+   g_liqChanged = true;
+  }
+
 void LiqDraw(const datetime t, const double level, const ENUM_TIMEFRAMES tf, const bool isHigh)
   {
    string name = PO3_LIQ + (isHigh ? "H_" : "L_") + IntegerToString((long)t);
-   ArrayResize(g_liqKeep, g_liqKeepN + 1, 64);
+   ArrayResize(g_liqKeep, g_liqKeepN + 2, 64);
    g_liqKeep[g_liqKeepN++] = name;
+   if(InpLiqValues)
+      g_liqKeep[g_liqKeepN++] = name + "_V";     // pruned with its line
    if(isHigh)
       g_liqHiNear = MathMin(g_liqHiNear, level);
    else
@@ -2965,6 +2992,7 @@ void LiqDraw(const datetime t, const double level, const ENUM_TIMEFRAMES tf, con
       return;                                    // a confirmed swing never moves
 
    datetime start = LiqWickTime(t, tf, isHigh);
+   LiqDrawValue(name + "_V", start, level, isHigh);
    if(!ObjectCreate(0, name, OBJ_TREND, 0, start, level, start + PeriodSeconds(_Period), level))
       return;
    ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT,  true);
@@ -3081,6 +3109,8 @@ bool LiqDrawRaided(const int side, const ENUM_TIMEFRAMES tf, const int scale)
    string tip = "Raided " + (isHigh ? "high " : "low ") + DoubleToString(level, _Digits) +
                 "  " + TfNameOf(tf) + "  " + TimeToString(g_rdSwing[side], TIME_DATE | TIME_MINUTES) +
                 " -> " + TimeToString(g_rdRaid[side], TIME_DATE | TIME_MINUTES);
+
+   LiqDrawValue(pre + "V", from, level, isHigh);  // swept with the dashes
 
    if(InpLiqWidth <= 1 || s <= e)
      {

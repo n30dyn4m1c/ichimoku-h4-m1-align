@@ -6404,6 +6404,15 @@ objects, a sub-prefix no other sweep in the indicator matches. Hovering a line
 shows its price, timeframe and swing time. `InpShowLiq` turns the whole
 feature off.
 
+**The price beside each swing.** `InpLiqValues` (on by default) writes each
+unraided level's price, and the last raided high's and low's, at its
+wick, in the line's colour: above a high and
+below a low, so it sits clear of the candles that made the swing. The size
+follows the PO3 labels (`InpFontSize`); the face is lighter (`InpLiqFont`,
+Segoe UI Light by default) so it reads as a note on the line, not a level of
+its own. The text is a `PO3_U…_V` object, pruned with its line when the level
+is raided (`PO3_UR…V` for the dashed ones, swept with their dashes).
+
 **The last raided level.** `InpLiqLastRaid` (on by default) keeps the most
 recently raided high and the most recently raided low on the chart as a
 **dashed** line in the same colour and width, running from the wick to the
@@ -6495,3 +6504,41 @@ backtested.** The questions for the tester: how often each timeframe supplies
 the target, how often the TP is hit before the kumo-touch exit, and whether
 cutting the H1/H4 runners at the target costs more of the trend tail than it
 saves on trades that reverse after taking the liquidity.
+
+## 54. M5-base stack — alignment from M5 up to H4
+
+**File:** `experimental-bottomup-stack-m5-base-vps-ea.mq5`
+**Magic number:** `20260879`
+
+A fork of the **live VPS build** as it stands on 2026-09-23 (M1-strict cloud
+bias, robustness pack, M5 tier off). The one change: **the bottom-up stack
+starts at M5, not M1.** M1 takes no part in alignment.
+
+| Tier | Live build needs | This build needs |
+|---|---|---|
+| M15 | M1 + M5 + M15 | M5 + M15 |
+| M30 | M1 … M30 | M5 … M30 |
+| H1 | M1 … H1 | M5 … H1 |
+| H4 | M1 … H4 | M5 … H4 |
+
+M5 alone never trades; it is only the start of the stack, as M1 was.
+With the M5 tier already off in the live build, the tier set is unchanged
+(M15, M30, H1, H4). The difference is that no entry has to wait for M1 to line
+up, so the question is whether M1's agreement was filtering out bad entries or
+only delaying good ones.
+
+**The cloud gate** stays the live one: the tier's timeframe and the one below
+it, future cloud only. Live applies the strict M1 rule (current *and* future
+cloud) to no tier since the M5 tier was dropped, so nothing is lost by default.
+`InpBaseCloudFull` (off) moves that rule onto the new base: the M15 tier then
+needs M5 twisted its way at both the current bar and the far end of the
+future cloud.
+
+**Unchanged:** H4 bias with the H1 stand-in, the D1 filter on the H4 tier,
+risk tiers, disaster stop, break-even, chandelier trail, kumo-touch exit and
+the robustness pack. The loop is still paced by closed M1 bars, so exits are
+checked as often as live. The M1 Ichimoku handle is still created but no
+longer read for entries. The parent's header comment is kept below a new
+experiment banner.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
