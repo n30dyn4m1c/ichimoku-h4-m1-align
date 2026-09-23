@@ -6616,41 +6616,38 @@ Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
 Compare against §54 on the same period: net profit should rise roughly in
 proportion, and the question is how much the drawdown grows with it.
 
-## 57. M5-base, risk x2.5 in five regimes
+## 57. M5-base, five equity regimes
 
-**File:** `experimental-bottomup-stack-m5-base-risk250-5regime-vps-ea.mq5`
+**File:** `experimental-bottomup-stack-m5-base-risk125-5regime-vps-ea.mq5`
 **Magic number:** `20260882`
 
-A fork of the risk ×1.25 build (§56) with two changes to sizing only.
-
-1. **Every risk % is doubled**, so ×2.5 of the M5 base (§54).
-2. **Five equity regimes instead of three.** The old $13000+ regime is split
-   at $17000 and $20000. Regime 3 is the doubled §56 tier-3 figures; regimes
-   4 and 5 each halve the one before.
+A fork of the risk ×1.25 build (§56). The change is to sizing only: **five
+equity regimes instead of three.** The old $13000+ regime is split at $17000
+and $20000, and each new regime is half the one before.
 
 | Tier | < $7000 | $7000–$13000 | $13000–$17000 | $17000–$20000 | $20000+ |
 |---|---|---|---|---|---|
-| M15 | 2.5 | 1.25 | 0.25 | 0.125 | 0.0625 |
-| M30 | 12.5 | 6.25 | 0.5 | 0.25 | 0.125 |
-| H1 | 25 | 12.5 | 2.5 | 1.25 | 0.625 |
-| H4 | 50 | 25 | 5 | 2.5 | 1.25 |
+| M15 | 1.25 | 0.625 | 0.25 | 0.125 | 0.0625 |
+| M30 | 6.25 | 3.125 | 0.5 | 0.25 | 0.125 |
+| H1 | 12.5 | 6.25 | 2.5 | 1.25 | 0.625 |
+| H4 | 25 | 12.5 | 5 | 2.5 | 1.25 |
 
 (M5 carries the M15 figures but never trades in the M5-base stack.) New
 inputs `InpRiskTier4At` (17000) and `InpRiskTier5At` (20000) and the
-`_T4` / `_T5` risk inputs; `LevelRiskPct` picks the regime from the
-equity at entry.
+`_T4` / `_T5` risk inputs; `LevelRiskPct` picks the regime from the equity at
+entry.
 
-**How hard this pushes.** The % is measured against a 2 × ATR reference
-distance, but the disaster stop sits at 8 × ATR. An H4 trade at 50% that ran
-all the way to the disaster stop would lose about four times the budgeted
-risk, which is more than the account. In practice the 80% free-margin cap
-will often trim the H1/H4 orders on a small account, so the delivered risk may
-be well below the table. This build is for the tester, not for live money
-as it stands.
+**History.** The first version of this build (filed as `…-risk250-5regime-…`)
+also doubled every figure, ×2.5 of the M5 base, which put H4 at 50% below
+$7000. At 50% against a 2 × ATR sizing distance, a trade run to the 8 × ATR
+disaster stop would lose about twice the account. The user had it reduced
+back the same day: regimes 1–2 returned to §56's figures, and the three
+regimes above $13000 kept the figures they had (so regime 3 is twice §56's
+old $13000+ tier).
 
-Everything else (entries, the M5-base chain, cloud gate, bias, exits,
-margin cap) is §54's.
+Everything else (entries, the M5-base chain, cloud gate, bias, exits, the
+80% margin cap) is §54's.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
-Worth watching: max drawdown and the worst single loss in regimes 1–2, and
-whether the steeper step-down after $13000 holds the gains.
+Against §56 it only differs once equity passes $13000, so compare on a period
+long enough to get there.

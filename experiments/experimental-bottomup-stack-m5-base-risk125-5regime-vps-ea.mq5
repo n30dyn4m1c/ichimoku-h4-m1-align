@@ -1,17 +1,20 @@
 //+------------------------------------------------------------------+
-//| EXPERIMENT — M5-BASE, RISK x2.5, FIVE REGIMES (notes §57,        |
-//| magic 20260882). A fork of the risk x1.25 build (§56): every risk |
-//| % doubled (x2.5 of the M5 base), and the old $13000+ regime split |
-//| into three that keep stepping down (each half the one before):   |
-//|   regime 1  < $7000        : M15 2.5, M30 12.5, H1 25, H4 50     |
-//|   regime 2  $7000-$13000   : 1.25 / 6.25 / 12.5 / 25             |
+//| EXPERIMENT — M5-BASE, FIVE REGIMES (notes §57, magic 20260882).   |
+//| A fork of the risk x1.25 build (§56). Below $13000 the risk is    |
+//| §56's (x1.25 of the M5 base); the old $13000+ regime is split     |
+//| into three that keep stepping down. A x2.5 doubling was tried     |
+//| here first and reduced back below $13000 on 2026-09-24; the three |
+//| new regimes kept their figures:                                  |
+//|   regime 1  < $7000        : M15 1.25, M30 6.25, H1 12.5, H4 25  |
+//|   regime 2  $7000-$13000   : 0.625 / 3.125 / 6.25 / 12.5         |
 //|   regime 3  $13000-$17000  : 0.25 / 0.5 / 2.5 / 5                |
 //|   regime 4  $17000-$20000  : 0.125 / 0.25 / 1.25 / 2.5           |
 //|   regime 5  $20000+        : 0.0625 / 0.125 / 0.625 / 1.25       |
 //| Sizing distance (2 x ATR) and the 80% margin cap are unchanged.   |
 //| The x1.25 banner below is the parent's.                           |
 //|                                                                  |
-//| PARENT — //| A fork of the M5-base stack (§54) with one change: every risk %   |
+//| PARENT — M5-BASE, RISK x1.25 (notes §56, magic 20260881)        |
+//| A fork of the M5-base stack (§54) with one change: every risk %   |
 //| in every regime is 25% higher. Tier 1 (< $7000):                  |
 //| M5/M15 1.25, M30 6.25, H1 12.5, H4 25. Tier 2 ($7000-$13000):     |
 //| 0.625/0.625/3.125/6.25/12.5. Tier 3 ($13000+):                    |
@@ -196,31 +199,31 @@ input double InpRiskTier2At     = 7000.0; // Equity where risk drops to regime 2
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to regime 3
 input double InpRiskTier4At     = 17000.0;// Equity where risk drops to regime 4
 input double InpRiskTier5At     = 20000.0;// Equity where risk drops to regime 5
-input double InpRiskPctM5       = 2.5;    // M5   — regime 1 (equity < Tier2At) (M5 never trades here)
-input double InpRiskPctM15      = 2.5;    // M15  — regime 1
-input double InpRiskPctM30      = 12.5;   // M30  — regime 1
-input double InpRiskPctH1       = 25.0;   // H1   — regime 1
-input double InpRiskPctH4       = 50.0;   // H4   — regime 1
-input double InpRiskPctM5_T2    = 1.25;   // M5   — regime 2 ($7000-$13000)
-input double InpRiskPctM15_T2   = 1.25;   // M15  — regime 2
-input double InpRiskPctM30_T2   = 6.25;   // M30  — regime 2
-input double InpRiskPctH1_T2    = 12.5;   // H1   — regime 2
-input double InpRiskPctH4_T2    = 25.0;   // H4   — regime 2
-input double InpRiskPctM5_T3    = 0.25;   // M5   — regime 3 ($13000-$17000)
-input double InpRiskPctM15_T3   = 0.25;   // M15  — regime 3
-input double InpRiskPctM30_T3   = 0.5;    // M30  — regime 3
-input double InpRiskPctH1_T3    = 2.5;    // H1   — regime 3
-input double InpRiskPctH4_T3    = 5.0;    // H4   — regime 3
-input double InpRiskPctM5_T4    = 0.125;  // M5   — regime 4 ($17000-$20000)
-input double InpRiskPctM15_T4   = 0.125;  // M15  — regime 4
-input double InpRiskPctM30_T4   = 0.25;   // M30  — regime 4
-input double InpRiskPctH1_T4    = 1.25;   // H1   — regime 4
-input double InpRiskPctH4_T4    = 2.5;    // H4   — regime 4
-input double InpRiskPctM5_T5    = 0.0625; // M5   — regime 5 ($20000+)
-input double InpRiskPctM15_T5   = 0.0625; // M15  — regime 5
-input double InpRiskPctM30_T5   = 0.125;  // M30  — regime 5
-input double InpRiskPctH1_T5    = 0.625;  // H1   — regime 5
-input double InpRiskPctH4_T5    = 1.25;   // H4   — regime 5
+input double InpRiskPctM5       = 1.25;    // M5   — regime 1 (equity < Tier2At) (M5 never trades here)
+input double InpRiskPctM15      = 1.25;    // M15  — regime 1
+input double InpRiskPctM30      = 6.25;    // M30  — regime 1
+input double InpRiskPctH1       = 12.5;    // H1   — regime 1
+input double InpRiskPctH4       = 25.0;    // H4   — regime 1
+input double InpRiskPctM5_T2    = 0.625;   // M5   — regime 2 ($7000-$13000)
+input double InpRiskPctM15_T2   = 0.625;   // M15  — regime 2
+input double InpRiskPctM30_T2   = 3.125;   // M30  — regime 2
+input double InpRiskPctH1_T2    = 6.25;    // H1   — regime 2
+input double InpRiskPctH4_T2    = 12.5;    // H4   — regime 2
+input double InpRiskPctM5_T3    = 0.25;    // M5   — regime 3 ($13000-$17000)
+input double InpRiskPctM15_T3   = 0.25;    // M15  — regime 3
+input double InpRiskPctM30_T3   = 0.5;     // M30  — regime 3
+input double InpRiskPctH1_T3    = 2.5;     // H1   — regime 3
+input double InpRiskPctH4_T3    = 5.0;     // H4   — regime 3
+input double InpRiskPctM5_T4    = 0.125;   // M5   — regime 4 ($17000-$20000)
+input double InpRiskPctM15_T4   = 0.125;   // M15  — regime 4
+input double InpRiskPctM30_T4   = 0.25;    // M30  — regime 4
+input double InpRiskPctH1_T4    = 1.25;    // H1   — regime 4
+input double InpRiskPctH4_T4    = 2.5;     // H4   — regime 4
+input double InpRiskPctM5_T5    = 0.0625;  // M5   — regime 5 ($20000+)
+input double InpRiskPctM15_T5   = 0.0625;  // M15  — regime 5
+input double InpRiskPctM30_T5   = 0.125;   // M30  — regime 5
+input double InpRiskPctH1_T5    = 0.625;   // H1   — regime 5
+input double InpRiskPctH4_T5    = 1.25;    // H4   — regime 5
 input double InpMarginUsePct     = 80.0;   // Max % of FREE margin one order may commit (R5; parent used 100%)
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
@@ -300,7 +303,7 @@ bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-int MAGIC = 20260882;   // M5-base risk x2.5, five regimes (x1.25 parent runs 20260881)
+int MAGIC = 20260882;   // M5-base five regimes (x1.25 parent runs 20260881)
 
 CTrade trade;
 
