@@ -5946,3 +5946,97 @@ Per-trade breakdown of the defaults. R is +rr for a win and −1 for a loss:
   trend, not a rule.
 - One symbol, one broker feed, two windows. The year-to-year swing is larger
   than any filter's effect, so no default was changed on this evidence.
+
+### Revision — week kihon clocks, and the VPS build's exits
+
+User direction: add a kihon suchi time **for the week**, counting **H4, H1
+and M30** from the first candle that opens the week. Let the **SL be the
+cloud** and let the **TP run**, both as in the VPS build.
+
+**Week clocks.** Three more clocks count from the week open (the W1 bar), so
+candle 1 is the first candle that opens the week. They are capped at what five
+trading days reach:
+
+| Clock | Candles a week | Kihon numbers used |
+|---|---|---|
+| H4 | ~30 | 9, 17, 26 |
+| H1 | ~120 | 9 … 76 |
+| M30 | ~240 | 9 … 226 |
+
+They sit alongside the day clocks (`InpKihonWeekH4/H1/M30`). The gate is open
+when `InpKihonMinTFs` of the six clocks are on a number (now 1–6; default 1,
+so any one opens it). The journal tags week readings with a `w`, e.g.
+`wH4:17*`.
+
+**VPS exits (`InpExitMode = EXIT_VPS`, the new default).** These are ported
+from the live build's `InCloudTouch` and `ManageLevelProtection`.
+
+- **Stop = the cloud.** The trade closes when the bid (long) or ask (short)
+  touches the **exit timeframe's cloud**. By the VPS rule, the exit timeframe
+  is the **highest timeframe aligned at entry**: H4 for a full-chain trade,
+  M5–H1 for a partial-chain (line-target) trade. `InpExitCloudTF` can fix it
+  instead. The exit timeframe is written into the position comment
+  (`PO3 Scalp Buy H4`) so a restart finds it.
+- **No take profit.** Profit is protected the way the live build does it:
+  - break-even (entry + 15 points) at +1 ATR;
+  - then a chandelier 1 ATR behind the peak from +2 ATR;
+  - on an H1/H4 exit timeframe, both arm at +0.5 ATR;
+  - an **8 × ATR disaster stop** on the order, re-attached if it goes
+    missing.
+- **Sizing.** The risk is 1% of equity against the **distance to the exit
+  cloud at entry**, floored at `InpMinSLPips`. An entry already touching that
+  cloud is skipped.
+- **Targets become a room filter.** The PO3/line target is still worked out,
+  but only vetoes entries with less than `InpMinTPPips` (30) of room. No TP is
+  attached and the reward:risk check is not used.
+- `InpExitMode = EXIT_TARGET` restores the fixed TP and PO3 stop.
+
+### Results — week clocks + VPS exits
+
+GOLDm#, $10,000, 1:1000, real ticks, defaults.
+
+| Exits | Window | Net | PF | Trades | Won | Avg win / loss | Max balance DD |
+|---|---|---|---|---|---|---|---|
+| **VPS** | 2026 | **+$70** | 1.03 | 120 | 60.8% | $31 / −$47 | 4.6% |
+| **VPS** | 2025 | **+$910** | 1.39 | 143 | 72.7% | $31 / −$59 | 4.6% |
+| target | 2026 | −$2,846 | 0.82 | 259 | 25.9% | $191 / −$81 | 46.6% |
+| target | 2025 | +$7,761 | 1.22 | 350 | 34.3% | $357 / −$153 | 20.0% |
+
+VPS-mode trades, by exit timeframe and by how they closed:
+
+| Split | 2026 | 2025 |
+|---|---|---|
+| H4 exit (full chain) | 59 trades, 54% won, **+$302** | 76, 76%, **+$1,076** |
+| H1 exit | 16, 75%, +$42 | 28, 71%, +$269 |
+| M30 exit | 7, 57%, +$63 | 10, 60%, −$227 |
+| M15 exit | 12, 58%, +$73 | 8, 75%, −$9 |
+| **M5 exit** | 26, 54%, **−$410** | 21, 57%, **−$200** |
+| closed by the cloud touch | 27, 0% won, −$2,212 | 25, 0%, −$2,294 |
+| closed by BE / trail / disaster | 93, 74%, +$2,283 | 118, 86%, +$3,204 |
+| longs / shorts | +$217 / −$146 | +$1,561 / −$652 |
+
+### Reading
+
+- **The VPS exits make money in both years, the first version of this
+  scalper to do so,** and with a tenth of the drawdown (4.6% vs 20–47%). The
+  profit is small: +0.7% and +9% on the year. Most trades are closed early by
+  the BE or trail stop for about $31, and every cloud-touch exit is a full
+  loss of about $85.
+- **The stop is wide.** The median distance to the exit cloud at entry was
+  848 pips in 2026 and 417 in 2025 (the H4 cloud on most trades), so 1% risk
+  buys small lots. That is why the dollar figures are small next to target
+  mode.
+- **Consistent in both years:**
+  - full-chain trades exiting on the **H4 cloud are the profit**;
+  - trades exiting on the **M5 cloud lose**;
+  - shorts lose;
+  - partial-chain (line-target) trades are net negative (−$232 and −$166),
+    which reverses the small lead line targets showed in target mode.
+- **Target mode still swings** from −28% to +78% between the years. With the
+  week clocks added it trades more (259 and 350 trades) but reads the same as
+  before.
+- Next to try: drop the M5-exit trades (`InpStructMinTop = M15`), or fix the
+  exit cloud at H1 (`InpExitCloudTF`) to shorten the stop on full-chain
+  trades.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings).
