@@ -14,12 +14,26 @@ build adds terminal `Alert()` popups and the weekly equity reminder.
 
 | EA | File | Model | Stack | Exit signal | Magic |
 |----|------|-------|-------|-------------|-------|
-| **Bottom-Up Stack — M1-Strict Cloud Bias — VPS** | `ichimoku-h4-m1-vps-ea.mq5` | Bottom-up, M1-strict cloud bias | M1 → H4, five tradable tiers | Kumo touch on the tier's own timeframe | `20260858` |
-| **Bottom-Up Stack — M1-Strict Cloud Bias — MT5 Desktop** | `ichimoku-h4-m1-mt5pc-ea.mq5` | Bottom-up, M1-strict cloud bias | M1 → H4, five tradable tiers | Kumo touch on the tier's own timeframe | `20260860` |
+| **Bottom-Up Stack — M1-Strict Cloud Bias — VPS** | `ichimoku-h4-m1-vps-ea.mq5` | Bottom-up, M1-strict cloud bias | M1 → H4, four tradable tiers (M15–H4; M5 dropped) | Kumo touch on the tier's own timeframe | `20260858` |
+| **Bottom-Up Stack — M1-Strict Cloud Bias — MT5 Desktop** | `ichimoku-h4-m1-mt5pc-ea.mq5` | Bottom-up, M1-strict cloud bias | M1 → H4, four tradable tiers (M15–H4; M5 dropped) | Kumo touch on the tier's own timeframe | `20260860` |
 
 Both builds carry their own magic number, so they can run on the same account
 — even the same symbol — without touching each other's positions.
 
+> ### ✂️ M5 tier dropped (changed 2026-09-23)
+>
+> Both main builds no longer open **M5** trades (`InpM5Tier = false`). M15,
+> M30, H1 and H4 trade exactly as before, and M1 and M5 still form the bottom
+> of every chain. Real-tick backtests on GOLDm# (notes §47–48) found M5 was
+> about half of all trades at a profit factor of ~1.1. Without it the
+> account's profit factor rose from **1.38 to 1.52** (Jan–Sep 2026) and **1.88
+> to 2.03** (2025, out of sample) at the same net profit, on 40–47% fewer
+> trades. One side effect: the full current-and-future M1 cloud check only
+> ever applied to the M5 tier, so it now applies to none. The magic numbers
+> are unchanged, so an M5 position already open is still managed to its exit.
+> The pre-change builds are archived as the `-archived20260923` pair;
+> `InpM5Tier = true` restores M5.
+>
 > ### 🛡️ Robustness pack (added 2026-08-23)
 >
 > Both main builds carry a five-part hardening pack (review recommendations
@@ -640,6 +654,7 @@ the desktop build.
 | `InpH4Bias` | `true` | H4 is the bias for the whole stack (H4 flat = no trades unless the H1 bias stands in) |
 | `InpD1Filter` | `true` | D1 filter on the H4 tier: H4 trades only with D1; D1 in the cloud = no H4 trades |
 | `InpMaxSpreadPoints` | 60 | Max spread (points) to allow an entry; `0` disables the filter |
+| `InpM5Tier` | `false` | M5 tier opens trades. Dropped on 2026-09-23 (notes §48); `true` restores it |
 
 **H1 Bias**
 
@@ -785,6 +800,8 @@ re-read:
 
 | File | What it is |
 |------|------------|
+| `ichimoku-h4-m1-vps-ea-archived20260923.mq5` | The VPS build as it stood before the **M5 tier was dropped** on 2026-09-23 — five tradable tiers (M5–H4), M1-strict cloud bias, robustness pack; magic `20260858` |
+| `ichimoku-h4-m1-mt5pc-ea-archived20260923.mq5` | Its desktop twin from the same change (magic `20260860`) |
 | `ichimoku-h4-m1-vps-ea-archived20260823.mq5` | The VPS build as it stood before the **robustness pack** (R2–R6) was promoted into it on 2026-08-23 — same M1-strict cloud-bias strategy, magic `20260858` |
 | `ichimoku-h4-m1-mt5pc-ea-archived20260823.mq5` | Its desktop twin from the same promotion (magic `20260860`) |
 | `ichimoku-h4-m1-vps-ea-archived20260820.mq5` | The **bottom-up bias-stack VPS build** replaced on 2026-08-20 (H4 bias + H1 stand-in, kumo-touch exits; magic `20260850`), superseded by the M1-strict cloud-bias build |

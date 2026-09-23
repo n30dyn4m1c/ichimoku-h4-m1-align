@@ -129,6 +129,15 @@
 //|      higher-tier position survives its close attempt.            |
 //| Magic: 20260860 — its own number (see above); this build carries |
 //|        the identical robustness pack as the VPS twin (20260858). |
+//| M5 TIER DROPPED (2026-09-23): no new M5 entries (InpM5Tier =     |
+//| false); M15, M30, H1 and H4 trade as before. Real-tick backtests |
+//| on GOLDm# (notes §48): M5 was ~half of all trades at profit      |
+//| factor ~1.1, and without it account PF rose 1.38 -> 1.52 (2026)  |
+//| and 1.88 -> 2.03 (2025) at the same net profit. Because M5 was   |
+//| the only tier checked against the full M1 cloud rule, that rule  |
+//| now applies to no tier. Pre-change build archived as the         |
+//| -archived20260923 pair. Magic unchanged, so an open M5 position  |
+//| is still managed to its exit.                                    |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -182,6 +191,7 @@ input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1 
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
+input bool   InpM5Tier           = false;  // M5 tier opens trades (dropped 2026-09-23 — see notes §48)
 
 input group  "H1 Bias (lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (H4 only), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
@@ -1290,6 +1300,9 @@ void OnTick()
          for(int l = LEVELS - 1; l >= 0; l--)
          {
             if(state[s][l] != 0) continue;
+            // M5 tier dropped (2026-09-23): no new M5 entries. An M5 position
+            // already open keeps its exits and protection until it closes.
+            if(l == 0 && !InpM5Tier) continue;
             int st = ChainAligned(s, l + 1);
             if(st == 0) continue;
             if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;

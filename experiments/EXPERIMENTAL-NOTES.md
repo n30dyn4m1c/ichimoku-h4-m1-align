@@ -5584,7 +5584,11 @@ reproduces the live build to the cent ($13,463.81).
 ### Status & caveats
 
 - Compiled clean (0 errors, 0 warnings); backtested on 2026-09-23 as above.
-- One symbol (GOLDm#), one broker feed, two windows. The live VPS build is
-  not changed; promoting `NeedH4` or dropping M5 is the user's call.
+- One symbol (GOLDm#), one broker feed, two windows.
+- **PROMOTED 2026-09-23 (user decision): the M5 tier is dropped from both
+  main builds** (`InpM5Tier = false`), not tightened. The new VPS file was
+  backtested on the 2026 window and reproduced the "no M5" run exactly
+  ($13,294.55, PF 1.52, zero M5 entries). The pre-change builds are
+  archived as the `-archived20260923` pair.
 - Do not run it beside the live build on the same account and symbol.
 

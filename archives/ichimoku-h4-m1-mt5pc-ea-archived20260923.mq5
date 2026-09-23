@@ -1,14 +1,12 @@
 //+------------------------------------------------------------------+
 //| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
-//| The live VPS build since 2026-08-23. The M1-strict cloud-bias     |
-//| trading logic is unchanged (promoted 2026-08-20 from the most     |
-//| profitable cloud-bias experiment, user report 2026-08-20;         |
-//| $100 -> $14000 on Jan-Aug 2026 data); what is new is the          |
-//| ROBUSTNESS PACK below — review recommendations R2-R6, built and   |
-//| verified as experiments/experimental-bottomup-stack-m1-strict-    |
-//| cloud-bias-robustness-vps-ea.mq5. It replaces the previous VPS    |
-//| build, archived as archives/ichimoku-h4-m1-vps-ea-archived        |
-//| 20260823.mq5 and no longer deployed.                              |
+//| The MT5 desktop build since 2026-08-23, twin of the live VPS      |
+//| build (ichimoku-h4-m1-vps-ea.mq5). The same M1-strict cloud-bias  |
+//| trading logic with the same ROBUSTNESS PACK (R2-R6 below), plus   |
+//| the desktop conveniences restored — see the Desktop paragraph.    |
+//| It replaces the previous desktop build, archived as archives/     |
+//| ichimoku-h4-m1-mt5pc-ea-archived20260823.mq5 and no longer        |
+//| deployed.                                                         |
 //| EXPERIMENTAL RULE — the only change vs the parent build: the      |
 //| cloud-bias gate (Span A vs Span B) requires M1 to be twisted the  |
 //| trade's way at BOTH the current bar (last closed bar) and the     |
@@ -84,16 +82,20 @@
 //|        ATR(level TF) x InpRiskATRMult (sizing basis only — no     |
 //|        entry stop is attached). No multipliers, no streak         |
 //|        compounding.                                               |
-//| VPS:   no Alert() popups and no equity alert — every entry/exit   |
-//|        sends a SendNotification push and a journal Print, and all |
-//|        logic runs only on closed M1 bars (once per minute) to     |
-//|        keep CPU/network use on a cheap VPS negligible. The        |
-//|        desktop counterpart ichimoku-h4-m1-mt5pc-ea.mq5 restores   |
-//|        the popups and the weekly equity reminder.                 |
-//| Magic: 20260858 — carried over from the experiment it was         |
-//|        promoted from, so positions it already opened keep being   |
-//|        managed. Distinct from the desktop twin (20260860) and     |
-//|        from the retired builds (20260850 VPS / 20260852 desktop). |
+//| Desktop: identical trading logic to the VPS build                 |
+//|        ichimoku-h4-m1-vps-ea.mq5, with the desktop conveniences   |
+//|        restored — a terminal Alert() popup alongside the push and |
+//|        the journal line on every entry, kumo-touch exit,          |
+//|        rejection exit, supersede-close and failed order, plus the |
+//|        weekly EQUITY REMINDER: every InpCheckDay it compares      |
+//|        equity to a stored baseline and, once profit clears        |
+//|        InpMinProfitTrigger, alerts with a suggested withdrawal of |
+//|        InpWithdrawProfitPct% of that profit. Informational only — |
+//|        it never moves money. All logic still runs only on closed  |
+//|        M1 bars (once per minute), same as the VPS build.          |
+//| Magic: 20260860 — its own number, so this desktop build and the   |
+//|        VPS build (20260858) can trade the same account, even the  |
+//|        same symbol, without touching each other's positions.      |
 //|                                                                  |
 //| ROBUSTNESS PACK (live since 2026-08-23) — five hardening changes |
 //| (review recommendations R2-R6), promoted verbatim from the       |
@@ -125,18 +127,8 @@
 //|      (user decision): recommendation R1, the supersede invariant |
 //|      guard that would abort a new entry while an existing        |
 //|      higher-tier position survives its close attempt.            |
-//| Magic: 20260858 — carried over from the previous VPS build so    |
-//|        positions it already opened keep being managed. Distinct  |
-//|        from the desktop twin (20260860) and the retired builds.  |
-//| M5 TIER DROPPED (2026-09-23): no new M5 entries (InpM5Tier =     |
-//| false); M15, M30, H1 and H4 trade as before. Real-tick backtests |
-//| on GOLDm# (notes §48): M5 was ~half of all trades at profit      |
-//| factor ~1.1, and without it account PF rose 1.38 -> 1.52 (2026)  |
-//| and 1.88 -> 2.03 (2025) at the same net profit. Because M5 was   |
-//| the only tier checked against the full M1 cloud rule, that rule  |
-//| now applies to no tier. Pre-change build archived as the         |
-//| -archived20260923 pair. Magic unchanged, so an open M5 position  |
-//| is still managed to its exit.                                    |
+//| Magic: 20260860 — its own number (see above); this build carries |
+//|        the identical robustness pack as the VPS twin (20260858). |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
 #property strict
@@ -190,7 +182,6 @@ input bool   InpCloudBiasEnabled = true;   // Require Span A vs Span B bias: M1 
 input bool   InpH4Bias           = true;   // H4 is the bias — tiers trade in H4's direction (H4 flat = no trades unless the H1 bias stands in)
 input bool   InpD1Filter         = true;   // D1 filter for the H4 tier: H4 trades only in the D1's direction; D1 in the cloud = no H4 trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
-input bool   InpM5Tier           = false;  // M5 tier opens trades (dropped 2026-09-23 — see notes §48)
 
 input group  "H1 Bias (lets the lower tiers trade when H4 is flat)"
 input ENUM_H1_BIAS_MODE InpH1BiasMode    = H1BIAS_FLAT_H4; // 0=off (H4 only), 1=stand in only while H4 is flat, 2=stand in even against an aligned H4
@@ -216,12 +207,22 @@ input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the reject
 input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
 input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
+input group             "Equity Reminder (desktop only)"
+input double            InpMinProfitTrigger  = 5.0;        // Min profit over baseline to trigger the reminder
+input double            InpWithdrawProfitPct = 50.0;       // Percentage of the PROFIT to suggest withdrawing
+input ENUM_DAY_OF_WEEK  InpCheckDay          = FRIDAY;     // Day of the week to check
+input bool              InpResetBaseline     = false;      // Set to true to reset the baseline to current equity
+input bool              InpSendPush          = true;       // Also push the equity reminder to the MT5 mobile app
+
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
 #define LEVELS   5      // tradable levels: M5, M15, M30, H1, H4
 #define TFS      6      // stack: M1, M5, M15, M30, H1, H4
 #define IDX_H1   4      // index of H1 in tfs[] — the stand-in bias TF
 #define IDX_H4   5      // index of H4 in tfs[] — the primary bias TF
+
+#define GV_BASE_EQUITY    "EA_EquityAlert_Base_"    + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+#define GV_LAST_ALERT_DAY "EA_EquityAlert_Day_"     + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
 
 ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
 string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
@@ -232,6 +233,7 @@ int      atr[MAX_SYMS][LEVELS];       // ATR(level TF) — BE and spike-lock tra
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
+datetime lastEquityBar = 0;           // H4 bar gating for the weekly equity reminder
 int      state[MAX_SYMS][LEVELS];     // per level: 0 = flat, 1 = long, -1 = short
 int      lastMinuteKey = -1;
 
@@ -248,7 +250,7 @@ bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-int MAGIC = 20260858;   // live VPS M1-strict build + robustness pack (desktop twin runs 20260860)
+int MAGIC = 20260860;   // desktop M1-strict build + robustness pack (VPS twin runs 20260858)
 
 CTrade trade;
 
@@ -312,8 +314,57 @@ int OnInit()
 
    trade.SetDeviationInPoints(Slippage);
    trade.SetExpertMagicNumber(MAGIC);
+   InitEquityAlert();
    SyncStateFromPositions();
    return(INIT_SUCCEEDED);
+}
+
+//==============================================================
+// Equity Reminder (desktop only): weekly profit-withdrawal nudge
+//
+// The baseline equity is stored in a terminal global variable keyed
+// by account login, so it survives restarts and recompiles. Once a
+// week (InpCheckDay) the EA compares live equity to that baseline
+// and, if the profit clears InpMinProfitTrigger, pops an Alert()
+// suggesting InpWithdrawProfitPct% of the profit be withdrawn. It
+// only ever tells you — it never withdraws anything itself. Flip
+// InpResetBaseline to true once to re-baseline on the current
+// equity (e.g. after a deposit or a withdrawal).
+//==============================================================
+
+void InitEquityAlert()
+{
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(!GlobalVariableCheck(GV_BASE_EQUITY) || InpResetBaseline)
+      GlobalVariableSet(GV_BASE_EQUITY, currentEquity);
+   if(!GlobalVariableCheck(GV_LAST_ALERT_DAY))
+      GlobalVariableSet(GV_LAST_ALERT_DAY, 0);
+}
+
+void CheckEquityAlert()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+
+   if(dt.day_of_week != InpCheckDay) return;
+   if((int)GlobalVariableGet(GV_LAST_ALERT_DAY) == dt.day) return;   // one alert per day
+
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double baseEquity    = GlobalVariableGet(GV_BASE_EQUITY);
+   double profit        = currentEquity - baseEquity;
+
+   if(profit >= InpMinProfitTrigger)
+   {
+      double withdrawAmount = profit * (InpWithdrawProfitPct / 100.0);
+      string msg = StringFormat("Profit: %.2f. Suggest withdrawing: %.2f", profit, withdrawAmount);
+
+      Print(msg);
+      Alert(msg);
+      if(InpSendPush) SendNotification(msg);
+
+      GlobalVariableSet(GV_LAST_ALERT_DAY, (double)dt.day);
+      GlobalVariablesFlush();
+   }
 }
 
 void OnDeinit(const int reason)
@@ -903,7 +954,7 @@ bool OpenLevel(int s, int lvl, int dir, double lots, string via)
       string action = (dir == 1) ? "Buy" : "Sell";
       string msg = PCTime() + " | " + action + " " + sym + " " + tfName[lvl + 1] +
                    " @ " + DoubleToString(lots, 2) + " (bottom-up, bias " + via + ")";
-      Print(msg); SendNotification(msg);
+      Print(msg); Alert(msg); SendNotification(msg);
    }
    return ok;
 }
@@ -1154,16 +1205,18 @@ bool ExitLevel(int s, int l, string reason)
    string side = (state[s][l] == 1) ? "Long" : "Short";
    string msg  = PCTime() + " | Close " + syms[s] + " " + side + " " +
                  tfName[l + 1] + " (" + reason + ")";
-   Print(msg); SendNotification(msg);
+   Print(msg); Alert(msg); SendNotification(msg);
 
    if(CloseLevelPositions(s, l))
    {
       state[s][l] = 0;
       msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " level closed";
       Print(msg); SendNotification(msg);
+      // Confirmation only — no second popup on top of the exit alert above.
       return true;
    }
-   Print(PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry");
+   msg = PCTime() + " | " + syms[s] + " " + tfName[l + 1] + " exit signal but positions still open — will retry";
+   Print(msg); Alert(msg);
    return false;
 }
 
@@ -1178,6 +1231,15 @@ void OnTick()
    int nowKey = (int)(TimeCurrent() / 60);
    if(nowKey == lastMinuteKey) return;
    lastMinuteKey = nowKey;
+
+   // Equity reminder: evaluated once per new H4 bar; CheckEquityAlert()
+   // self-guards on the day of week and fires at most once a day.
+   MqlRates h4eq[];
+   if(symsCount > 0 && CopyRates(syms[0], PERIOD_H4, 0, 1, h4eq) > 0 && h4eq[0].time != lastEquityBar)
+   {
+      lastEquityBar = h4eq[0].time;
+      CheckEquityAlert();
+   }
 
    bool synced = false;
    for(int s = 0; s < symsCount; s++)
@@ -1228,9 +1290,6 @@ void OnTick()
          for(int l = LEVELS - 1; l >= 0; l--)
          {
             if(state[s][l] != 0) continue;
-            // M5 tier dropped (2026-09-23): no new M5 entries. An M5 position
-            // already open keeps its exits and protection until it closes.
-            if(l == 0 && !InpM5Tier) continue;
             int st = ChainAligned(s, l + 1);
             if(st == 0) continue;
             if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
@@ -1259,7 +1318,7 @@ void OnTick()
             {
                string msg = PCTime() + " | Close " + syms[s] + " " + tfName[l + 1] +
                             " (superseded by " + tfName[topTier + 1] + ")";
-               Print(msg); SendNotification(msg);
+               Print(msg); Alert(msg); SendNotification(msg);
 
                if(CloseLevelPositions(s, l))
                   state[s][l] = 0;
@@ -1273,8 +1332,11 @@ void OnTick()
          CapLotsToMargin(syms[s], (topDir == 1), lots);
 
          if(!OpenLevel(s, topTier, topDir, lots, topVia))
-            Print(PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
-                  " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
+         {
+            string fail = PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
+                          " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode());
+            Print(fail); Alert(fail);
+         }
       }
    }
 }

@@ -27,6 +27,10 @@ the pre-pack builds are archived as the `-archived20260823` pair.
 Recommendation R1 (the supersede-invariant guard) was deliberately **not**
 implemented — do not add it back without being asked.
 
+Since 2026-09-23 both builds **no longer open M5 trades** (`InpM5Tier =
+false`, user instruction after the §47–48 backtests); M15–H4 are unchanged.
+The pre-change builds are archived as the `-archived20260923` pair.
+
 Unless the user explicitly states that a VPS file should be updated, leave
 them untouched — even when a change applies to all other EAs.
 
