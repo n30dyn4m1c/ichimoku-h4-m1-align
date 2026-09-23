@@ -6356,3 +6356,45 @@ bias, 27 levels on M5) with one input changed per row.
 - **The session window is in server hours** (GOLDm# broker, GMT+3 in summer),
   so 15–20 is New York there and must be re-set for another broker or
   across DST changes.
+
+## 52. Unraided liquidity — an indicator
+
+**File:** `unraided-liquidity.mq5` (indicator, no magic number)
+
+A chart tool to sit beside `po3-levels.mq5` (§38). It marks the swing highs
+and lows that price has not yet traded through — the resting liquidity a
+sweep is expected to take — as a ray from the tip of the wick to the right
+edge, one colour for highs (`InpHighColor`, orange-red) and one for lows
+(`InpLowColor`, blue). When a level is raided its line is removed.
+
+**The swing.** A fractal with a wider window: a high is a swing when it stands
+above the `InpLeftBars` candles before it and the `InpRightBars` candles after
+it, both 6 by default (a Williams fractal is 2 and 2). Ties are settled one
+way so equal highs give one line, not two: the swing must be *strictly* above
+its left side but only *as high as* its right side, so of a run of equal highs
+the oldest is the swing. A swing is confirmed only once all its right-hand
+candles have closed, so a line never appears and then disappears because the
+swing failed.
+
+**The raid.** `InpRaidMode = RAID_WICK` (default): any later wick trading
+*beyond* the level — matching it is not a raid, equal highs stay liquidity.
+This is read off the live candle, so a line goes the moment price trades
+through. `RAID_CLOSE`: a closed candle beyond the level; the live candle is
+ignored until it closes.
+
+**The timeframe.** `InpTimeframe = PERIOD_CURRENT` follows the chart. Any
+other value locks the swings (and the raid check) to that timeframe on every
+chart. When the locked timeframe is higher than the chart's, the line starts
+at the chart candle inside the locked candle that printed the extreme
+(`InpSnapToWick`), so it sits on the wick you can see rather than on the
+locked candle's open.
+
+**Scope.** `InpLookback` (1000) candles of the source timeframe are searched.
+One newest-to-oldest pass carries the furthest price traded since each candle,
+so every swing's raided/unraided state is settled in the same pass. Every
+object is prefixed `ULQ_` and the indicator deletes nothing else, so it does
+not disturb the PO3 levels or kihon objects on the same chart. Hovering a line
+shows its price, timeframe and swing time.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings); not yet reviewed on a live
+chart.
