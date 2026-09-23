@@ -6099,3 +6099,43 @@ GOLDm#, $10,000, 1:1000, real ticks. 2026 runs to 09-19.
   extreme instead of BE/trail), not more entry filters.
 
 Compiled clean in MetaEditor (0 errors, 0 warnings).
+
+### Revision — pullback with a swing-target TP
+
+User direction: try the pullback with a **swing target** as the TP.
+
+**`InpPBExit`** (default now `PB_EXIT_SWING`; `PB_EXIT_TRAIL` is the BE +
+chandelier version above):
+- The TP is the extreme the dip came **from**: the highest high (long) or
+  lowest low (short) of the last `InpPBSwingBars` (60) M1 bars, placed
+  `InpTPBufferPips` in front of it.
+- The swing stop beyond the dip stays. There is no BE and no trail; both
+  levels ride on the order.
+- Skipped when the target is under `InpMinTPPips` (30), or under
+  `InpPBMinRR` × the stop (0 = off).
+
+GOLDm#, $10,000, real ticks, `InpEntryMode = ENTRY_PULLBACK`:
+
+| Variant | 2024 | 2025 | 2026 |
+|---|---|---|---|
+| swing TP, 60-bar swing, 30-min lookback | −$234, PF 0.25, 4 trades | +$90, PF 1.44, 9 | −$310, PF 0.22, 8 |
+| … plus rr ≥ 1.0 | +$3, 2 trades | +$104, 1 | −$299, 3 |
+| swing TP, 240-bar swing, 60-min lookback | −$127, PF 0.89, 34 | −$888, PF 0.49, 41 | −$379, PF 0.45, 11 |
+
+### Reading
+
+- **The swing target does not rescue the pullback.** At the default windows it
+  finds only 1–9 trades a year. With the windows widened it loses in every year
+  (PF 0.45–0.89).
+- **The geometry is against it.** The stop sits beyond the dip, typically
+  30–130 pips away. The swing the dip came from is usually close, so the target
+  is often under 30 pips and the trade is skipped. The trades that are left
+  win about $38–44 against losses of about $100. A 56–68% win rate cannot
+  carry that.
+- Across trail exits and swing targets, the pullback entry has now lost in
+  every configuration tried over 2024–2026. **Conclusion: no edge in this
+  form. `InpEntryMode` stays `ENTRY_BREAKOUT`.** The code is kept, off, in
+  case a different pullback definition is wanted later, e.g. a tighter stop
+  at the level itself rather than at the dip's extreme.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings).

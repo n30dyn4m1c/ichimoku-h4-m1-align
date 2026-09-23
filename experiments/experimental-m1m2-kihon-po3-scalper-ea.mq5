@@ -98,7 +98,8 @@
 //| M1+M2 must have been aligned AGAINST it within the lookback, the |
 //| dip's extreme must reach a PO3 number or an M5-H1 line, and      |
 //| M1+M2 must turn back with the trend inside a kihon window. Hard  |
-//| stop beyond the dip, no TP, BE + chandelier (InpPBManageTF ATR). |
+//| stop beyond the dip; InpPBExit: TP at the swing extreme the dip  |
+//| came from (default), or no TP with BE + chandelier.              |
 //|                                                                  |
 //| ONE POSITION PER SYMBOL.                                         |
 //|                                                                  |
@@ -151,7 +152,15 @@ input bool   InpPBNeedH1        = true;  // H1 must be aligned with H4 as well
 input int    InpPBLookbackMins  = 30;    // M1+M2 must have been aligned AGAINST the trend within this many minutes
 input double InpPBLevelTolPips  = 15.0;  // The pullback extreme must come within this of a level
 input double InpPBMaxSLPips     = 150.0; // Skip when the swing stop is further than this
-input ENUM_TIMEFRAMES InpPBManageTF = PERIOD_M15; // ATR for the BE / chandelier on pullback trades
+input ENUM_TIMEFRAMES InpPBManageTF = PERIOD_M15; // ATR for the BE / chandelier on pullback trades (trail exit)
+enum ENUM_PB_EXIT
+{
+   PB_EXIT_SWING = 0,   // Swing: TP at the swing extreme the dip came from, swing stop, nothing else
+   PB_EXIT_TRAIL = 1    // Trail: no TP, BE + chandelier on the InpPBManageTF ATR
+};
+input ENUM_PB_EXIT InpPBExit    = PB_EXIT_SWING; // How a pullback trade is closed
+input int    InpPBSwingBars     = 60;    // Swing target = the extreme of the last this many M1 bars
+input double InpPBMinRR         = 0.0;   // Skip when swing reward:risk is below this (0 = off)
 
 input group  "Gate 2 - Alignment"
 input ENUM_TIMEFRAMES InpAlignTop = PERIOD_H4; // Highest timeframe that must agree (M2 = M1+M2 only)
@@ -1137,6 +1146,8 @@ void ManageVpsProtection(const int s, const ulong ticket)
 struct PBPlan
 {
    double sl;
+   double tp;       // swing target less InpTPBufferPips (0 = trail exit)
+   double swing;    // the swing extreme the dip came from
    double extreme;
    string level;
    string why;
@@ -1144,7 +1155,7 @@ struct PBPlan
 
 bool PlanPullback(const int s, const int dir, const double entry, PBPlan &p)
 {
-   p.sl = 0; p.extreme = 0; p.level = ""; p.why = "";
+   p.sl = 0; p.tp = 0; p.swing = 0; p.extreme = 0; p.level = ""; p.why = "";
    string sym = syms[s];
    int    d   = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    double pip = PipPrice(s);
@@ -1201,6 +1212,29 @@ bool PlanPullback(const int s, const int dir, const double entry, PBPlan &p)
    bool okSL = (dir == 1) ? (p.sl < SymbolInfoDouble(sym, SYMBOL_BID) - minDist)
                           : (p.sl > SymbolInfoDouble(sym, SYMBOL_ASK) + minDist);
    if(!okSL) { p.why = "inside the broker's minimum stop distance"; return(false); }
+
+   //--- Swing target: the extreme the dip came FROM — the high (long) / low
+   //--- (short) of the last InpPBSwingBars M1 bars. The TP sits
+   //--- InpTPBufferPips in front of it and must clear InpMinTPPips.
+   if(InpPBExit == PB_EXIT_SWING)
+   {
+      MqlRates w[];
+      int m = CopyRates(sym, PERIOD_M1, 1, InpPBSwingBars, w);
+      if(m <= 0) { p.why = "no M1 bars for the swing"; return(false); }
+      double sw = (dir == 1) ? w[0].high : w[0].low;
+      for(int i = 1; i < m; i++)
+         sw = (dir == 1) ? MathMax(sw, w[i].high) : MathMin(sw, w[i].low);
+      p.swing = sw;
+      p.tp    = NormalizeDouble(sw - dir * InpTPBufferPips * pip, d);
+      double reward = dir * (p.tp - entry);
+      if(reward < InpMinTPPips * pip)
+      { p.why = StringFormat("swing target %.0f pips < %.0f", reward / pip, InpMinTPPips); return(false); }
+      if(InpPBMinRR > 0 && reward / dist < InpPBMinRR)
+      { p.why = StringFormat("swing rr %.2f < %.2f", reward / dist, InpPBMinRR); return(false); }
+      bool okTP = (dir == 1) ? (p.tp > SymbolInfoDouble(sym, SYMBOL_ASK) + minDist)
+                             : (p.tp < SymbolInfoDouble(sym, SYMBOL_BID) - minDist);
+      if(!okTP) { p.why = "swing TP inside the broker's minimum stop distance"; return(false); }
+   }
    return(true);
 }
 
@@ -1213,12 +1247,14 @@ bool OpenPullback(const int s, const int dir, const PBPlan &p, const double entr
 
    trade.SetTypeFillingBySymbol(sym);
    string comment = ((dir == 1) ? "PO3 Scalp Buy PB " : "PO3 Scalp Sell PB ") + tfName[pbManageIdx];
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, entry, p.sl, 0, comment)
-                        : trade.Sell(lots, sym, entry, p.sl, 0, comment);
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, entry, p.sl, p.tp, comment)
+                        : trade.Sell(lots, sym, entry, p.sl, p.tp, comment);
    if(ok)
    {
       state[s]   = dir;
       pbTrade[s] = true;
+      slPrice[s] = p.sl;
+      tpPrice[s] = p.tp;
       exitIdx[s] = pbManageIdx;
       entryPx[s] = entry;
       peakHi[s]  = entry;
@@ -1226,7 +1262,10 @@ bool OpenPullback(const int s, const int dir, const PBPlan &p, const double entr
       beDone[s]  = false;
       string msg = PCTime() + " | " + ((dir == 1) ? "Buy " : "Sell ") + sym + " PULLBACK @ " +
                    DoubleToString(lots, 2) + " | dip to " + DoubleToString(p.extreme, d) + " at " + p.level +
-                   ", SL " + DoubleToString(p.sl, d) + StringFormat(" (%.0f pips), no TP", dir * (entry - p.sl) / pip) +
+                   ", SL " + DoubleToString(p.sl, d) + StringFormat(" (%.0f pips)", dir * (entry - p.sl) / pip) +
+                   (p.tp > 0 ? ", TP " + DoubleToString(p.tp, d) + StringFormat(" (%.0f pips) at swing ", dir * (p.tp - entry) / pip) +
+                               DoubleToString(p.swing, d)
+                             : ", no TP") +
                    " [" + kihonInfo + "]";
       Print(msg); SendNotification(msg);
    }
@@ -1324,6 +1363,16 @@ void ManagePosition(const int s)
       Print(PCTime() + " | " + syms[s] + " scalp closed at the broker (" +
             (InpExitMode == EXIT_VPS ? "BE, trail or disaster stop" : "SL or TP") + ").");
       state[s] = 0; slPrice[s] = 0.0; tpPrice[s] = 0.0; exitIdx[s] = -1; pbTrade[s] = false;
+      return;
+   }
+
+   //--- A pullback trade with a swing TP is fully defined on the order:
+   //--- only a missing stop is put back (from entry state, or the rebuild).
+   if(pbTrade[s] && PositionGetDouble(POSITION_TP) > 0.0)
+   {
+      if(slPrice[s] <= 0.0) slPrice[s] = PositionGetDouble(POSITION_SL);
+      if(PositionGetDouble(POSITION_SL) == 0.0 && slPrice[s] > 0.0)
+         trade.PositionModify(ticket, slPrice[s], PositionGetDouble(POSITION_TP));
       return;
    }
 
