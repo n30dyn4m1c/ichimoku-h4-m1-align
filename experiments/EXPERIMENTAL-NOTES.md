@@ -5506,3 +5506,85 @@ worth testing next: **M5 is 47% of all trades for ~6% of the profit at PF
 ~1.10**, so removing or restricting the M5 tier may cut drawdown and costs
 at little cost to profit.
 
+---
+
+## 48. Bottom-Up Stack EA — the M5 tier tightened
+
+**File:** `experimental-bottomup-stack-m5-tight-vps-ea.mq5`
+**Forked from:** `experimental-bottomup-stack-scalp-capture-vps-ea.mq5`
+(§47), with scalp capture **off** by default, which makes it the live VPS
+build (`20260858`, untouched) plus the per-tier report
+**Magic number:** `20260875`
+
+### Why
+
+In §47 the M5 tier was 47% of all trades but made only ~6% of the profit
+(profit factor 1.10 on real ticks). This build adds switchable filters that
+apply **only to the M5 tier** (`M5TierOK()`, called in the entry loop for
+`l == 0`). M15 and above are untouched. With every filter off it
+reproduces the live build to the cent ($13,463.81).
+
+| Input | What it requires of an M5 entry |
+|---|---|
+| `InpM5Enabled = false` | no M5 trades at all (the control) |
+| `InpM5NeedH4` | the H4 bias itself, not the H1 stand-in |
+| `InpM5NeedH1` | H1 aligned with the trade as well |
+| `InpM5CloudFull` | the M5 cloud twisted the trade's way now **and** at the far end (the M1 rule) |
+| `InpM5MaxCloudATR` | entry no further than X x ATR(M5) from the M5 cloud edge |
+| `InpM5MaxSpread` | a tighter spread cap, in points |
+
+### Results — GOLDm#, $100, 1:1000, real ticks, one filter at a time
+
+**2026-01-01 → 2026-09-19 (the window the M5 problem was found in):**
+
+| Run | Net | PF | Balance DD | Equity DD | M5 trades | M5 PF | M5 net |
+|---|---|---|---|---|---|---|---|
+| live (all off) | $13,464 | 1.38 | 21.4% | 43.5% | 929 | 1.10 | $836 |
+| no M5 | $13,295 | **1.52** | 23.0% | 44.1% | 0 | — | — |
+| **NeedH4** | $13,349 | 1.42 | 28.9% | 31.8% | 605 | **1.29** | **$1,319** |
+| NeedH1 | $13,320 | 1.41 | 29.1% | 32.2% | 796 | 1.16 | $1,146 |
+| CloudFull | $13,413 | 1.41 | 28.9% | 31.9% | 725 | 1.13 | $864 |
+| cloud dist ≤ 2 ATR | $13,430 | 1.47 | 30.4% | 41.9% | 188 | 0.80 | −$377 |
+| cloud dist ≤ 3 ATR | $9,179 | 1.22 | 55.0% | 59.4% | 344 | 0.89 | −$496 |
+| cloud dist ≤ 4 ATR | $14,050 | 1.47 | 27.6% | 30.7% | 505 | 1.11 | $474 |
+| spread ≤ 35 | $13,280 | 1.38 | 24.2% | 29.3% | 922 | 1.03 | $250 |
+
+**2025-01-01 → 2026-01-01 (out of sample):**
+
+| Run | Net | PF | Equity DD | M5 trades | M5 PF | M5 net |
+|---|---|---|---|---|---|---|
+| live (all off) | $14,320 | 1.88 | 29.2% | 1,547 | 1.12 | $592 |
+| no M5 | $14,646 | **2.03** | **24.9%** | 0 | — | — |
+| **NeedH4** | $13,941 | 1.90 | 29.8% | 1,076 | **1.22** | **$773** |
+| NeedH1 | $14,785 | 1.89 | 29.5% | 1,366 | 1.07 | $338 |
+| CloudFull | $13,813 | 1.85 | 30.8% | 1,167 | 1.09 | $363 |
+
+### Reading
+
+- **Account totals are noisy.** With 20% H4 risk and compounding from $100,
+  one different early trade reshapes the whole equity path. The 3 ATR
+  distance cap losing a third of the profit while 2 and 4 ATR do not is
+  that noise, not a real effect. Differences of ±5% in net mean nothing.
+  The M5 tier's own profit factor is the steadier measure.
+- **`InpM5NeedH4` is the only filter that improved M5 in both years**
+  (PF 1.10 → 1.29 and 1.12 → 1.22, about 30–35% fewer M5 trades). The trades
+  it drops are the M5 entries taken on the H1 stand-in while H4 is flat,
+  and they were the weak ones. It is the default here.
+- **The distance cap is backwards.** M5 entries close to the cloud are
+  the *worse* ones (PF 0.80 at ≤ 2 ATR). The far-from-cloud entries are
+  momentum and they carry the tier.
+- **Removing M5 entirely is the strongest account-level result**: profit
+  factor up in both years (1.38 → 1.52, 1.88 → 2.03), net within noise
+  (−1% and +2%), and 40–47% fewer trades, so less spread and commission
+  paid. Tightening M5 improves the tier, but at the account level it does
+  no better than dropping it.
+- The spread cap (35 points) cut M5's profit factor. Gold's typical spread
+  sits near that level, so it mostly removed good trades.
+
+### Status & caveats
+
+- Compiled clean (0 errors, 0 warnings); backtested on 2026-09-23 as above.
+- One symbol (GOLDm#), one broker feed, two windows. The live VPS build is
+  not changed; promoting `NeedH4` or dropping M5 is the user's call.
+- Do not run it beside the live build on the same account and symbol.
+
