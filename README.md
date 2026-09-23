@@ -678,6 +678,64 @@ Findings (3 years, 400 paths; medians):
 All of this assumes the 2025–26 edge continues live. The model ignores
 broker limits, slippage across many accounts, fees and taxes.
 
+### Scaling plan: up to 8 XM Micro accounts
+
+The plan the simulator above was used to design. **It runs the live VPS EA**
+(`ichimoku-h4-m1-vps-ea.mq5`, M5 tier off). The simulator's trade statistics
+come from that build's backtests (notes §48, §50). The M5-base experiment
+(§54) has not been backtested, so none of these numbers apply to it. Backtest
+it first; if it does better, rerun the simulator with its figures before
+switching.
+
+**Setup**
+
+- **Broker:** XM Global, **Micro** accounts (MT5, minimum 0.1 micro lot =
+  0.1 oz of gold). XM allows up to **8 live accounts per profile**, with free
+  instant transfers between them. Check the GOLD contract size and minimum
+  volume under Market Watch → Specification. The plan assumes 0.1 lot = 0.1 oz.
+- **EA:** the live VPS build, unchanged, on every account. Set the `Symbols`
+  input to XM's gold symbol (the default `GOLDm#` is another broker's name, and
+  the EA will not start with it). The same magic number on every account is
+  fine, since accounts never see each other's positions.
+- **VPS:** one MT5 terminal per account, each installed in its own folder,
+  about 300–500 MB of RAM each (about 4 GB for 8). XM's VPS is free with $5k
+  of equity and 5 standard lots a month, counted across accounts under one
+  email; otherwise it is $28 a month.
+
+**Rules**
+
+1. **Start** one account with **$100**.
+2. **Split:** whenever **any** account reaches **$5,000**, move **$1,000** out
+   of it into a new Micro account running the same EA. Every account splits,
+   not only the newest; that is what keeps the money in the fastest-growing
+   risk regime.
+3. **Stop splitting at 8 accounts.**
+4. **Once there are 8, harvest:** whenever an account is above **$7,000**,
+   withdraw it back down to **$5,000**, and move the money out of XM to a bank
+   account. Weekly or monthly is close enough; the simulation withdrew at every
+   crossing.
+5. **Leave the EA's settings alone** across all accounts. The rules above do
+   the money management.
+
+**What the model expects (3 years, medians)**
+
+| Stage | Result |
+|---|---|
+| One account, no splitting | $32k |
+| Splitting at $5k into $1k accounts (rules 1–3) | $207k, all still in the accounts |
+| + harvesting at $7k down to $5k (rule 4) | ~$449k total, ~$416k of it already withdrawn |
+| Chance of ending below the $100 start | ~4–5%, mostly the first account in a bad first year |
+
+**Risks.**
+- **One risk hits every account at once.** All 8 accounts trade the same
+  signals at the same moment, so a 2024-like year hurts them all together.
+- **Rules 2 and 4 take on more risk.** Both keep money in the high-risk
+  regime, which the EA's de-risking was designed to prevent.
+- **The figures are a model.** They assume the 2025–26 edge continues live,
+  and ignore slippage, fees, taxes and broker limits. Leverage at XM drops to
+  1:200 above $20k of equity; ask XM whether that counts per account or per
+  profile.
+
 ### Weekly Equity Reminder
 
 Desktop build only — the [VPS build](#vps-deployment-build) leaves it out.
