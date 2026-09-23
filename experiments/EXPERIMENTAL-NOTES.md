@@ -6396,7 +6396,20 @@ candle's open.
 **Scope.** `InpLiqLookback` (100) candles of the source timeframe are
 searched. One newest-to-oldest pass carries the furthest price traded since
 each candle, so every swing's raided/unraided state is settled in the same
-pass; it runs on every tick and every timer second. The lines are `PO3_U`
+pass. It is gated: a rescan runs only when a source candle opens (a swing
+confirms, or a close raid lands) or price trades beyond the nearest unraided
+level; any other tick costs three reads. The lines are `PO3_U`
 objects, a sub-prefix no other sweep in the indicator matches. Hovering a line
 shows its price, timeframe and swing time. `InpShowLiq` turns the whole
 feature off.
+
+**Lighter redraws (same change).** Three costs elsewhere in the indicator were
+cut at the same time, with nothing on the chart changing:
+
+- a price step used to delete and recreate every PO3 line; the rebuild now
+  diffs against the last pass, restyling the lines still in the window and
+  deleting only the ones that left it;
+- a new bar used to trigger that full rebuild just to move the labels; now it
+  only slides the labels to the new bar;
+- the candle countdown and the session timer set their fixed properties once,
+  when created, and afterwards rewrite only the text (and position or colour).

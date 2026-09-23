@@ -908,6 +908,26 @@ int             g_each   = 3;
 long     g_anchor   = LONG_MIN;
 datetime g_lastTime = 0;
 bool     g_dirty    = true;
+//--- The level objects the last rebuild drew, so the next one can diff
+//--- against them instead of sweeping the chart, and a new bar can slide the
+//--- labels along without touching the lines.
+string   g_lvlObj[];
+int      g_lvlObjN  = 0;
+string   g_lvlLab[];
+int      g_lvlLabN  = 0;
+string   g_liqKeep[];     // names drawn this pass
+int      g_liqKeepN  = 0;
+string   g_liqNames[];    // names on the chart after the last pass
+int      g_liqNamesN = 0;
+bool     g_liqChanged = false;
+//--- The gate. Lines can only change when a source candle opens (a swing is
+//--- confirmed, or a close raid lands) or price trades beyond the nearest
+//--- unraided level. Anything else and a tick costs three reads.
+bool     g_liqDirty  = true;
+datetime g_liqBar    = 0;
+double   g_liqHiNear = DBL_MAX;    // lowest unraided high
+double   g_liqLoNear = -DBL_MAX;   // highest unraided low
+
 bool     g_logged   = false;
 
 //--- Session timer. The start time lives in a terminal global variable keyed by
@@ -1044,6 +1064,10 @@ int OnInit()
    g_kAnchor  = 0;
    g_kCount   = 0;
    g_kDirty   = true;
+   g_lvlObjN  = 0;
+   g_lvlLabN  = 0;
+   g_liqDirty = true;
+   g_liqNamesN = 0;
    g_pLast    = 0;
    g_pUnknown = true;
    g_pDirty   = true;
@@ -1187,6 +1211,8 @@ void DrawLevel(const long raw, const int idx, const datetime labelTime)
    //--- a failed create means the object survived the sweep, so fall through
    //    and restyle it rather than leaving it on stale settings
    ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+   ArrayResize(g_lvlObj, g_lvlObjN + 1, 128);
+   g_lvlObj[g_lvlObjN++] = name;
 
    ObjectSetDouble (0, name, OBJPROP_PRICE,      price);
    ObjectSetInteger(0, name, OBJPROP_COLOR,      g_col[idx]);
@@ -1213,6 +1239,10 @@ void DrawLevel(const long raw, const int idx, const datetime labelTime)
    string tname = PO3_LEVEL + "T" + IntegerToString(raw);
 
    ObjectCreate(0, tname, OBJ_TEXT, 0, labelTime, price);
+   ArrayResize(g_lvlObj, g_lvlObjN + 1, 128);
+   g_lvlObj[g_lvlObjN++] = tname;
+   ArrayResize(g_lvlLab, g_lvlLabN + 1, 128);
+   g_lvlLab[g_lvlLabN++] = tname;
 
    ObjectSetInteger(0, tname, OBJPROP_TIME,       labelTime);
    ObjectSetDouble (0, tname, OBJPROP_PRICE,      price);
@@ -1237,11 +1267,22 @@ void Rebuild(const double price, const datetime labelTime)
    //--- Only the level objects. A blanket delete by prefix would take the
    //--- countdown text with it on every redraw, and the clock would flicker
    //--- out whenever price crossed a grid cell.
-   ObjectsDeleteAll(0, PO3_LEVEL, -1, OBJ_HLINE);
-   ObjectsDeleteAll(0, PO3_LEVEL, -1, OBJ_TEXT);
+   //--- Diffed against the last pass rather than swept: a level still in the
+   //--- window is restyled in place by DrawLevel, and only the ones that left
+   //--- it are deleted. A price step no longer tears down and recreates every
+   //--- line, which was the flicker and most of the cost.
+   string old[];
+   int    oldN = g_lvlObjN;
+   ArrayResize(old, oldN);
+   for(int i = 0; i < oldN; i++)
+      old[i] = g_lvlObj[i];
+   g_lvlObjN = 0;
+   g_lvlLabN = 0;
 
    if(g_n <= 0)
      {
+      for(int i = 0; i < oldN; i++)
+         ObjectDelete(0, old[i]);
       ChartRedraw();
       return;
      }
@@ -1296,6 +1337,15 @@ void Rebuild(const double price, const datetime labelTime)
 
    for(int i = 0; i < n; i++)
       DrawLevel(raws[i], owner[i], labelTime);
+
+   for(int i = 0; i < oldN; i++)
+     {
+      bool kept = false;
+      for(int k = 0; k < g_lvlObjN && !kept; k++)
+         kept = (g_lvlObj[k] == old[i]);
+      if(!kept)
+         ObjectDelete(0, old[i]);
+     }
 
    //--- Once per load, report what each grid actually contributed after the
    //--- merge. A grid showing 0 was outbid on every level; a grid showing a
@@ -1400,18 +1450,23 @@ void UpdateClock()
    //--- candles and, with chart shift off, on screen.
    ENUM_ANCHOR_POINT anchor = (InpClockShift > 0) ? ANCHOR_LEFT : ANCHOR_RIGHT;
 
-   ObjectCreate(0, name, OBJ_TEXT, 0, at, price);
+   //--- The fixed properties are written once, when the object is made; each
+   //--- tick and second after that moves it and rewrites the text only.
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_TEXT, 0, at, price);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR,     anchor);
+      ObjectSetInteger(0, name, OBJPROP_COLOR,      InpClockColor);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE,   (int)MathMax(6, MathMin(24, InpClockSize)));
+      ObjectSetInteger(0, name, OBJPROP_BACK,       false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTED,   false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+     }
 
    ObjectSetInteger(0, name, OBJPROP_TIME,       at);
    ObjectSetDouble (0, name, OBJPROP_PRICE,      price + InpClockGapPts * _Point);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR,     anchor);
    ObjectSetString (0, name, OBJPROP_TEXT,       TfName() + "  " + HMS(left));
-   ObjectSetInteger(0, name, OBJPROP_COLOR,      InpClockColor);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE,   (int)MathMax(6, MathMin(24, InpClockSize)));
-   ObjectSetInteger(0, name, OBJPROP_BACK,       false);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_SELECTED,   false);
-   ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
   }
 
 //+------------------------------------------------------------------+
@@ -1444,17 +1499,21 @@ void UpdateSession()
       Alert(_Symbol, ": ", InpSessionLimitMin, " minutes on the chart.");
      }
 
-   ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, name, OBJPROP_CORNER,     InpSessionCorner);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE,  InpSessionX);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE,  InpSessionY);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR,     AnchorFor(InpSessionCorner));
+   //--- As with the clock: fixed properties once, then text and colour only.
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER,     InpSessionCorner);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE,  InpSessionX);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE,  InpSessionY);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR,     AnchorFor(InpSessionCorner));
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE,   (int)MathMax(6, MathMin(24, InpSessionSize)));
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTED,   false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+     }
    ObjectSetString (0, name, OBJPROP_TEXT,       "On chart  " + HMS(elapsed));
    ObjectSetInteger(0, name, OBJPROP_COLOR,      over ? InpSessionOverColor : InpSessionColor);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE,   (int)MathMax(6, MathMin(24, InpSessionSize)));
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_SELECTED,   false);
-   ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
   }
 
 //+------------------------------------------------------------------+
@@ -2775,13 +2834,25 @@ void RefreshLevels()
 
    long m0 = (long)MathFloor(price * InpScale / (double)g_finest + 1e-9);
 
-   if(g_dirty || m0 != g_anchor || last != g_lastTime)
+   datetime labelTime = last + (datetime)(PeriodSeconds() * InpLabelShift);
+
+   if(g_dirty || m0 != g_anchor)
      {
-      Rebuild(price, last + (datetime)(PeriodSeconds() * InpLabelShift));
+      Rebuild(price, labelTime);
       g_anchor   = m0;
       g_lastTime = last;
       g_dirty    = false;
      }
+   else
+      if(last != g_lastTime)
+        {
+         //--- A new bar changes nothing but where the labels sit, so slide
+         //--- them along; the lines are horizontal and do not care.
+         for(int i = 0; i < g_lvlLabN; i++)
+            ObjectSetInteger(0, g_lvlLab[i], OBJPROP_TIME, labelTime);
+         g_lastTime = last;
+         ChartRedraw();
+        }
   }
 
 //+------------------------------------------------------------------+
@@ -2813,10 +2884,6 @@ void RefreshLevels()
 //|  the chart candle inside it that printed the wick, not at the    |
 //|  locked candle's open, so it sits on the wick you can see.       |
 //+------------------------------------------------------------------+
-string g_liqKeep[];     // names drawn this pass; anything else under PO3_LIQ is stale
-int    g_liqKeepN = 0;
-bool   g_liqChanged = false;
-
 ENUM_TIMEFRAMES LiqTF()
   {
    return (InpLiqTF == PERIOD_CURRENT) ? (ENUM_TIMEFRAMES)_Period : InpLiqTF;
@@ -2864,6 +2931,10 @@ void LiqDraw(const datetime t, const double level, const ENUM_TIMEFRAMES tf, con
    string name = PO3_LIQ + (isHigh ? "H_" : "L_") + IntegerToString((long)t);
    ArrayResize(g_liqKeep, g_liqKeepN + 1, 64);
    g_liqKeep[g_liqKeepN++] = name;
+   if(isHigh)
+      g_liqHiNear = MathMin(g_liqHiNear, level);
+   else
+      g_liqLoNear = MathMax(g_liqLoNear, level);
 
    if(ObjectFind(0, name) >= 0)
       return;                                    // a confirmed swing never moves
@@ -2911,45 +2982,66 @@ void LiqScan(const MqlRates &r[], const int n, const ENUM_TIMEFRAMES tf, const b
      }
   }
 
-//--- Rescan and sync the lines. Cheap at the default 100 candles, so it runs
-//--- on every tick and every timer second; the timer is what fills in a
-//--- locked timeframe whose history was not loaded on the first call.
+//--- Rescan and sync the lines, but only when the gate says something can
+//--- have changed. The timer calls it too, which is what fills in a locked
+//--- timeframe whose history was not loaded on the first call.
 //--- Returns true when a line was added or removed.
 bool RefreshLiquidity()
   {
-   g_liqKeepN   = 0;
-   g_liqChanged = false;
+   if(!InpShowLiq)
+      return(false);                             // nothing drawn; OnDeinit sweeps
 
-   if(InpShowLiq)
+   ENUM_TIMEFRAMES tf = LiqTF();
+   datetime bar = iTime(_Symbol, tf, 0);
+   if(bar == 0)
+      return(false);                             // history not ready
+
+   if(!g_liqDirty && bar == g_liqBar)
      {
-      int left  = (int)MathMax(1, InpLiqLeft);
-      int right = (int)MathMax(1, InpLiqRight);
-      ENUM_TIMEFRAMES tf = LiqTF();
-      MqlRates r[];
-      ArraySetAsSeries(r, true);
-      int n = CopyRates(_Symbol, tf, 0, (int)MathMax(left + right + 2, InpLiqLookback), r);
-      if(n < left + right + 2)
-         return(false);                          // not loaded yet: keep what is drawn
-      if(InpLiqHighs)
-         LiqScan(r, n, tf, true, left, right);
-      if(InpLiqLows)
-         LiqScan(r, n, tf, false, left, right);
+      if(InpLiqRaid == LIQ_RAID_CLOSE)
+         return(false);                          // a close raid needs a new candle
+      double hi = iHigh(_Symbol, tf, 0);
+      double lo = iLow (_Symbol, tf, 0);
+      if(hi <= 0.0 || (hi <= g_liqHiNear && lo >= g_liqLoNear))
+         return(false);
      }
 
-   for(int i = ObjectsTotal(0, -1, -1) - 1; i >= 0; i--)
+   int left  = (int)MathMax(1, InpLiqLeft);
+   int right = (int)MathMax(1, InpLiqRight);
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   int n = CopyRates(_Symbol, tf, 0, (int)MathMax(left + right + 2, InpLiqLookback), r);
+   if(n < left + right + 2)
+      return(false);                             // not loaded yet: keep what is drawn
+
+   g_liqKeepN   = 0;
+   g_liqChanged = false;
+   g_liqHiNear  = DBL_MAX;
+   g_liqLoNear  = -DBL_MAX;
+   if(InpLiqHighs)
+      LiqScan(r, n, tf, true, left, right);
+   if(InpLiqLows)
+      LiqScan(r, n, tf, false, left, right);
+
+   //--- Prune against our own list, not every object on the chart.
+   for(int i = 0; i < g_liqNamesN; i++)
      {
-      string name = ObjectName(0, i, -1, -1);
-      if(StringFind(name, PO3_LIQ) != 0)
-         continue;
       bool keep = false;
       for(int k = 0; k < g_liqKeepN && !keep; k++)
-         keep = (g_liqKeep[k] == name);
+         keep = (g_liqKeep[k] == g_liqNames[i]);
       if(!keep)
         {
-         ObjectDelete(0, name);
+         ObjectDelete(0, g_liqNames[i]);
          g_liqChanged = true;
         }
      }
+   ArrayResize(g_liqNames, g_liqKeepN);
+   for(int k = 0; k < g_liqKeepN; k++)
+      g_liqNames[k] = g_liqKeep[k];
+   g_liqNamesN = g_liqKeepN;
+
+   g_liqBar   = bar;
+   g_liqDirty = false;
    return(g_liqChanged);
   }
 
