@@ -6217,3 +6217,82 @@ complete.
   to 10% to 2% H4 risk at $7k and $13k make each run strongly path-dependent,
   so differences of a few percent mean nothing. The 2024 ruin and the per-tier
   signs are the robust findings.
+
+## 51. PO3 sweep rejection — a basic false-break test
+
+**File:** `experimental-po3-sweep-rejection-ea.mq5`
+**Magic number:** `20260877`
+
+A standalone EA, not a fork of the stack. It tests the user's reading of
+Hopi's PO3 dealing ranges on gold, one rule at a time, before any of it goes
+near the live logic.
+
+**The reading.** When price breaks a PO3 level, a close beyond it decides
+nothing: price often passes the level, runs to the next small level, and is
+rejected. It usually does not reach the **midpoint of the next range**. The
+user reads the rejection from the candles; the build approximates that with a
+turtle soup or an engulfing candle on M1/M5. The minimum range gold plays out
+is a 3, New York usually a 9 or a 27, and red news a 27; the higher the power,
+the stronger the level.
+
+### The rule
+
+On a 27 range (`InpLevelPower = 3`), level 4077, next range 4077–4104:
+
+| Price | Meaning |
+|---|---|
+| 4090.5 | **Acceptance line**, `InpAcceptPct` (50) of the next range. A signal-TF close beyond it = a real break |
+| 4077–4090.5 | **Sweep zone**, undecided |
+| 4077 | **Level**. A close back through it on a rejection bar = a **rejection** |
+
+A sweep starts when a closed bar trades through a level that the bar before
+closed on the other side of. It ends:
+
+- **accepted** — a close beyond the acceptance line;
+- **rejected** — a close back through the level on a bar where the sweep took
+  out the prior `InpTSLookback`-bar extreme (**turtle soup**), or the bar
+  engulfs the previous bar's body (**engulfing**), per `InpPattern`;
+- **expired** — neither within `InpSweepMaxBars` bars.
+
+The level's **grade** (27, 81, 243, ... — the highest power of three it
+divides by, the `po3-levels.mq5` arithmetic) is recorded with every sweep, so
+"the higher the power, the stronger the level" can be read straight off the
+results.
+
+### The trade
+
+A rejection opens one market order against the sweep: the stop
+`InpStopBufferPts` beyond the acceptance line (price there means the break was
+real), the target `InpTPPct` (100) of a range back through the level, skipped
+below `InpMinRR` (1.0). Filters: `InpBias` (default H4, the last closed close
+beyond the cloud in the trade's direction — a fade is taken only against a
+counter-trend pop, which is the side §7's evidence favours), a server-hour
+session window, and a spread cap. One position at a time; no break-even or
+trail.
+
+### Measurement
+
+Every resolved sweep is written to `po3-sweep-<symbol>.csv` in the terminal's
+**common** Files folder: start/end time, side, level, grade, acceptance line,
+extreme, overshoot as % of a range, bars, outcome, pattern, start hour,
+traded. `OnDeinit` prints, per grade, the sweeps, accepted / rejected /
+expired counts and the average overshoot of rejected sweeps. With
+`InpTrade = false` the EA is only a measurement.
+
+Questions to answer from the first run: what share of 27/81/243 breaks are
+rejected versus accepted; whether the rejected ones really stay short of the
+midpoint; whether New York hours (start hour) differ; and whether
+the rejection trade makes money with and without the bias.
+
+### Caveats
+
+- **Not compiled or backtested.** No MQL5 compiler on this machine.
+- **The turtle soup test is loose when the level sits beyond the prior
+  extreme**: crossing the level then takes out the extreme by definition, so
+  any close back through the level qualifies. The engulfing-only setting is
+  the stricter read.
+- A sweep that closes back through the level **without** a pattern stays open
+  and can still reject later or expire.
+- Levels are fixed multiples of `3^InpLevelPower` scaled by `InpPO3Scale`, as
+  in the indicator; check they line up with `po3-levels.mq5` on the chart
+  before reading results.
