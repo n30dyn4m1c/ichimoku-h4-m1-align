@@ -6804,6 +6804,33 @@ four changes are about the account and the instrument:
    BE cover. The ATR-based distances (BE arming, trail, disaster stop) needed
    no change.
 4. **Fresh magic `20260884`.**
+5. **Minimum-lot guard** (user decision 2026-09-24). On a practice start
+   of **100 USC** ($1), every % sizes below 0.01 lot and is rounded up, so
+   the lot floor sets the risk, not the %. At 0.01 lot, $1 of gold is 1 USC,
+   which is 1% of the account. The table estimates the loss over 2 × ATR
+   with typical gold ATRs:
+
+   | Tier | Target % (tier 1) | 0.01 lot risks | At the 8 × ATR disaster stop |
+   |---|---|---|---|
+   | M15 (ATR ≈ $3) | 0.5 | ~6% | ~24% |
+   | M30 (ATR ≈ $4.5) | 2.5 | ~9% | ~36% |
+   | H1 (ATR ≈ $7) | 5 | ~14% | ~56% |
+   | H4 (ATR ≈ $15) | 10 | ~30% | ~120% |
+
+   `MinLotGuardOK()` takes the **final** lots (after the minimum-lot
+   rounding and the margin cap) and computes the loss over
+   `ATR(tier TF) × InpRiskATRMult`. It skips the tier when that loss is
+   above `InpMaxTradeRiskPct` (**10%**) of equity. The selection loop then
+   **falls through to the next lower aligned tier**. That tier's chain is
+   part of the higher one, so it is usually aligned too. At 100 USC, M15
+   and M30 trade while H1 and H4 wait. Each tier unlocks by itself as
+   equity grows: H1 at about 140 USC and H4 at about 300 USC with the ATRs
+   above. Unreadable sizing data blocks the tier. A skip is logged once per
+   tier-TF bar. `InpMaxTradeRiskPct = 0` switches the guard off.
+
+   Leverage was considered and rejected as the control. It changes only
+   the margin held, not the loss per $1 of gold, and it blocks trades
+   without regard to their risk.
 
 OnInit prints one line per symbol: digits, point scale, the resolved spread
 cap / BE cover / slippage, the regime thresholds in account units, the
@@ -6812,10 +6839,11 @@ minimum lot and the account currency.
 ### Backtesting it
 
 - Tester symbol `XAUUSDc` from an Exness cent login, with **Every tick based
-  on real ticks**. The deposit is in USC: 10000 USC is $100, and live's
-  results started at $100.
+  on real ticks**. The practice start is a **100 USC** deposit ($1). Set the
+  tester's leverage to the real account's.
 - Check the OnInit journal line first. It should read `digits 3, point scale
-  x10`, `regimes at 7000 / 13000 USC` and `min lot 0.01`.
+  x10`, `regimes at 7000 / 13000 USC`, `min-lot guard 10.0%` and `min lot
+  0.01`. Early on, expect `skipped by min-lot guard` lines for H1/H4.
 
 ### Status & caveats
 

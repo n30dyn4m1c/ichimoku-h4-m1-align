@@ -22,6 +22,13 @@
 //|      tier 1 M15 0.5 / M30 2.5 / H1 5 / H4 10, tier 2 0.25 / 1.25 / |
 //|      2.5 / 5, tier 3 0.05 / 0.1 / 0.5 / 1 (M5 halved too, though  |
 //|      the M5 tier is off). The parent text below quotes live's %.  |
+//|      MIN-LOT GUARD (user, 2026-09-24): on a small balance (the    |
+//|      practice start is 100 USC) every % sizes below 0.01 and is   |
+//|      rounded up, so the lot floor — not the % — sets the risk.    |
+//|      MinLotGuardOK() skips a tier whose final lots would lose     |
+//|      more than InpMaxTradeRiskPct (10%) of equity over ATR x 2;   |
+//|      selection falls through to the next lower aligned tier, so   |
+//|      H1/H4 wait while M15/M30 trade, and unlock as equity grows.  |
 //|   3. POINT SCALING: the live build's point inputs (slippage 30,   |
 //|      spread cap 60, BE cover 15) were tuned on GOLDm#, a 2-decimal|
 //|      feed (1 point = 0.01). Exness quotes gold to 3 decimals, so  |
@@ -235,6 +242,9 @@ input group  "Disaster Stop (hard tail-risk stop)"
 input bool   InpDisasterStopEnabled = true;   // Attach a wide hard SL at entry (bounds gap/disconnect loss)
 input double InpDisasterATRMult     = 8.0;    // Disaster stop distance = ATR(level TF) x this
 
+input group  "Minimum-Lot Guard (XAUUSDc fork)"
+input double InpMaxTradeRiskPct = 10.0;   // Skip a tier whose lots would risk more than this % of equity at ATR x InpRiskATRMult (0 = off)
+
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
 input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the rejection candle must sweep
@@ -264,6 +274,7 @@ double   entryPrice[MAX_SYMS][LEVELS];   // reference entry price per level (BE 
 double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chandelier reference)
 double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
 bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
+datetime guardLoggedBar[MAX_SYMS][LEVELS]; // min-lot guard: tier-TF bar last logged (one line per bar)
 
 // R2: unknown-position guard. A position carrying our magic whose comment
 // no longer names a level cannot be managed (no BE/trail/cloud exit can
@@ -328,6 +339,7 @@ int OnInit()
          peakHigh[s][l]   = 0.0;
          peakLow[s][l]    = 0.0;
          beMoved[s][l]    = false;
+         guardLoggedBar[s][l] = 0;
       }
 
       for(int t = 0; t < TFS; t++)
@@ -360,6 +372,7 @@ int OnInit()
             " | slippage " + IntegerToString(Slippage * sc) + " pts" +
             " | regimes at " + DoubleToString(InpRiskTier2At, 0) + " / " +
             DoubleToString(InpRiskTier3At, 0) + " " + AccountInfoString(ACCOUNT_CURRENCY) +
+            " | min-lot guard " + DoubleToString(InpMaxTradeRiskPct, 1) + "%" +
             " | min lot " + DoubleToString(SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN), 2) +
             " | account " + AccountInfoString(ACCOUNT_CURRENCY));
    }
@@ -877,6 +890,46 @@ double RiskLots(int s, int lvl)
    return (lots > 0) ? lots : InpFixedLots;
 }
 
+//==============================================================
+// Minimum-Lot Guard (XAUUSDc fork). On a small cent account the
+// risk % sizes below the 0.01 minimum and RiskLots() rounds UP,
+// so the real risk is set by the lot floor, not the %. The guard
+// measures what the FINAL lots (after min-lot rounding and the
+// margin cap) would lose over the sizing distance ATR(level TF) x
+// InpRiskATRMult and skips the tier when that exceeds
+// InpMaxTradeRiskPct % of equity. The selection loop then falls
+// through to the next lower aligned tier, so H1/H4 wait until the
+// account can carry 0.01 lot while M15/M30 still trade; each tier
+// unlocks by itself as equity grows. Unreadable sizing data
+// blocks the tier (it cannot be shown to be within the cap).
+//==============================================================
+
+bool MinLotGuardOK(int s, int lvl, double lots)
+{
+   if(InpMaxTradeRiskPct <= 0) return true;
+
+   double a[1];
+   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
+   double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0 || tickSize <= 0) return false;
+
+   double eq      = AccountInfoDouble(ACCOUNT_EQUITY);
+   double risk    = lots * (a[0] * InpRiskATRMult / tickSize) * tickValue;
+   double riskPct = (eq > 0) ? 100.0 * risk / eq : 1e9;
+   if(riskPct <= InpMaxTradeRiskPct + 1e-9) return true;
+
+   datetime bar = iTime(syms[s], tfs[lvl + 1], 0);
+   if(bar != guardLoggedBar[s][lvl])
+   {
+      guardLoggedBar[s][lvl] = bar;
+      Print(PCTime() + " | " + syms[s] + " " + tfName[lvl + 1] + " skipped by min-lot guard: " +
+            DoubleToString(lots, 2) + " lots would risk " + DoubleToString(riskPct, 1) +
+            "% of equity (cap " + DoubleToString(InpMaxTradeRiskPct, 1) + "%)");
+   }
+   return false;
+}
+
 // Scale a single order down so it commits at most InpMarginUsePct % of the
 // free margin (R5: the parent committed up to 100%, leaving nothing against
 // floating drawdown). lots never drops below the broker minimum.
@@ -1274,6 +1327,7 @@ void OnTick()
       int    topTier = -1;
       int    topDir  = 0;
       string topVia  = "--";
+      double topLots = 0.0;
       // R2: never add exposure while an unmanageable (unparseable-comment)
       // magic position sits on this symbol; exits/protection still run.
       if(!symBlockedUnknown[s] && SpreadOK(syms[s]))
@@ -1296,9 +1350,16 @@ void OnTick()
             // H4 tier: D1 must carry the same bias (D1 in the cloud = no H4 trades)
             if(l == LEVELS - 1 && InpD1Filter && DailyAlign(s) != st) continue;
 
+            // Min-lot guard: size the tier now; if even its final lots would
+            // risk more than InpMaxTradeRiskPct, fall through to a lower tier.
+            double lotsL = RiskLots(s, l);
+            CapLotsToMargin(syms[s], (st == 1), lotsL);
+            if(!MinLotGuardOK(s, l, lotsL)) continue;
+
             topTier = l;
             topDir  = st;
             topVia  = via;
+            topLots = lotsL;
             break;
          }
       }
@@ -1322,8 +1383,7 @@ void OnTick()
          }
 
          // Open only the largest tier
-         double lots = RiskLots(s, topTier);
-         CapLotsToMargin(syms[s], (topDir == 1), lots);
+         double lots = topLots;   // sized and guard-checked in the selection loop
 
          if(!OpenLevel(s, topTier, topDir, lots, topVia))
             Print(PCTime() + " | " + syms[s] + " " + tfName[topTier + 1] +
