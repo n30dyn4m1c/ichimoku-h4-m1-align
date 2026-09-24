@@ -6752,3 +6752,73 @@ Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet
 backtested.** Questions for the tester: the win rate against the reward:risk
 that the M5 target and M1 stop give, how often an aligned bar finds no
 unraided M5 level, and whether an M5 fractal stop does better.
+
+---
+
+## 59. XAUUSDc cent fork — the live build on an Exness cent account
+
+**File:** `experimental-bottomup-stack-xauusdc-cent-vps-ea.mq5`
+**Magic number:** `20260884`
+
+A copy of the live VPS build (`ichimoku-h4-m1-vps-ea.mq5`: M1-strict cloud
+bias, M5 tier off, robustness pack on) for trading **`XAUUSDc` on an Exness
+cent account**. It will be backtested in the strategy tester before any live
+use. **None of the trading logic changes.** Entries, bias gates, the kumo-touch
+exit, break-even, the chandelier and the disaster stop are all live's. The
+four changes are about the account and the instrument:
+
+1. **`Symbols` = `XAUUSDc`.**
+2. **Live's risk regime, converted to a cent account.** Each tier risks the
+   same % of equity as live, and the three regimes are the same (M15 1 /
+   M30 5 / H1 10 / H4 20 %, then half, then tiny), measured against
+   ATR × 2. On a cent account the equity and the symbol's tick value are
+   both in USC, so a % of equity becomes the same number of lots with no
+   change. The regime **thresholds** are the one exception, because
+   they are absolute amounts. `InpRiskTier2At` and `InpRiskTier3At` stay in
+   **dollars** ($7000 / $13000), and `LevelRiskPct()` divides equity by
+   `RegimeScale()` before comparing. That is **auto 100 on a `USC` account**,
+   1 otherwise, or `InpRegimeScale` to force it. The regime therefore
+   changes at the same real money as live: 700 000 / 1 300 000 USC.
+   **Minimum 0.01 lots:** a size below the broker minimum is rounded **up**
+   to 0.01, the same clamp live uses, so on a small account a low-% tier can
+   risk more than its %. `InpFixedLots` (0.01) is only the fallback when
+   sizing data is missing.
+3. **Point inputs scaled to the feed.** Live's point inputs were tuned on
+   `GOLDm#`, which quotes to 2 decimals (1 point = 0.01). Exness quotes gold
+   to 3 decimals (1 point = 0.001), so unscaled they would cover a tenth of
+   the price distance. The BE stop (15 points) would sit inside the spread,
+   and the 60-point spread cap would block nearly every entry, the same
+   failure as the BTCUSD fork (§35). `Slippage`, `InpMaxSpreadPoints` and
+   `InpBECoverPoints` are therefore now in **2-decimal gold points (0.01 of
+   price)**, and `PtScale()` (`round(0.01 / point)`) multiplies them by 10 on
+   a 3-decimal feed and by 1 on a 2-decimal one. The defaults (30 / 60 / 15)
+   keep live's price distances: $0.30 slippage, $0.60 spread cap and $0.15
+   BE cover. The ATR-based distances (BE arming, trail, disaster stop) needed
+   no change.
+4. **Fresh magic `20260884`.**
+
+OnInit prints one line per symbol: digits, point scale, the resolved spread
+cap / BE cover / slippage, the regime thresholds in account units, the
+minimum lot and the account currency.
+
+### Backtesting it
+
+- Tester symbol `XAUUSDc` from an Exness cent login, with **Every tick based
+  on real ticks**. The deposit is in USC: 10000 USC is $100, and live's
+  results started at $100.
+- Check the OnInit journal line first. It should read `digits 3, point scale
+  x10`, `regimes at 700000 / 1300000 (x100)` and `min lot 0.01`. If the
+  tester's deposit currency is not `USC`, the scale falls back to ×1; set
+  `InpRegimeScale = 100` by hand.
+
+### Status & caveats
+
+- **Not yet compiled or backtested.** Compile with F7 in MetaEditor.
+- On a cent account, 0.01 lots is 1/100 of the real exposure 0.01 lots has on
+  a standard account. The 0.01 floor is therefore far less of a constraint
+  than live's, and a small account can follow the % closely. That is what
+  makes the cent account suitable for this regime.
+- The 60 (×10) spread cap is live's price distance. If Exness's cent gold
+  spread is wider, entries will be blocked, and the tester will show no
+  entries at all. The fix is to raise `InpMaxSpreadPoints`, not to switch it
+  off.
