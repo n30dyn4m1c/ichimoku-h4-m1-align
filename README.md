@@ -335,21 +335,22 @@ The live terminal runs on an Ubuntu VPS under Wine, set up like this:
   source by a terminal on the **same MT5 build** (so the VPS loads it
   directly). Then restart the service or re-attach the EA.
 - **Health check (`tools/mt5-check.sh`):** a weekday cron job that emails
-  you only when something is wrong. At 10:00 Mon–Fri it checks that
-  `mt5.service` is running, that `ichimoku-h4-m1-vps-ea` loaded after the
-  terminal's last start, and that the terminal log shows no LiveUpdate
-  restart loop. If all is well it sends a silent ping to a
-  [healthchecks.io](https://healthchecks.io) check; otherwise it sends a
-  `/fail` ping carrying a short report, and healthchecks.io emails it. A dead
-  VPS sends no ping at all, which also triggers the email. Setup:
-  create a check with schedule type **Cron** `0 10 * * 1-5` in your time
-  zone and 1 h grace, turn off "notify when up" on the email integration,
-  put the ping URL in `~/.mt5-check-ping` on the VPS, copy the script to
-  `~/mt5-check.sh`, `chmod +x` it, and add `0 10 * * 1-5 ~/mt5-check.sh` to
-  `crontab -e` (converting 10:00 into the VPS's time zone, see
-  `timedatectl`). The check matches the MT5 log wording `started for` and
-  `expert … loaded successfully`, so confirm both appear in the VPS log
-  once before relying on it.
+  you only when something is wrong. It checks that `mt5.service` is running,
+  that `ichimoku-h4-m1-vps-ea` loaded after the terminal's last start (the
+  log lines `… started for …` and `expert … loaded successfully`, confirmed
+  on the VPS 2026-09-24), and that the terminal log shows no LiveUpdate
+  restart loop. The VPS cannot send mail itself (DigitalOcean blocks SMTP
+  ports 25/465/587, and ntfy.sh no longer forwards email anonymously), so
+  the email goes through [healthchecks.io](https://healthchecks.io): a
+  healthy run sends a silent ping, and a failed run sends a `/fail` ping
+  carrying the report, which healthchecks.io emails. A dead VPS sends no
+  ping, which healthchecks.io also emails about. Installed on the VPS
+  2026-09-24 as `~/mt5-check.sh` with cron `0 0 * * 1-5` (00:00 UTC =
+  10:00 UTC+10, Mon–Fri). To finish setup: create a healthchecks.io check
+  with schedule type **Cron** `0 10 * * 1-5`, your time zone and 1 h grace,
+  turn off "notify when up" on its email integration, put
+  `HC_PING=https://hc-ping.com/<uuid>` in `~/.mt5-check.conf` on the VPS,
+  and run `~/mt5-check.sh --test` to get a test email.
 
 > **Migrating from an older build.** The filename never changes, so an
 > existing `deploy.sh` / `auto-deploy.sh` setup picks a new build up with no
