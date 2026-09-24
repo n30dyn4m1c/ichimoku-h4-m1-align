@@ -334,23 +334,8 @@ The live terminal runs on an Ubuntu VPS under Wine, set up like this:
   the new `.mq5` over with `scp`, and copy a `.ex5` compiled from the same
   source by a terminal on the **same MT5 build** (so the VPS loads it
   directly). Then restart the service or re-attach the EA.
-- **Health check (`tools/mt5-check.sh`):** a weekday cron job that emails
-  you only when something is wrong. It checks that `mt5.service` is running,
-  that `ichimoku-h4-m1-vps-ea` loaded after the terminal's last start (the
-  log lines `… started for …` and `expert … loaded successfully`, confirmed
-  on the VPS 2026-09-24), and that the terminal log shows no LiveUpdate
-  restart loop. The VPS cannot send mail itself (DigitalOcean blocks SMTP
-  ports 25/465/587, and ntfy.sh no longer forwards email anonymously), so
-  the email goes through [healthchecks.io](https://healthchecks.io): a
-  healthy run sends a silent ping, and a failed run sends a `/fail` ping
-  carrying the report, which healthchecks.io emails. A dead VPS sends no
-  ping, which healthchecks.io also emails about. Installed on the VPS
-  2026-09-24 as `~/mt5-check.sh` with cron `0 0 * * 1-5` (00:00 UTC =
-  10:00 UTC+10, Mon–Fri). To finish setup: create a healthchecks.io check
-  with schedule type **Cron** `0 10 * * 1-5`, your time zone and 1 h grace,
-  turn off "notify when up" on its email integration, put
-  `HC_PING=https://hc-ping.com/<uuid>` in `~/.mt5-check.conf` on the VPS,
-  and run `~/mt5-check.sh --test` to get a test email.
+- **Health check:** a weekday check emails you if MT5 or the EA is not
+  loading. See [VPS health check](#vps-health-check-toolsmt5-checksh) below.
 
 > **Migrating from an older build.** The filename never changes, so an
 > existing `deploy.sh` / `auto-deploy.sh` setup picks a new build up with no
@@ -361,6 +346,71 @@ The live terminal runs on an Ubuntu VPS under Wine, set up like this:
 > it, so close those positions (or manage them out by hand) before or
 > immediately after the switch. Recompile with F7 and re-attach the EA so the
 > running instance is the new `.ex5`.
+
+#### VPS health check (`tools/mt5-check.sh`)
+
+A once-a-day check that emails you **only when something is wrong**. If MT5
+and the EA are loading fine, you hear nothing. It exists because of the
+2026-09-18 → 09-23 outage, when a MetaTrader auto-update left the terminal
+restart-looping and the EA did not run for five days without anyone noticing.
+
+**When it runs:** 10:00 (UTC+10), Monday to Friday. There are no weekend
+checks, so anything that breaks over a weekend is reported on Monday morning.
+The VPS clock is UTC, so the crontab entry is `0 0 * * 1-5`.
+
+**What it checks:**
+
+| Check | Fails when | Email says |
+|---|---|---|
+| Service | `mt5.service` is not active | `mt5.service is not running (…)` |
+| EA loaded | no `expert ichimoku-h4-m1-vps-ea … loaded successfully` line in the terminal log after the most recent `… started for …` line (terminal up for more than 5 min) | `terminal is running but ichimoku-h4-m1-vps-ea has not loaded since its last start (…)` |
+| Update loop | more than 3 `LiveUpdate start` lines in yesterday's and today's terminal logs | `LiveUpdate started N times since yesterday: possible update/restart loop` |
+| VPS alive | no ping reaches healthchecks.io by 11:00 (1 h grace) | healthchecks.io's own "is DOWN" email |
+
+The terminal logs are UTF-16, so the script converts them with `iconv`
+before searching. The failure email also carries the last 15 terminal-log
+lines, which usually show the cause at a glance.
+
+**How the email is sent:** the VPS cannot send mail itself, because
+DigitalOcean blocks outbound SMTP (ports 25, 465 and 587), and ntfy.sh no
+longer forwards email for anonymous users. The script uses
+[healthchecks.io](https://healthchecks.io) (free) instead, over HTTPS:
+
+1. A healthy run sends a plain ping to the check's URL. No email is sent.
+2. A failed run sends a `/fail` ping with the report as its body, and
+   healthchecks.io emails that report.
+3. If the VPS is down, no ping arrives, and healthchecks.io emails when the
+   1 h grace period runs out.
+
+**Where things live:**
+
+| What | Where |
+|---|---|
+| Script (source) | `tools/mt5-check.sh` in this repo |
+| Script (installed) | `~/mt5-check.sh` on the VPS |
+| Config | `~/.mt5-check.conf` on the VPS (`chmod 600`): `HC_PING=https://hc-ping.com/<uuid>`. The ping URL is kept out of the repo. |
+| Schedule | `crontab -l` on the VPS: `0 0 * * 1-5 $HOME/mt5-check.sh` |
+| healthchecks.io check | schedule type Cron `0 10 * * 1-5` in your time zone, 1 h grace, email integration with "notify when up" turned off |
+
+**Everyday use:**
+
+- **Send a test email:** run `~/mt5-check.sh --test`. It sends a test report,
+  then a healthy ping so the check goes straight back to green.
+- **Run the check now:** run `~/mt5-check.sh`. Exit 0 means healthy and
+  silent; exit 1 means a failure report was sent; exit 2 means the config is
+  missing.
+- **Silence it during maintenance:** click **Pause** on the check at
+  healthchecks.io. The next successful run un-pauses it.
+- **Change the time:** edit both the crontab (in UTC) and the healthchecks.io
+  cron expression (in your time zone), so they keep agreeing.
+- **Update the script:** copy the new `tools/mt5-check.sh` to `~/mt5-check.sh`
+  on the VPS. The config file stays as it is.
+
+**If you get an alert:** start with the terminal log lines in the email. A
+repeating `LiveUpdate start` means a stuck update; clear it with the manual
+restart steps under [The VPS host](#the-vps-host-how-the-live-build-actually-runs).
+If the EA has not loaded, open the chart over VNC and check that the EA is
+attached and AutoTrading is on.
 
 ---
 
