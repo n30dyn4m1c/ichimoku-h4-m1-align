@@ -6768,10 +6768,18 @@ exit, break-even, the chandelier and the disaster stop are all live's. The
 four changes are about the account and the instrument:
 
 1. **`Symbols` = `XAUUSDc`.**
-2. **Live's risk regime, converted to a cent account.** Each tier risks the
-   same % of equity as live, and the three regimes are the same (M15 1 /
-   M30 5 / H1 10 / H4 20 %, then half, then tiny), measured against
-   ATR × 2. On a cent account the equity and the symbol's tick value are
+2. **Live's risk regime at half the %, on a cent account.** The three
+   regimes are live's, but every % is **halved** (user decision
+   2026-09-24):
+
+   | Regime (equity in USC) | M15 | M30 | H1 | H4 |
+   |---|---|---|---|---|
+   | tier 1, below 7000 | 0.5 | 2.5 | 5 | 10 |
+   | tier 2, 7000–13000 | 0.25 | 1.25 | 2.5 | 5 |
+   | tier 3, 13000 and up | 0.05 | 0.1 | 0.5 | 1 |
+
+   The M5 figures are halved too, although the M5 tier stays off. Each % is
+   measured against ATR × 2, as live. On a cent account the equity and the symbol's tick value are
    both in USC, so a % of equity becomes the same number of lots with no
    change. The regime **thresholds** are read in account units: **cents
    are treated like live's dollars**, so the risk steps down at
@@ -6816,6 +6824,15 @@ minimum lot and the account currency.
   a standard account. The 0.01 floor is therefore far less of a constraint
   than live's, and a small account can follow the % closely. That is what
   makes the cent account suitable for this regime.
+- **Risk at the disaster stop.** The stop sits 8 × ATR away while sizing
+  uses 2 × ATR, so a trade that runs to it loses about 4× its %. At the
+  halved figures that is about 40% on an H4 trade and 20% on an H1 trade
+  below 7000 USC, and 20% / 10% between 7000 and 13000 USC. Live's figures
+  are double that.
+- **Lot value.** `XAUUSDc` is 100 oz per lot with profit in USC, so 1 lot
+  moves $1.00 of real money per $1 of gold, the same as live's `GOLDm#` (1 oz
+  per lot, in $). The 0.01 minimum is $0.01 per $1, a tenth of live's 0.1-lot
+  floor, so rounding up to the minimum rarely adds risk here.
 - The 60 (×10) spread cap is live's price distance. If Exness's cent gold
   spread is wider, entries will be blocked, and the tester will show no
   entries at all. The fix is to raise `InpMaxSpreadPoints`, not to switch it

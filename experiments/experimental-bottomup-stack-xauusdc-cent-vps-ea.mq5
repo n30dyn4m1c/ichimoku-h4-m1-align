@@ -18,6 +18,10 @@
 //|      0.01 and so risks more than its % — exactly as live does.    |
 //|      The 0.01 fallback (InpFixedLots) is used only when sizing    |
 //|      data is unavailable.                                         |
+//|      HALVED (user, 2026-09-24): every risk % is half of live's —  |
+//|      tier 1 M15 0.5 / M30 2.5 / H1 5 / H4 10, tier 2 0.25 / 1.25 / |
+//|      2.5 / 5, tier 3 0.05 / 0.1 / 0.5 / 1 (M5 halved too, though  |
+//|      the M5 tier is off). The parent text below quotes live's %.  |
 //|   3. POINT SCALING: the live build's point inputs (slippage 30,   |
 //|      spread cap 60, BE cover 15) were tuned on GOLDm#, a 2-decimal|
 //|      feed (1 point = 0.01). Exness quotes gold to 3 decimals, so  |
@@ -176,21 +180,21 @@ input double InpFixedLots       = 0.01;   // Fixed lots fallback (sizing data un
 input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
 input double InpRiskTier2At     = 7000.0; // Equity (account units — USC on the cent account) where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity (account units — USC on the cent account) where risk drops to tier 3 (tiny regime)
-input double InpRiskPctM5       = 1.0;    // M5   — tier 1 (equity < Tier2At)
-input double InpRiskPctM15      = 1.0;    // M15  — tier 1
-input double InpRiskPctM30      = 5.0;    // M30  — tier 1
-input double InpRiskPctH1       = 10.0;   // H1   — tier 1
-input double InpRiskPctH4       = 20.0;   // H4   — tier 1
-input double InpRiskPctM5_T2    = 0.5;    // M5   — tier 2 (half regime)
-input double InpRiskPctM15_T2   = 0.5;    // M15  — tier 2
-input double InpRiskPctM30_T2   = 2.5;    // M30  — tier 2
-input double InpRiskPctH1_T2    = 5.0;    // H1   — tier 2
-input double InpRiskPctH4_T2    = 10.0;   // H4   — tier 2
-input double InpRiskPctM5_T3    = 0.1;    // M5   — tier 3 (equity >= Tier3At)
-input double InpRiskPctM15_T3   = 0.1;    // M15  — tier 3
-input double InpRiskPctM30_T3   = 0.2;    // M30  — tier 3
-input double InpRiskPctH1_T3    = 1.0;    // H1   — tier 3
-input double InpRiskPctH4_T3    = 2.0;    // H4   — tier 3
+input double InpRiskPctM5       = 0.5;      // M5   — tier 1 (equity < Tier2At)
+input double InpRiskPctM15      = 0.5;      // M15  — tier 1
+input double InpRiskPctM30      = 2.5;      // M30  — tier 1
+input double InpRiskPctH1       = 5.0;      // H1   — tier 1
+input double InpRiskPctH4       = 10.0;     // H4   — tier 1
+input double InpRiskPctM5_T2    = 0.25;     // M5   — tier 2 (half regime)
+input double InpRiskPctM15_T2   = 0.25;     // M15  — tier 2
+input double InpRiskPctM30_T2   = 1.25;     // M30  — tier 2
+input double InpRiskPctH1_T2    = 2.5;      // H1   — tier 2
+input double InpRiskPctH4_T2    = 5.0;      // H4   — tier 2
+input double InpRiskPctM5_T3    = 0.05;     // M5   — tier 3 (equity >= Tier3At)
+input double InpRiskPctM15_T3   = 0.05;     // M15  — tier 3
+input double InpRiskPctM30_T3   = 0.1;      // M30  — tier 3
+input double InpRiskPctH1_T3    = 0.5;      // H1   — tier 3
+input double InpRiskPctH4_T3    = 1.0;      // H4   — tier 3
 input double InpMarginUsePct     = 80.0;   // Max % of FREE margin one order may commit (R5; parent used 100%)
 
 // H1 stand-in bias mode — what the lower tiers may do when the H4 bias
