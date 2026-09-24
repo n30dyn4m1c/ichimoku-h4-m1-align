@@ -6676,59 +6676,87 @@ Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet backtested.**
 Against §56 it only differs once equity passes $13000, so compare on a period
 long enough to get there.
 
-## 58. M1/M5 liquidity scalper — M1+M5 alignment, unraided M5 target, fractal stop
+## 58. Liquidity scalper — M1+M5 (and M15) alignment, unraided liquidity target, fractal stop
 
 **File:** `experimental-m1m5-liquidity-scalper-ea.mq5`
 **Magic number:** `20260883`
 
 A standalone scalper written on user request (2026-09-24), not a fork of the
-bias stack. There is **no higher-timeframe bias**: no H4/H1 bias, D1 filter,
-cloud-twist gate or tier ladder. Only M1 and M5 matter.
+bias stack. There is **no higher-timeframe bias**: no H4/H1 bias, D1 filter
+or cloud-twist gate. It has two tiers. The M15 tier was added the same day,
+also at the user's request.
+
+### The tiers
+
+| Tier | Aligned (same direction) | Take profit |
+|---|---|---|
+| M5 | M1, M5 | nearest unraided **M5** liquidity |
+| M15 | M1, M5, M15 | nearest unraided **M15** liquidity |
+
+**Aligned** is the live build's `CheckAlign` on the last closed bar: price
+above (below) tenkan, kijun and the cloud, and chikou above (below) the
+high (low), tenkan, kijun and cloud Kijun bars back. The EA checks on each
+closed M1 bar. The spread filter (`InpMaxSpreadPoints`, 60) is kept.
+`InpM5Tier` and `InpM15Tier` switch the tiers on and off.
 
 ### The rules
 
-- **Entry.** On each closed M1 bar, when the symbol has no position of this
-  magic, M1 and M5 must both pass the live build's `CheckAlign` in the same
-  direction: price above (below) tenkan, kijun and the cloud, and chikou
-  above (below) the high (low), tenkan, kijun and cloud Kijun bars back.
-  The spread filter (`InpMaxSpreadPoints`, 60) is kept.
-- **Take profit: unraided M5 liquidity.** The nearest unraided M5 swing
-  beyond the entry: a high above price for a buy, a low below it for a sell.
-  This is the `po3-levels` scan of §52, ported as in §53: a swing must stand
-  out from 6 candles on the left (strictly) and 6 on the right, the scan
-  covers the last 100 M5 candles, and a level counts as raided once a later
-  wick trades beyond it. `InpLiqTPOffsetPoints` (0) pulls the TP in front of
-  the level. The distance is measured from the side that triggers the TP
-  (the bid for a buy, the ask for a sell) and must clear the broker's
-  minimum stop distance.
-- **Stop loss: two fractals back.** Williams fractals (`iFractals`) on
-  `InpFractalTF` (M1 by default) are walked from the newest confirmed one
-  (bar 3, since a fractal on bar 2 still depends on the live candle) back
-  through `InpFractalLookback` (200) candles. Only fractals beyond the
-  entry count: lows below it for a buy, highs above it for a sell. The
-  `InpFractalCount`-th one (2) is the SL. In a clean uptrend this is the
-  higher low before the latest one, and so the lower of the two.
+- **Take profit: unraided liquidity on the tier's timeframe.** The nearest
+  unraided swing beyond the entry: a high above price for a buy, a low below
+  it for a sell. This is the `po3-levels` scan of §52, ported as in §53: a
+  swing must stand out from 6 candles on the left (strictly) and 6 on the
+  right, the scan covers the last 100 candles of the tier's timeframe, and a
+  level counts as raided once a later wick trades beyond it.
+  `InpLiqTPOffsetPoints` (0) pulls the TP in front of the level. The
+  distance is measured from the side that triggers the TP (the bid for a
+  buy, the ask for a sell) and must clear the broker's minimum stop
+  distance.
+- **Stop loss: two fractals back.** Williams fractals (`iFractals`) are
+  walked from the newest confirmed one (bar 3, since a fractal on bar 2
+  still depends on the live candle) back through `InpFractalLookback` (200)
+  candles. Only fractals beyond the entry count: lows below it for a buy,
+  highs above it for a sell. The `InpFractalCount`-th one (2) is the SL. In a
+  clean uptrend this is the higher low before the latest one, and so the
+  lower of the two. The fractal timeframe is `InpFractalTF` for the M5 tier
+  and `InpM15FractalTF` for the M15 tier, both **M1** by default.
   `InpSLBufferPoints` (0) pushes the SL further beyond the fractal.
-- **No target or no stop means no trade.** The reason is journalled once per
-  aligned run instead of every minute.
+- **No target or no stop means that tier doesn't trade.** The reason is
+  journalled once per aligned run instead of every minute.
 - **Size.** A fixed `InpLots` (0.10) on every trade, rounded to the
   symbol's lot step. There is no risk sizing or margin cap.
-- **Exits.** One position per symbol, and it closes only at its SL or TP.
-  There is no kumo-touch exit, break-even or trail. While alignment holds,
-  a new trade opens on the next closed M1 bar after the last one closes,
-  targeting the next unraided level.
+- **Exits.** Positions close only at their SL or TP, or when superseded.
+  There is no kumo-touch exit, break-even or trail.
+
+### Tiers together (`InpTierMode`)
+
+- **`TIERS_LARGEST` (default)** follows the live build's consolidation. There
+  is one position per symbol, and the largest aligned tier opens. A running
+  M15 trade blocks new entries. A running M5 trade blocks everything except
+  an M15 signal, which **closes the M5 scalp and opens the M15 trade in its
+  place**, but only after the M15 target and stop are found, so an M5 trade
+  is never closed for nothing. When the M15 tier aligns but has no target
+  or stop, the M5 tier opens instead.
+- **`TIERS_INDEPENDENT`** gives each tier its own position, so both can
+  run at once (0.20 lots in total). This needs a hedging account. The
+  keep-tiers experiment (§55) was the same idea in the bias stack, and it did
+  worse than supersede.
+
+Positions are told apart by comment (`LiqScalp M5` / `LiqScalp M15`).
+Anything without the M15 tag counts as the M5 tier.
 
 ### Choices made where the request was open
 
-- The fractal timeframe defaults to **M1**, the scalping timeframe. Set
-  `InpFractalTF = PERIOD_M5` for a wider stop on the same timeframe as the
-  target.
+- The fractal timeframe defaults to **M1**, the scalping timeframe, for both
+  tiers. Set it to M5 (or M15 for the M15 tier) for a wider stop.
 - "Two fractals" is counted back in time among the fractals beyond the
   entry, not by price rank.
+- While alignment holds, a new trade opens on the next closed M1 bar after
+  the last one closes, targeting the next unraided level.
 
 ### Status
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet
 backtested.** Questions for the tester: the win rate against the reward:risk
-that the M5 target and M1 stop give, how often an aligned bar finds no
-unraided M5 level, and whether an M5 fractal stop does better.
+of each tier, how often an aligned bar finds no unraided level, what the
+M15 supersede costs the M5 scalps it closes, and whether a wider fractal
+stop does better.

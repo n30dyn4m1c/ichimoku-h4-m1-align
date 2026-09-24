@@ -1,26 +1,34 @@
 //+------------------------------------------------------------------+
 //| EXPERIMENT — M1/M5 LIQUIDITY SCALPER (notes §58, magic 20260883) |
-//| A standalone scalper, not a fork of the bias stack:               |
-//|   * ENTRY: M1 and M5 Ichimoku-aligned the same way — the live     |
-//|     build's CheckAlign (price and chikou beyond tenkan, kijun     |
-//|     and cloud) on the last closed bar of each. NO higher          |
-//|     timeframe bias, no cloud-twist gate, no D1/H4/H1 filter.      |
-//|   * TP: the nearest UNRAIDED M5 liquidity level beyond the entry  |
-//|     — a swing high above price for a buy, a swing low below it    |
-//|     for a sell — found with the po3-levels rules (§52, the same   |
-//|     scan as the liquidity-target build §53).                      |
-//|   * SL: TWO FRACTALS back — the second Williams fractal low       |
-//|     below the entry for a buy (the second fractal high above it   |
-//|     for a sell), counted from the newest confirmed fractal on     |
-//|     InpFractalTF (M1 by default).                                 |
-//|   * No target or no stop = no trade.                              |
+//| A standalone scalper, not a fork of the bias stack. Two tiers:    |
+//|   * M5 TIER:  M1 + M5 aligned        -> TP at unraided M5 liq.    |
+//|   * M15 TIER: M1 + M5 + M15 aligned  -> TP at unraided M15 liq.   |
+//|   * ALIGNED = the live build's CheckAlign (price and chikou       |
+//|     beyond tenkan, kijun and cloud) on the last closed bar. NO    |
+//|     higher timeframe bias, no cloud-twist gate, no D1/H4/H1.      |
+//|   * TP: the nearest UNRAIDED liquidity level on the tier's TF     |
+//|     beyond the entry — a swing high above price for a buy, a      |
+//|     swing low below it for a sell — found with the po3-levels     |
+//|     rules (§52, the same scan as the liquidity-target build §53). |
+//|   * SL: TWO FRACTALS back — the second Williams fractal low below |
+//|     the entry for a buy (the second fractal high above it for a   |
+//|     sell), counted from the newest confirmed fractal on the       |
+//|     tier's fractal TF (M1 by default for both tiers).             |
+//|   * No target or no stop = that tier does not trade.              |
 //|   * FIXED LOTS (InpLots, 0.10) on every trade; no risk sizing.    |
-//|   * One position per symbol; it exits only at its SL or TP.       |
+//|   * TIERS_LARGEST (default): one position per symbol, the largest |
+//|     aligned tier opens, and an M15 signal closes a running M5     |
+//|     scalp and replaces it (the live build's supersede).           |
+//|     TIERS_INDEPENDENT: each tier keeps its own position (needs a  |
+//|     hedging account).                                             |
+//|   * Positions exit only at their SL or TP (or a supersede).       |
 //| Runs once per closed M1 bar.                                      |
 //+------------------------------------------------------------------+
 #property strict
 
 #include <Trade/Trade.mqh>
+
+enum ENUM_TIER_MODE { TIERS_LARGEST = 0, TIERS_INDEPENDENT = 1 };
 
 //--- Input Parameters ---
 input string Symbols  = "GOLDm#";
@@ -30,29 +38,37 @@ input int    SenkouB  = 52;
 input int    Slippage = 30;
 
 input group  "Trade"
-input double InpLots             = 0.10;  // Fixed lot size on every trade
-input int    InpMaxSpreadPoints  = 60;    // Max spread in points to allow entry (0 = no limit)
+input double         InpLots            = 0.10;          // Fixed lot size on every trade
+input int            InpMaxSpreadPoints = 60;            // Max spread in points to allow entry (0 = no limit)
+input bool           InpM5Tier          = true;          // M5 tier: M1+M5 aligned, TP at M5 liquidity
+input bool           InpM15Tier         = true;          // M15 tier: M1+M5+M15 aligned, TP at M15 liquidity
+input ENUM_TIER_MODE InpTierMode        = TIERS_LARGEST; // 0 = one position per symbol, M15 supersedes M5; 1 = each tier its own position (hedging)
 
-input group  "Take Profit — unraided M5 liquidity (po3-levels rules)"
+input group  "Take Profit — unraided liquidity on the tier TF (po3-levels rules)"
 input int    InpLiqLeft           = 6;    // Swing: candles to the left (po3-levels default)
 input int    InpLiqRight          = 6;    // Swing: candles to the right (po3-levels default)
-input int    InpLiqLookback       = 100;  // M5 candles of history searched
+input int    InpLiqLookback       = 100;  // Candles of the tier TF searched
 input int    InpLiqTPOffsetPoints = 0;    // Pull the TP this many points in front of the level
 
 input group  "Stop Loss — two fractals back"
-input ENUM_TIMEFRAMES InpFractalTF        = PERIOD_M1; // Timeframe of the Williams fractals
+input ENUM_TIMEFRAMES InpFractalTF        = PERIOD_M1; // M5 tier: timeframe of the Williams fractals
+input ENUM_TIMEFRAMES InpM15FractalTF     = PERIOD_M1; // M15 tier: timeframe of the Williams fractals
 input int             InpFractalCount     = 2;         // Which fractal beyond the entry (2 = the second one)
 input int             InpFractalLookback  = 200;       // Candles searched for fractals
 input int             InpSLBufferPoints   = 0;         // Push the SL this many points beyond the fractal
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
+#define TIERS    2      // 0 = M5 tier, 1 = M15 tier
+#define TFS      3      // alignment stack: M1, M5, M15
+
+ENUM_TIMEFRAMES tfs[TFS]      = { PERIOD_M1, PERIOD_M5, PERIOD_M15 };
+string          tierName[TIERS] = { "M5", "M15" };
 
 string   syms[MAX_SYMS];
 int      symsCount = 0;
-int      ichM1[MAX_SYMS];
-int      ichM5[MAX_SYMS];
-int      frac[MAX_SYMS];
+int      ich[MAX_SYMS][TFS];
+int      frac[MAX_SYMS][TIERS];
 datetime lastM1bar[MAX_SYMS];
 string   lastSkip[MAX_SYMS];     // last skip reason printed (logged on change only)
 
@@ -93,11 +109,14 @@ int OnInit()
    {
       lastM1bar[s] = 0;
       lastSkip[s]  = "";
-      ichM1[s] = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
-      ichM5[s] = iIchimoku(syms[s], PERIOD_M5, Tenkan, Kijun, SenkouB);
-      frac[s]  = iFractals(syms[s], InpFractalTF);
-      if(ichM1[s] == INVALID_HANDLE || ichM5[s] == INVALID_HANDLE ||
-         frac[s] == INVALID_HANDLE) return(INIT_FAILED);
+      for(int t = 0; t < TFS; t++)
+      {
+         ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
+         if(ich[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+      }
+      frac[s][0] = iFractals(syms[s], InpFractalTF);
+      frac[s][1] = iFractals(syms[s], InpM15FractalTF);
+      if(frac[s][0] == INVALID_HANDLE || frac[s][1] == INVALID_HANDLE) return(INIT_FAILED);
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -109,9 +128,8 @@ void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
    {
-      IndicatorRelease(ichM1[s]);
-      IndicatorRelease(ichM5[s]);
-      IndicatorRelease(frac[s]);
+      for(int t = 0; t < TFS; t++) IndicatorRelease(ich[s][t]);
+      for(int k = 0; k < TIERS; k++) IndicatorRelease(frac[s][k]);
    }
 }
 
@@ -123,8 +141,12 @@ void OnDeinit(const int reason)
 // -1 = short, 0 = not aligned.
 //==============================================================
 
-int CheckAlign(string sym, ENUM_TIMEFRAMES tf, int handle)
+int CheckAlign(int s, int tfIdx)
 {
+   string          sym    = syms[s];
+   ENUM_TIMEFRAMES tf     = tfs[tfIdx];
+   int             handle = ich[s][tfIdx];
+
    int sh      = 1;              // last closed bar
    int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
 
@@ -227,20 +249,20 @@ double LiqNearest(string sym, ENUM_TIMEFRAMES tf, int dir, double price, double 
 }
 
 //==============================================================
-// Stop Loss — two fractals back. Walks the Williams fractals on
-// InpFractalTF from the newest confirmed one (bar 3: a fractal on
+// Stop Loss — two fractals back. Walks the Williams fractals of
+// 'handle' from the newest confirmed one (bar 3: a fractal on
 // bar 2 still depends on the live candle) back in time, counting
 // only the fractals beyond the entry by at least minDist — lows
 // below it for a buy, highs above it for a sell — and returns the
 // InpFractalCount-th (the second by default). 0.0 = not found.
 //==============================================================
 
-double FractalStop(int s, int dir, double price, double minDist)
+double FractalStop(int handle, int dir, double price, double minDist)
 {
    int n = (int)MathMax(10, InpFractalLookback);
    double f[];
    ArraySetAsSeries(f, true);
-   int got = CopyBuffer(frac[s], (dir == 1) ? 1 : 0, 0, n, f);   // 0 = up, 1 = down
+   int got = CopyBuffer(handle, (dir == 1) ? 1 : 0, 0, n, f);   // 0 = up, 1 = down
    if(got <= 3) return 0.0;
 
    int want  = (int)MathMax(1, InpFractalCount);
@@ -266,16 +288,27 @@ bool SpreadOK(string sym)
    return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
 }
 
-bool HasPosition(string sym)
+string TierComment(int tier) { return "LiqScalp " + tierName[tier]; }
+
+// The tier a position belongs to, from its comment. Anything without the
+// M15 tag is the M5 tier (the first version's "M1M5 scalp" included).
+int PositionTier()
 {
+   return (StringFind(PositionGetString(POSITION_COMMENT), "M15") >= 0) ? 1 : 0;
+}
+
+// Tickets of this symbol's positions per tier (0 = none).
+void TierTickets(string sym, ulong &tk[])
+{
+   for(int k = 0; k < TIERS; k++) tk[k] = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
-      if(PositionGetString(POSITION_SYMBOL) == sym) return true;
+      if(PositionGetString(POSITION_SYMBOL) != sym) continue;
+      tk[PositionTier()] = ticket;
    }
-   return false;
 }
 
 double FixedLots(string sym)
@@ -297,6 +330,69 @@ void Skip(int s, string why)
 }
 
 //==============================================================
+// Orders
+//==============================================================
+
+// SL and TP for a tier's entry. TP: the nearest unraided level on the
+// tier's TF beyond the entry. SL: the second fractal beyond it. Both are
+// measured from the side that trips them (a long's on the BID, a short's
+// on the ASK) and must clear the broker's minimum stop distance. 'why'
+// names what was missing when it returns false.
+bool BuildOrder(int s, int tier, int dir, double &sl, double &tp, double &level, string &why)
+{
+   string sym     = syms[s];
+   double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
+   int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   double trip    = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_BID)
+                               : SymbolInfoDouble(sym, SYMBOL_ASK);
+   string side    = (dir == 1) ? "buy" : "sell";
+
+   double offset = InpLiqTPOffsetPoints * point;
+   level = LiqNearest(sym, tfs[tier + 1], dir, trip, minDist + offset + point);
+   if(level == 0.0) { why = tierName[tier] + " " + side + ": no unraided " + tierName[tier] + " liquidity"; return false; }
+   tp = NormalizeDouble((dir == 1) ? level - offset : level + offset, digits);
+
+   double buffer = InpSLBufferPoints * point;
+   double frc    = FractalStop(frac[s][tier], dir, trip, minDist + buffer + point);
+   if(frc == 0.0) { why = tierName[tier] + " " + side + ": no fractal stop"; return false; }
+   sl = NormalizeDouble((dir == 1) ? frc - buffer : frc + buffer, digits);
+   return true;
+}
+
+bool OpenTier(int s, int tier, int dir, double sl, double tp, double level)
+{
+   string sym    = syms[s];
+   int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double price  = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
+                              : SymbolInfoDouble(sym, SYMBOL_BID);
+   string side   = (dir == 1) ? "buy" : "sell";
+   double lots   = FixedLots(sym);
+
+   trade.SetTypeFillingBySymbol(sym);
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, tp, TierComment(tier))
+                        : trade.Sell(lots, sym, price, sl, tp, TierComment(tier));
+   if(ok)
+      Print(sym + " " + tierName[tier] + " " + side + " @ " + DoubleToString(price, digits) +
+            " lots " + DoubleToString(lots, 2) + " | SL " + DoubleToString(sl, digits) +
+            " (fractal " + IntegerToString(InpFractalCount) + ") | TP " +
+            DoubleToString(tp, digits) + " (" + tierName[tier] + " liquidity " +
+            DoubleToString(level, digits) + ")");
+   else
+      Print(sym + " " + tierName[tier] + " " + side + " failed, retcode " +
+            IntegerToString(trade.ResultRetcode()));
+   return ok;
+}
+
+// Try one tier: build its SL/TP and open it. Returns true when it opened.
+bool TryTier(int s, int tier, int dir, string &why)
+{
+   double sl, tp, level;
+   if(!BuildOrder(s, tier, dir, sl, tp, level, why)) return false;
+   return OpenTier(s, tier, dir, sl, tp, level);
+}
+
+//==============================================================
 // Entry
 //==============================================================
 
@@ -304,49 +400,61 @@ void TryEntry(int s)
 {
    string sym = syms[s];
 
-   int d1 = CheckAlign(sym, PERIOD_M1, ichM1[s]);
-   if(d1 == 0) { lastSkip[s] = ""; return; }
-   int d5 = CheckAlign(sym, PERIOD_M5, ichM5[s]);
-   if(d5 != d1) { lastSkip[s] = ""; return; }
-   int dir = d1;
+   // Alignment, bottom-up: M1 and M5 must agree for either tier; M15
+   // must agree as well for the M15 tier.
+   int dir = CheckAlign(s, 0);
+   if(dir == 0 || CheckAlign(s, 1) != dir) { lastSkip[s] = ""; return; }
+   bool m15 = InpM15Tier && CheckAlign(s, 2) == dir;
+   bool m5  = InpM5Tier;
+   if(!m15 && !m5) { lastSkip[s] = ""; return; }
 
    if(!SpreadOK(sym)) { Skip(s, "spread"); return; }
 
-   double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
-   int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
-   double ask     = SymbolInfoDouble(sym, SYMBOL_ASK);
-   double bid     = SymbolInfoDouble(sym, SYMBOL_BID);
-   double price   = (dir == 1) ? ask : bid;
-   string side    = (dir == 1) ? "buy" : "sell";
+   ulong tk[TIERS];
+   TierTickets(sym, tk);
+   string why = "";
 
-   // TP: the nearest unraided M5 level beyond the entry. A long's TP
-   // trips on the BID and a short's on the ASK, so the distance is
-   // measured from that side.
-   double offset = InpLiqTPOffsetPoints * point;
-   double trip   = (dir == 1) ? bid : ask;
-   double level  = LiqNearest(sym, PERIOD_M5, dir, trip, minDist + offset + point);
-   if(level == 0.0) { Skip(s, side + " aligned, no unraided M5 liquidity"); return; }
-   double tp = NormalizeDouble((dir == 1) ? level - offset : level + offset, digits);
+   if(InpTierMode == TIERS_INDEPENDENT)
+   {
+      // Each tier keeps its own position.
+      if(m15 && tk[1] == 0 && !TryTier(s, 1, dir, why) && why != "") Skip(s, why);
+      if(m5  && tk[0] == 0 && !TryTier(s, 0, dir, why) && why != "") Skip(s, why);
+      return;
+   }
 
-   // SL: the second fractal beyond the entry, pushed out by the buffer.
-   double buffer = InpSLBufferPoints * point;
-   double frc    = FractalStop(s, dir, trip, minDist + buffer + point);
-   if(frc == 0.0) { Skip(s, side + " aligned, no fractal stop"); return; }
-   double sl = NormalizeDouble((dir == 1) ? frc - buffer : frc + buffer, digits);
+   // TIERS_LARGEST: one position per symbol. A running M15 trade blocks
+   // everything; a running M5 trade blocks everything except an M15
+   // signal, which closes it and takes its place.
+   if(tk[1] != 0) return;
 
-   double lots = FixedLots(sym);
-   trade.SetTypeFillingBySymbol(sym);
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, tp, "M1M5 scalp")
-                        : trade.Sell(lots, sym, price, sl, tp, "M1M5 scalp");
-   lastSkip[s] = "";
-   if(ok)
-      Print(sym + " " + side + " @ " + DoubleToString(price, digits) + " lots " +
-            DoubleToString(lots, 2) + " | SL " + DoubleToString(sl, digits) +
-            " (fractal " + IntegerToString(InpFractalCount) + ") | TP " +
-            DoubleToString(tp, digits) + " (M5 liquidity " + DoubleToString(level, digits) + ")");
-   else
-      Print(sym + " " + side + " failed, retcode " + IntegerToString(trade.ResultRetcode()));
+   if(m15)
+   {
+      double sl, tp, level;
+      if(BuildOrder(s, 1, dir, sl, tp, level, why))
+      {
+         if(tk[0] != 0)
+         {
+            Print(sym + " close M5 (superseded by M15)");
+            if(!trade.PositionClose(tk[0], Slippage))
+            {
+               Print(sym + " M5 supersede close failed, retcode " +
+                     IntegerToString(trade.ResultRetcode()) + " — will retry");
+               return;
+            }
+         }
+         lastSkip[s] = "";
+         OpenTier(s, 1, dir, sl, tp, level);
+         return;
+      }
+      // No M15 target or stop: fall back to the M5 tier.
+   }
+
+   if(tk[0] != 0) return;
+   string why5 = "";
+   if(m5 && !TryTier(s, 0, dir, why5)) why = (why == "") ? why5 : why + "; " + why5;
+   else if(m5) why = "";
+   if(why != "") Skip(s, why);
+   else lastSkip[s] = "";
 }
 
 void OnTick()
@@ -358,7 +466,6 @@ void OnTick()
       if(t == 0 || t == lastM1bar[s]) continue;
       lastM1bar[s] = t;
 
-      if(HasPosition(syms[s])) continue;
       TryEntry(s);
    }
 }
