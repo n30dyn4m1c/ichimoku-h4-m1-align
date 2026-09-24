@@ -6773,12 +6773,12 @@ four changes are about the account and the instrument:
    M30 5 / H1 10 / H4 20 %, then half, then tiny), measured against
    ATR × 2. On a cent account the equity and the symbol's tick value are
    both in USC, so a % of equity becomes the same number of lots with no
-   change. The regime **thresholds** are the one exception, because
-   they are absolute amounts. `InpRiskTier2At` and `InpRiskTier3At` stay in
-   **dollars** ($7000 / $13000), and `LevelRiskPct()` divides equity by
-   `RegimeScale()` before comparing. That is **auto 100 on a `USC` account**,
-   1 otherwise, or `InpRegimeScale` to force it. The regime therefore
-   changes at the same real money as live: 700 000 / 1 300 000 USC.
+   change. The regime **thresholds** are read in account units: **cents
+   are treated like live's dollars**, so the risk steps down at
+   `InpRiskTier2At` = **7000 USC** and `InpRiskTier3At` = **13000 USC**
+   (user decision 2026-09-24). A first version converted them to 700 000 /
+   1 300 000 USC to match live's real money. That was dropped at the
+   user's request.
    **Minimum 0.01 lots:** a size below the broker minimum is rounded **up**
    to 0.01, the same clamp live uses, so on a small account a low-% tier can
    risk more than its %. `InpFixedLots` (0.01) is only the fallback when
@@ -6807,9 +6807,7 @@ minimum lot and the account currency.
   on real ticks**. The deposit is in USC: 10000 USC is $100, and live's
   results started at $100.
 - Check the OnInit journal line first. It should read `digits 3, point scale
-  x10`, `regimes at 700000 / 1300000 (x100)` and `min lot 0.01`. If the
-  tester's deposit currency is not `USC`, the scale falls back to ×1; set
-  `InpRegimeScale = 100` by hand.
+  x10`, `regimes at 7000 / 13000 USC` and `min lot 0.01`.
 
 ### Status & caveats
 

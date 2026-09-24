@@ -11,12 +11,11 @@
 //|      build's — the same % per tier and the same three regimes —   |
 //|      measured on the cent equity, whose tick values are in USC    |
 //|      too, so the % translates to lots unchanged. The regime       |
-//|      thresholds stay in DOLLARS ($7000 / $13000) and equity is    |
-//|      divided by RegimeScale() (100 on a USC account, auto) before |
-//|      the comparison, so regimes switch at the same real money as  |
-//|      live. Lots never go below the broker minimum (0.01): a trade |
-//|      whose % would size under it is rounded UP to 0.01 and so     |
-//|      risks more than its % — exactly as live does at its minimum. |
+//|      thresholds are read in ACCOUNT units — cents on the cent     |
+//|      account, treated like live's dollars: 7000 = 7000 USC and    |
+//|      13000 = 13000 USC. Lots never go below the broker minimum    |
+//|      (0.01): a trade whose % would size under it is rounded UP to |
+//|      0.01 and so risks more than its % — exactly as live does.    |
 //|      The 0.01 fallback (InpFixedLots) is used only when sizing    |
 //|      data is unavailable.                                         |
 //|   3. POINT SCALING: the live build's point inputs (slippage 30,   |
@@ -174,10 +173,9 @@ input int    Slippage = 30;          // Max slippage, in 2-decimal gold points (
 
 input group  "Risk Management (per level, % of actual equity)"
 input double InpFixedLots       = 0.01;   // Fixed lots fallback (sizing data unavailable) — the broker minimum
-input double InpRegimeScale     = 0.0;    // Account units per dollar for the regime thresholds (0 = auto: 100 on a USC cent account, else 1)
 input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(level TF) x this (risk sizing basis)
-input double InpRiskTier2At     = 7000.0; // Equity in DOLLARS where risk drops to tier 2 (half regime) — scaled by RegimeScale()
-input double InpRiskTier3At     = 13000.0;// Equity in DOLLARS where risk drops to tier 3 (tiny regime) — scaled by RegimeScale()
+input double InpRiskTier2At     = 7000.0; // Equity (account units — USC on the cent account) where risk drops to tier 2 (half regime)
+input double InpRiskTier3At     = 13000.0;// Equity (account units — USC on the cent account) where risk drops to tier 3 (tiny regime)
 input double InpRiskPctM5       = 1.0;    // M5   — tier 1 (equity < Tier2At)
 input double InpRiskPctM15      = 1.0;    // M15  — tier 1
 input double InpRiskPctM30      = 5.0;    // M30  — tier 1
@@ -356,8 +354,8 @@ int OnInit()
             " | BE cover " + IntegerToString(InpBECoverPoints * sc) + " pts (" +
             DoubleToString(InpBECoverPoints * sc * pt, dg) + ")" +
             " | slippage " + IntegerToString(Slippage * sc) + " pts" +
-            " | regimes at " + DoubleToString(InpRiskTier2At * RegimeScale(), 0) + " / " +
-            DoubleToString(InpRiskTier3At * RegimeScale(), 0) + " (x" + DoubleToString(RegimeScale(), 0) + ")" +
+            " | regimes at " + DoubleToString(InpRiskTier2At, 0) + " / " +
+            DoubleToString(InpRiskTier3At, 0) + " " + AccountInfoString(ACCOUNT_CURRENCY) +
             " | min lot " + DoubleToString(SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN), 2) +
             " | account " + AccountInfoString(ACCOUNT_CURRENCY));
    }
@@ -831,18 +829,9 @@ bool SpreadOK(string sym)
 // free margin so it fills fully.
 //==============================================================
 
-// XAUUSDc fork: account-currency units per dollar, so the dollar regime
-// thresholds switch at the same real money on a cent account (USC) as live.
-double RegimeScale()
-{
-   if(InpRegimeScale > 0) return InpRegimeScale;
-   string cur = AccountInfoString(ACCOUNT_CURRENCY);
-   return (cur == "USC" || cur == "USc") ? 100.0 : 1.0;
-}
-
 double LevelRiskPct(int lvl)
 {
-   double eq = AccountInfoDouble(ACCOUNT_EQUITY) / RegimeScale();   // in dollars
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    bool t3 = (eq >= InpRiskTier3At);
    bool t2 = (eq >= InpRiskTier2At);
    switch(lvl)
