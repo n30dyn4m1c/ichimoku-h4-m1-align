@@ -15,9 +15,10 @@
 //|     InpFractalTF (M1 by default).                                 |
 //|   * No target or no stop = no trade.                              |
 //|   * SIZE: the live VPS build's M5-tier risk regime — 1% of equity |
-//|     below $7000, 0.5% to $13000, 0.1% above, measured against a   |
-//|     reference distance of ATR(M5) x 2 (not the fractal stop), and |
-//|     capped to 80% of free margin. 0.10 lots if sizing data fails. |
+//|     below $7000, 0.5% to $13000, 0.1% above — measured against    |
+//|     the distance from the entry to the fractal stop, so a trade   |
+//|     stopped out loses that % (the stop is never moved for it).    |
+//|     Capped to 80% of free margin; 0.10 lots if sizing data fails. |
 //|   * One position per symbol; it exits only at its SL or TP.       |
 //| Runs once per closed M1 bar.                                      |
 //+------------------------------------------------------------------+
@@ -37,8 +38,6 @@ input int    InpMaxSpreadPoints  = 60;    // Max spread in points to allow entry
 
 input group  "Risk Management (the live VPS build's M5-tier regime, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
-input int    InpATRPeriod       = 14;     // ATR(M5) period for the sizing distance
-input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(M5) x this (risk sizing basis)
 input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
 input double InpRiskPctM5       = 1.0;    // M5 — tier 1 (equity < Tier2At)
@@ -66,7 +65,6 @@ int      symsCount = 0;
 int      ichM1[MAX_SYMS];
 int      ichM5[MAX_SYMS];
 int      frac[MAX_SYMS];
-int      atrM5[MAX_SYMS];
 datetime lastM1bar[MAX_SYMS];
 string   lastSkip[MAX_SYMS];     // last skip reason printed (logged on change only)
 
@@ -110,9 +108,8 @@ int OnInit()
       ichM1[s] = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
       ichM5[s] = iIchimoku(syms[s], PERIOD_M5, Tenkan, Kijun, SenkouB);
       frac[s]  = iFractals(syms[s], InpFractalTF);
-      atrM5[s] = iATR(syms[s], PERIOD_M5, InpATRPeriod);
       if(ichM1[s] == INVALID_HANDLE || ichM5[s] == INVALID_HANDLE ||
-         frac[s] == INVALID_HANDLE || atrM5[s] == INVALID_HANDLE) return(INIT_FAILED);
+         frac[s] == INVALID_HANDLE) return(INIT_FAILED);
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -127,7 +124,6 @@ void OnDeinit(const int reason)
       IndicatorRelease(ichM1[s]);
       IndicatorRelease(ichM5[s]);
       IndicatorRelease(frac[s]);
-      IndicatorRelease(atrM5[s]);
    }
 }
 
@@ -298,10 +294,12 @@ bool HasPosition(string sym)
 // Risk Management — the live VPS build's regime for the M5 tier:
 // risk a fixed % of the ACTUAL equity at entry, de-risking as the
 // account grows (1% below InpRiskTier2At, 0.5% between the tiers,
-// 0.1% at InpRiskTier3At and above). As in live, the % is measured
-// against a reference distance of ATR(M5) x InpRiskATRMult, not
-// the fractal stop. Falls back to InpFixedLots when the sizing
-// data is unavailable; every order is capped to the free margin.
+// 0.1% at InpRiskTier3At and above). The % is measured against
+// the distance from the entry to the fractal stop, so a stopped-
+// out trade loses that % (live, having no stop, used ATR x 2);
+// the stop is placed first and never moved to suit the size.
+// Falls back to InpFixedLots when the sizing data is unavailable;
+// every order is capped to the free margin.
 //==============================================================
 
 double RiskPct()
@@ -312,14 +310,10 @@ double RiskPct()
    return InpRiskPctM5;
 }
 
-double RiskLots(int s)
+double RiskLots(int s, double stopDist)
 {
    double riskPct = RiskPct();
-   if(riskPct <= 0) return InpFixedLots;
-
-   double a[1];
-   if(CopyBuffer(atrM5[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
-   double stopDist = a[0] * InpRiskATRMult;
+   if(riskPct <= 0 || stopDist <= 0) return InpFixedLots;
 
    double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
    double tickSize  = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_SIZE);
@@ -407,7 +401,7 @@ void TryEntry(int s)
    if(frc == 0.0) { Skip(s, side + " aligned, no fractal stop"); return; }
    double sl = NormalizeDouble((dir == 1) ? frc - buffer : frc + buffer, digits);
 
-   double lots = RiskLots(s);
+   double lots = RiskLots(s, MathAbs(price - sl));
    CapLotsToMargin(sym, (dir == 1), lots);
    trade.SetTypeFillingBySymbol(sym);
    bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, tp, "M1M5 scalp")

@@ -6714,11 +6714,14 @@ cloud-twist gate or tier ladder. Only M1 and M5 matter.
 - **Size: the live VPS build's risk regime for an M5 trade.** Risk is a
   % of the actual equity at entry, reduced as the account grows:
   `InpRiskPctM5` 1% below `InpRiskTier2At` ($7000), `InpRiskPctM5_T2` 0.5%
-  up to `InpRiskTier3At` ($13000), and `InpRiskPctM5_T3` 0.1% above that. As
-  in live, the % is measured against a reference distance of ATR(M5) ×
-  `InpRiskATRMult` (2), **not** the fractal stop, so the money actually
-  lost at the SL is more or less than the nominal % depending on how far
-  the stop sits. The order is capped to `InpMarginUsePct` (80%) of free
+  up to `InpRiskTier3At` ($13000), and `InpRiskPctM5_T3` 0.1% above that.
+  The % is measured against **the distance from the entry to the fractal
+  stop**, so a trade stopped out loses that % of equity. The stop is
+  placed first and never moved to suit the size. Live, which has no stop,
+  measures against ATR × 2 instead. Two limits bend the %: a very close
+  fractal gives a large size, which the margin cap then limits, and a very
+  far one can round down to the broker's minimum lot, which then risks more
+  than the %. The order is capped to `InpMarginUsePct` (80%) of free
   margin, and `InpFixedLots` (0.10) is the fallback when sizing data is
   missing. The first version traded a fixed 0.10 lots on every trade.
 - **Exits.** One position per symbol, and it closes only at its SL or TP.
@@ -6731,7 +6734,9 @@ cloud-twist gate or tier ladder. Only M1 and M5 matter.
 An M15 tier (M1+M5+M15 aligned, TP at unraided M15 liquidity, superseding
 the M5 scalp) was added and then removed the same day at the user's
 request. The build is M1+M5 only again. At the same time the fixed 0.10 lots
-were replaced by the live risk regime above.
+were replaced by the live risk regime, first measured against ATR(M5) × 2
+as live does, then (the same day, at the user's request) against the
+fractal stop distance as above.
 
 ### Choices made where the request was open
 
