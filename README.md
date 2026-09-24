@@ -108,6 +108,7 @@ Both builds carry their own magic number, so they can run on the same account
 - `archives/` — retired builds, including the 2026-08-18 top-down VPS and desktop originals and the 2026-08-14 pre-merge pair
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `ICHIMOKU-THEORIES.md` — the time/wave/price theory research the filters are drawn from
+- `tools/` — `mt5-check.sh`, the weekday VPS health check
 - `utilities/` — deployment scripts, the Python monitor and the account-split simulator
 
 > The repository is still named `ichimoku-h4-m1-align` after the original
@@ -333,6 +334,22 @@ The live terminal runs on an Ubuntu VPS under Wine, set up like this:
   the new `.mq5` over with `scp`, and copy a `.ex5` compiled from the same
   source by a terminal on the **same MT5 build** (so the VPS loads it
   directly). Then restart the service or re-attach the EA.
+- **Health check (`tools/mt5-check.sh`):** a weekday cron job that emails
+  you only when something is wrong. At 10:00 Mon–Fri it checks that
+  `mt5.service` is running, that `ichimoku-h4-m1-vps-ea` loaded after the
+  terminal's last start, and that the terminal log shows no LiveUpdate
+  restart loop. If all is well it sends a silent ping to a
+  [healthchecks.io](https://healthchecks.io) check; otherwise it sends a
+  `/fail` ping carrying a short report, and healthchecks.io emails it. A dead
+  VPS sends no ping at all, which also triggers the email. Setup:
+  create a check with schedule type **Cron** `0 10 * * 1-5` in your time
+  zone and 1 h grace, turn off "notify when up" on the email integration,
+  put the ping URL in `~/.mt5-check-ping` on the VPS, copy the script to
+  `~/mt5-check.sh`, `chmod +x` it, and add `0 10 * * 1-5 ~/mt5-check.sh` to
+  `crontab -e` (converting 10:00 into the VPS's time zone, see
+  `timedatectl`). The check matches the MT5 log wording `started for` and
+  `expert … loaded successfully`, so confirm both appear in the VPS log
+  once before relying on it.
 
 > **Migrating from an older build.** The filename never changes, so an
 > existing `deploy.sh` / `auto-deploy.sh` setup picks a new build up with no
