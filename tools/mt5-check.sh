@@ -30,7 +30,7 @@ else
 fi
 
 # Terminal logs from SINCE to today, oldest first
-LOGTXT=$(for f in "$MT5"/logs/*.log; do
+LOGTXT=$(for f in "$MT5"/logs/[0-9]*.log; do
   d=$(basename "$f" .log); [[ "$d" > "$SINCE" || "$d" == "$SINCE" ]] && readlog "$f"
 done)
 
