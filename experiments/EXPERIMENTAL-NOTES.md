@@ -7037,3 +7037,84 @@ until it has closed. Because nothing can change before a source candle closes,
 the live-price check in the refresh gate is skipped in this mode. The three
 wick rules (`FVG_MIT_FULL`, `FVG_MIT_HALF`, `FVG_MIT_TOUCH`) are still there;
 `FVG_MIT_FULL` is the old default. Compiled clean in MetaEditor.
+
+## 64. M1 kumo-breakout FVG scalper — limit in the gap, fractal stop, opposing-gap exit
+
+**File:** `experimental-m1-kumo-fvg-scalper-ea.mq5`
+**Magic number:** `20260886`
+
+A standalone M1 scalper written on user request (2026-09-25), not a fork of
+the bias stack. Only M1 is read: no higher-timeframe bias, no tenkan/kijun
+test, no tier ladder.
+
+### The rules
+
+- **Breakout.** On each closed M1 bar, price **and** chikou are tested
+  against the M1 cloud only. Long: the close is above the cloud at that bar
+  and the chikou (the same close, plotted Kijun 26 bars back) is above the
+  cloud there; short mirrors it. A bar that passes where the bar before did
+  not is a **breakout** and arms a setup in that direction. The setup is
+  dropped as soon as a closed bar fails the test (price or chikou back in
+  the cloud, or through it), and after `InpSetupMaxBars` (30) bars if no
+  order has been taken.
+- **The fair value gap is the po3-levels indicator's** (§60, v1.54), ported
+  with the same scan: three candles, bullish when the third's low is above
+  the first's high, bearish when the third's high is below the first's low,
+  confirmed only when the third candle has closed. Mitigation uses the same
+  `ENUM_FVG_MIT` values with the same default, **`FVG_MIT_CLOSE`**: a gap
+  ends only when a closed candle closes beyond its far edge. The wick modes
+  (`FULL`, `HALF`, `TOUCH`) are there too. `InpFvgMinPts` (0) drops small
+  gaps, as in the indicator.
+- **Entry.** While a setup is armed and the symbol has no position or
+  order of this magic, the EA looks for the newest **standing** gap in the
+  setup's direction whose **middle candle is the breakout bar or later**, so
+  the breakout candle itself can be the displacement that makes the gap. A
+  **limit order** goes in the gap: the middle by default (`InpEntryIn`,
+  near edge / middle / far edge). If price is already back at that level
+  (a limit would sit on the wrong side of the market), the gap is skipped.
+  Each gap gets one order. The spread filter (`InpMaxSpreadPoints`, 60) is
+  kept.
+- **Stop loss: the nearest fractal.** The newest confirmed Williams
+  fractal (`iFractals` on `InpFractalTF`, M1) beyond the limit price: a
+  fractal low below it for a buy, a fractal high above it for a sell.
+  `InpSLBufferPoints` (0) pushes it further out. No fractal means no order.
+  There is **no take profit**.
+- **Unfilled orders.** A limit is cancelled when a closed bar fails the
+  kumo test, or after `InpLimitExpiryBars` (15) M1 bars. If the setup is
+  still armed and inside its 30 bars, the next new gap can take an order.
+- **Exit: one opposing gap that holds.** Once filled, the setup is dropped
+  (one trade per breakout) and the trade runs until an **opposing** gap (a
+  bearish gap for a long, a bullish one for a short) whose third candle
+  closed after the fill has stood unmitigated for **more than
+  `InpHoldSeconds` (120 s = 2 minutes)** from the close of its third candle.
+  With the close rule this means the two candles after the gap both closed
+  without closing back through it; the trade is then closed on the first
+  tick after the two minutes. In the wick modes the gap is rechecked on
+  every tick, so a wick through it resets the wait. Otherwise the trade
+  ends at its fractal stop.
+- **Size.** The §58 regime: 1% of equity below $7000, 0.5% to $13000, 0.1%
+  above, measured against the distance from the limit price to the SL,
+  capped to 80% of free margin at the limit price, `InpFixedLots` (0.10) as
+  the fallback.
+
+### Choices made where the request was open
+
+- **"Breakout"** is a fresh transition: the bar before must not have had
+  price and chikou beyond the cloud in that direction. A trend that is
+  already running does not arm a setup.
+- **"Formed after breakout"** counts a gap whose middle candle is the
+  breakout bar or later.
+- **"Nearest fractal"** is the newest confirmed fractal beyond the entry,
+  counted back in time (as §58 counts), not the closest by price.
+- **"Holds for more than 2 minutes"** is timed from the gap's confirmation
+  (the close of its third candle), and "holds" uses the indicator's
+  mitigation rule.
+- Setup window, order expiry and the entry point in the gap were not
+  specified; they are inputs (30 bars, 15 bars, middle).
+
+### Status
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet
+backtested.** Questions for the tester: how often the limit fills, the
+reward:risk the opposing-gap exit gives against a fractal stop, and whether
+the near-edge entry does better than the middle.
