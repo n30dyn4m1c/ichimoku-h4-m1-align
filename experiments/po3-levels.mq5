@@ -117,7 +117,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.52"
+#property version   "1.53"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -649,7 +649,11 @@ input string InpLabelFont   = "Arial Black"; // Label font
 //--- they name; the line keeps the grid's colour. clrNONE writes each label in
 //--- its level's colour, as before v1.52.
 input color  InpLabelColor  = clrYellow;     // Label colour (None = the level's colour)
-input int    InpLabelShift  = 0;    // Label shift right, in bars (0 = at the last bar)
+//--- Five bars out by default, so the numbers sit in the chart-shift margin
+//--- clear of the developing candle rather than on top of it. The label still
+//--- ends at its anchor, so it needs that much margin to stay on screen - turn
+//--- chart shift on, or set 0 to end at the last bar as before v1.53.
+input int    InpLabelShift  = 5;    // Label shift right, in bars (0 = at the last bar)
 
 input group "Candle countdown";
 //--- The countdown rides the developing candle rather than sitting in a corner,

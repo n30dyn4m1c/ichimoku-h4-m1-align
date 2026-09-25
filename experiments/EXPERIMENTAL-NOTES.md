@@ -7020,3 +7020,9 @@ the old look. Only the level labels change: the liquidity prices keep
 `InpLabelColor` (default **yellow**), instead of each level's own grid colour;
 the lines keep their grid colours. Set it to None to go back to per-level
 colours. Compiled clean in MetaEditor.
+
+**Labels moved right (v1.53).** `InpLabelShift` now defaults to **5 bars**
+instead of 0, so the level numbers sit in the chart-shift margin past the
+developing candle rather than ending on it. They are still right-anchored, so
+they need chart shift on (or at least 5 bars of margin) to stay on screen; 0
+puts them back at the last bar. Compiled clean in MetaEditor.
