@@ -16,7 +16,11 @@
 //|  multiplier x 3^power for powers 1..15, divided by the scale     |
 //|  divisor.                                                        |
 //|                                                                  |
-//|  1 is the exception and the only grid off by default. It is      |
+//|  The fine grids - 1, 3, 9 and 27 - are off by default, for a     |
+//|  quieter chart that opens on 81 and up; tick them to see the     |
+//|  whole nest.                                                     |
+//|                                                                  |
+//|  1 is the finest of those and M1 only. It is                     |
 //|  3^0, the power the sheet starts one above, and at scale 1 it    |
 //|  is every whole number - on gold a line per dollar. That is the  |
 //|  floor the nest stands on rather than a level to trade, so it    |
@@ -111,7 +115,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.47"
+#property version   "1.48"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -875,11 +879,12 @@ input color           InpFvgBullColor = C'0,64,48';        // Bullish gaps - fil
 input color           InpFvgBearColor = C'80,24,32';       // Bearish gaps - fill colour
 
 input group "PO3 levels to show";
-//--- Every grid from 3 up is on by default: the model is the whole nest of
-//--- powers, and a level's strength is meant to be read from how many grids
-//--- agree on it, which is only visible with all of them drawn. Untick the fine
-//--- ones for a quieter chart; the levels that remain do not move.
-//--- 3^0 = 1, the bottom of the ladder, and the one grid OFF by default. At
+//--- The grids from 81 up are on by default; 1, 3, 9 and 27 are off, for a
+//--- quieter chart (user choice, 2026-09-25). A level's strength is read from
+//--- how many grids agree on it, which is only fully visible with all of them
+//--- drawn, so tick the fine ones back on for the whole nest; the levels that
+//--- remain do not move either way.
+//--- 3^0 = 1, the bottom of the ladder, and the finest of the grids OFF by default. At
 //--- scale 1 it is every whole number, so on gold it draws a line per dollar
 //--- and the 3 grid's cells each get their two interior lines - the finest
 //--- subdivision the model has, and more than a chart wants standing on it
@@ -906,11 +911,11 @@ input group "PO3 levels to show";
 //--- the faint end there is a near-white like 220,220,220.
 input bool  InpUse_1     = false;              // 1      - show (M1 only)
 input color InpCol_1     = C'48,48,48';        // 1      - colour
-input bool  InpUse_3     = true;               // 3      - show
+input bool  InpUse_3     = false;              // 3      - show
 input color InpCol_3     = clrGray;            // 3      - colour
-input bool  InpUse_9     = true;               // 9      - show
+input bool  InpUse_9     = false;              // 9      - show
 input color InpCol_9     = clrDarkGray;        // 9      - colour
-input bool  InpUse_27    = true;               // 27     - show
+input bool  InpUse_27    = false;              // 27     - show
 input color InpCol_27    = clrCadetBlue;       // 27     - colour
 input bool  InpUse_81    = true;               // 81     - show
 input color InpCol_81    = clrSteelBlue;       // 81     - colour

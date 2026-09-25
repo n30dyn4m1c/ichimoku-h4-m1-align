@@ -6934,3 +6934,9 @@ inputs again, so a value set in the dialog always does what it says.
 Charts that already carry the indicator keep their stored inputs (on); re-add
 it to get the hidden defaults. Compiled clean in MetaEditor (0 errors,
 0 warnings).
+
+**Fine grids off by default (v1.48).** The PO3 grids 3, 9 and 27 now default
+to off, joining 1, so a fresh chart opens with only 81 and up drawn. Tick them
+in "PO3 levels to show" for the whole nest; no level moves either way. As with
+the panels, charts that already carry the indicator keep their stored inputs
+until it is re-added.
