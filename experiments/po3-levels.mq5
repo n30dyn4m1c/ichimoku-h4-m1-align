@@ -107,7 +107,9 @@
 //|  a button in a row at the bottom left of the chart, so a block   |
 //|  can be hidden and brought back with one click instead of a trip |
 //|  to the properties dialog. The count starts shown, segments and  |
-//|  schedule hidden; the schedule is the tall one.                  |
+//|  schedule hidden; the schedule is the tall one. A hidden segment |
+//|  block still opens on its own while an H4 or H1 kihon candle is  |
+//|  running, and closes again when that candle ends.                |
 //|                                                                  |
 //|  Verified against the PO3 workbook's Gold sheet, 14 Mar 2025:    |
 //|    2187  around 2900 -> 2799.36 .. 3083.67   (row 35, x128..141) |
@@ -115,7 +117,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.49"
+#property version   "1.50"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -765,6 +767,11 @@ input group "Kihon segment panel";
 //--- as one instrument in three blocks - the schedule panel past it takes
 //--- them from the same place.
 input bool  InpShowSeg = false;  // Show the kihon segment panel
+//--- With the block hidden, it still opens by itself for as long as an H4 or
+//--- H1 is standing on a kihon number - the only time it has anything to say -
+//--- and closes again when that candle ends. The Segments button lights while
+//--- it is up; a click hides it until the candle ends.
+input bool  InpSegAuto = true;   // ... but show it while an H4 / H1 kihon candle runs
 input bool  InpSegH4   = true;   // Segments inside a kihon H4 candle
 input bool  InpSegH1   = true;   // Segments inside a kihon H1 candle
 input int   InpSegGap  = 8;      // Gap between the two blocks, in pixels
@@ -1067,6 +1074,11 @@ bool     g_showPanel = true;
 bool     g_showSeg   = true;
 bool     g_showSched = true;
 string   g_gvToggle  = "";
+//--- The segment block opened on its own (InpSegAuto), and the kihon candle a
+//--- click dismissed it for - by open time, so the next kihon candle opens it
+//--- again. See SegAutoKey.
+bool     g_segAuto    = false;
+datetime g_segDismiss = 0;
 
 string   g_gvStart      = "";
 string   g_gvCarry      = "";
@@ -1242,7 +1254,7 @@ int OnInit()
       Print("PO3 Levels: no PO3 number ticked, no levels will be drawn.");
       //--- No grid, but the counts may still be the reason it is on the chart
       IndicatorSetString(INDICATOR_SHORTNAME,
-                         (InpShowCount || InpShowPanel || InpShowSeg || InpShowSched)
+                         (InpShowCount || InpShowPanel || InpShowSeg || InpSegAuto || InpShowSched)
                          ? "Kihon count" : "PO3 (none ticked)");
       g_dirty = true;
       EventSetTimer(1);          // the countdown is independent of the levels
@@ -1275,7 +1287,7 @@ int OnInit()
                   PO3EachFor(g_po3[i]));
      }
    IndicatorSetString(INDICATOR_SHORTNAME, "PO3 " + names +
-                      ((InpShowCount || InpShowPanel || InpShowSeg || InpShowSched)
+                      ((InpShowCount || InpShowPanel || InpShowSeg || InpSegAuto || InpShowSched)
                        ? " + kihon" : ""));
 
    g_anchor   = LONG_MIN;
@@ -2250,6 +2262,19 @@ bool SegIsKihon(const ENUM_TIMEFRAMES tf, const bool withDay)
 //--- numbers that fit inside it are the only ones that can mean anything there.
 const ENUM_TIMEFRAMES g_ksFine[3] = { PERIOD_M15, PERIOD_M5, PERIOD_M1 };
 
+//--- The kihon candle the segment block would open on right now, by its open
+//--- time, or 0 when neither an H4 nor an H1 stands on a number. H4 wins when
+//--- both do: it is the longer candle, so a dismissal holds for all of it
+//--- rather than lapsing at the next H1.
+datetime SegAutoKey()
+  {
+   if(InpSegH4 && SegIsKihon(PERIOD_H4, false))
+      return(iTime(_Symbol, PERIOD_H4, 0));
+   if(InpSegH1 && SegIsKihon(PERIOD_H1, true))
+      return(iTime(_Symbol, PERIOD_H1, 0));
+   return(0);
+  }
+
 bool SegAdd(const ENUM_TIMEFRAMES tf, const bool withDay, const bool gap,
             string &txt[], color &clr[], int &n)
   {
@@ -2842,7 +2867,16 @@ void UpdatePanel()
    color  scl[KP_MAX_ROWS];
    int    sn = 0;
 
-   if(g_showSeg)
+   //--- Hidden, it still opens by itself while a kihon candle runs, unless a
+   //--- click dismissed it for that same candle.
+   g_segAuto = false;
+   if(!g_showSeg && InpSegAuto)
+     {
+      datetime key = SegAutoKey();
+      g_segAuto = (key > 0 && key != g_segDismiss);
+     }
+
+   if(g_showSeg || g_segAuto)
      {
       PanelPush(stx, scl, sn, "Kihon Suchi segments", InpPanelColor);
 
@@ -3529,18 +3563,27 @@ void ToggleInit(const int reason)
       g_showPanel = (bits & 1) != 0;
       g_showSeg   = (bits & 2) != 0;
       g_showSched = (bits & 4) != 0;
+      if(GlobalVariableCheck(g_gvToggle + "_SegDismiss"))
+         g_segDismiss = (datetime)GlobalVariableGet(g_gvToggle + "_SegDismiss");
      }
    GlobalVariableDel(g_gvToggle);
+   GlobalVariableDel(g_gvToggle + "_SegDismiss");
   }
 
 void ToggleSave(const int reason)
   {
    if(reason == REASON_CHARTCHANGE)
+     {
       GlobalVariableSet(g_gvToggle, (double)((g_showPanel ? 1 : 0) |
                                              (g_showSeg   ? 2 : 0) |
                                              (g_showSched ? 4 : 0)));
+      GlobalVariableSet(g_gvToggle + "_SegDismiss", (double)g_segDismiss);
+     }
    else
+     {
       GlobalVariableDel(g_gvToggle);
+      GlobalVariableDel(g_gvToggle + "_SegDismiss");
+     }
   }
 
 //--- One button. Fixed properties once; state and colours on every call.
@@ -3592,7 +3635,7 @@ void UpdateButtons()
       return;
      }
    ButtonDraw("P", "Count",    0, g_showPanel);
-   ButtonDraw("S", "Segments", 1, g_showSeg);
+   ButtonDraw("S", "Segments", 1, g_showSeg || g_segAuto);
    ButtonDraw("C", "Schedule", 2, g_showSched);
   }
 
@@ -3605,7 +3648,18 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(key == "P")
       g_showPanel = !g_showPanel;
    else if(key == "S")
-      g_showSeg = !g_showSeg;
+     {
+      //--- Hiding also dismisses the running kihon candle, or the auto rule
+      //--- would open the block again on the redraw below.
+      if(g_showSeg || g_segAuto)
+        {
+         g_showSeg    = false;
+         g_segAuto    = false;
+         g_segDismiss = SegAutoKey();
+        }
+      else
+         g_showSeg = true;
+     }
    else if(key == "C")
       g_showSched = !g_showSched;
    else

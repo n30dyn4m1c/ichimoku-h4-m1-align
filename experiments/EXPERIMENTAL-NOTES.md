@@ -6979,3 +6979,32 @@ when the tier TF's chikou closes back inside price**:
 effect is earlier exits: the chikou test fails well before price reaches the
 cloud in most pullbacks, so trades should be shorter with smaller give-backs
 and more exits near break-even. Not yet compiled or backtested.
+
+## 63. Segment panel opens on its own while a kihon candle runs
+
+**File:** `po3-levels.mq5` (indicator, no magic number, v1.50) —
+`InpSegAuto` in the "Kihon segment panel" input group
+
+The kihon segment panel (§61) starts hidden, and it only has rows while an
+H4 or H1 stands on a kihon number, which is a small part of any session. Kept
+hidden it was missed at the one time it matters; kept on it mostly said
+"none". Now, with **`InpSegAuto = true`** (the default), a hidden segment
+panel **opens by itself for as long as an H4 or H1 kihon candle is running**
+and hides again when that candle ends. The test is the one the panel already
+used to decide what to show (`SegIsKihon`, H4 against the month and week, H1
+also against the day, `InpSegH4` / `InpSegH1` respected), checked on every new
+M1 bar, so it opens and closes within a second of the candle changing.
+
+- The **Segments** button lights while the panel is up, whether you opened it
+  or it opened itself.
+- A click while it is auto-shown hides it **until that kihon candle ends**;
+  the next kihon candle opens it again. The dismissal is keyed by the kihon
+  candle's open time (the H4's when an H4 is on a number, so it holds for the
+  whole H4), and like the button states it survives a timeframe change.
+- Switched on with the button (or `InpShowSeg`), the panel stays up all the
+  time and says "none" between kihon candles, as before.
+- `InpSegAuto = false` restores v1.49's behaviour.
+
+Charts that already carry the indicator pick the new input up at its default.
+Compiled clean in MetaEditor (0 errors, 0 warnings); not yet checked on a live
+chart.
