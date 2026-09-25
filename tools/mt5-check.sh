@@ -14,8 +14,11 @@
 #   # optional second channel (ntfy.sh needs an account token to send email):
 #   # NOTIFY_EMAIL=you@example.com  NTFY_TOPIC=mt5-check-<random>  NTFY_TOKEN=tk_...
 #
-# healthchecks.io check: schedule type Cron "30 9 * * 1-5" in your time zone (not UTC),
+# healthchecks.io check: schedule type Cron "30 9 * * 1-5" with the check's
+# Time Zone set to your LOCAL zone (e.g. Pacific/Port_Moresby) -- NOT UTC --
 # grace 1 h, and "notify when up" turned off on the email integration.
+# Getting this wrong is silent: the expression is identical either way, but
+# UTC makes it expect the ping 10 h late and the check alerts every weekday.
 #
 # Install (see README, "Health check"):
 #   chmod +x ~/mt5-check.sh
