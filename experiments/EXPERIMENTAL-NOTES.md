@@ -6941,6 +6941,12 @@ in "PO3 levels to show" for the whole nest; no level moves either way. As with
 the panels, charts that already carry the indicator keep their stored inputs
 until it is re-added.
 
+**Count panel shown by default (v1.49).** `InpShowPanel` defaults to `true`
+again, so a fresh chart opens with the kihon count panel showing; the segment
+and schedule panels still start hidden. The Count button hides it as before.
+Charts that already carry the indicator keep their stored inputs until it is
+re-added. Compiled clean in MetaEditor (0 errors, 0 warnings).
+
 ## 62. Chikou exit — close when the tier's chikou falls back into price
 
 **File:** `experimental-bottomup-stack-chikou-exit-vps-ea.mq5`

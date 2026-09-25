@@ -106,8 +106,8 @@
 //|  The three kihon blocks - count, segments, schedule - each have  |
 //|  a button in a row at the bottom left of the chart, so a block   |
 //|  can be hidden and brought back with one click instead of a trip |
-//|  to the properties dialog. All three start hidden; the schedule  |
-//|  is the tall one.                                                |
+//|  to the properties dialog. The count starts shown, segments and  |
+//|  schedule hidden; the schedule is the tall one.                  |
 //|                                                                  |
 //|  Verified against the PO3 workbook's Gold sheet, 14 Mar 2025:    |
 //|    2187  around 2900 -> 2799.36 .. 3083.67   (row 35, x128..141) |
@@ -115,7 +115,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.48"
+#property version   "1.49"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -713,7 +713,7 @@ input group "Candle count panel";
 //--- block carries its own anchor. What you read for is agreement - one row on
 //--- a kihon number is a small turn due, several blocks landing together is a
 //--- bigger one.
-input bool             InpShowPanel   = false;              // Show the count panel
+input bool             InpShowPanel   = true;               // Show the count panel
 input bool             InpShowYear    = true;               // Year block    - MN1, W1, D1
 input bool             InpShowMonth   = true;               // Month block   - D1, H4, H1
 input bool             InpShowWeek    = true;               // Week block    - H4, H1, M30
@@ -824,8 +824,9 @@ input bool   InpSchedAmPm    = true;   // Write the times as AM / PM, not 24-hou
 
 input group "Kihon panel buttons";
 //--- One click shows or hides a block, without opening the properties dialog.
-//--- All three blocks start hidden - the schedule alone is taller than most
-//--- charts have room for - and a click brings back the one wanted.
+//--- The count starts shown; segments and schedule start hidden - the
+//--- schedule alone is taller than most charts have room for - and a click
+//--- brings back the one wanted.
 //--- The three "Show the ..." inputs above set how each block starts; the
 //--- buttons flip it from there, and the choice survives a timeframe change.
 //--- Changing the inputs, or re-adding the indicator, goes back to them.
