@@ -6940,3 +6940,36 @@ to off, joining 1, so a fresh chart opens with only 81 and up drawn. Tick them
 in "PO3 levels to show" for the whole nest; no level moves either way. As with
 the panels, charts that already carry the indicator keep their stored inputs
 until it is re-added.
+
+## 62. Chikou exit — close when the tier's chikou falls back into price
+
+**File:** `experimental-bottomup-stack-chikou-exit-vps-ea.mq5`
+**Magic number:** `20260885`
+
+A fork of the **live VPS build** as it stands on 2026-09-25 (M1-strict cloud
+bias, robustness pack, M5 tier off). Entries, bias gates, risk and protection
+are the live build's byte for byte. The one addition is a **second exit
+condition on every tier**.
+
+The live build closes a trade only when price touches the tier TF's cloud
+edge (plus the BE / chandelier / disaster stops). Here a trade **also closes
+when the tier TF's chikou closes back inside price**:
+
+- The chikou is the last closed tier-TF bar's close, plotted Kijun (26) bars
+  back — the same reading `CheckAlign` uses at entry.
+- Entry required it **clear of the candle 26 bars back**: above its high for
+  a long, below its low for a short. The exit fires once it is not: **long
+  exits when close <= that candle's high, short when close >= its low**. A
+  chikou that falls straight through the candle counts too.
+- Each tier watches **its own timeframe**: an H1 trade closes on the H1
+  chikou, an M30 trade on the M30 chikou, M15 on M15, H4 on H4.
+- It is evaluated once per closed M1 bar, but only reads closed tier-TF bars,
+  so its answer changes only when a tier-TF bar closes. A trade opens only
+  while its chikou is clear, so it cannot fire on the entry's own bar.
+- The kumo-touch exit stays; whichever comes first closes the trade. The
+  journal / push reason is `chikou in price`.
+
+`InpChikouExit = false` reproduces the live build exactly. The expected
+effect is earlier exits: the chikou test fails well before price reaches the
+cloud in most pullbacks, so trades should be shorter with smaller give-backs
+and more exits near break-even. Not yet compiled or backtested.
