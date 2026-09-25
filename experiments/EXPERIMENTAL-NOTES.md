@@ -7015,3 +7015,8 @@ own colour was hard to read against the candles. A new `InpLabelFont` input in
 the "Labels" group sets the face, default **Arial Black**; "Arial" restores
 the old look. Only the level labels change: the liquidity prices keep
 `InpLiqFont` and the panels keep Consolas. Compiled clean in MetaEditor.
+
+**Yellow level labels (v1.52).** The labels are now written in one colour,
+`InpLabelColor` (default **yellow**), instead of each level's own grid colour;
+the lines keep their grid colours. Set it to None to go back to per-level
+colours. Compiled clean in MetaEditor.

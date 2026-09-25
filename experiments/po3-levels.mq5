@@ -117,7 +117,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.51"
+#property version   "1.52"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -645,6 +645,10 @@ input int    InpFontSize    = 7;    // Label text size
 //--- against the candles, and in the level's own colour it thins further on a
 //--- dark chart. Any installed font name works ("Arial" for the old look).
 input string InpLabelFont   = "Arial Black"; // Label font
+//--- One colour for every label so the numbers read at a glance whatever grid
+//--- they name; the line keeps the grid's colour. clrNONE writes each label in
+//--- its level's colour, as before v1.52.
+input color  InpLabelColor  = clrYellow;     // Label colour (None = the level's colour)
 input int    InpLabelShift  = 0;    // Label shift right, in bars (0 = at the last bar)
 
 input group "Candle countdown";
@@ -1380,7 +1384,7 @@ void DrawLevel(const long raw, const int idx, const datetime labelTime)
    ObjectSetDouble (0, tname, OBJPROP_PRICE,      price);
    ObjectSetString (0, tname, OBJPROP_TEXT,       IntegerToString(g_po3[idx]));
    ObjectSetString (0, tname, OBJPROP_FONT,       InpLabelFont);
-   ObjectSetInteger(0, tname, OBJPROP_COLOR,      g_col[idx]);
+   ObjectSetInteger(0, tname, OBJPROP_COLOR,      (InpLabelColor == clrNONE) ? g_col[idx] : InpLabelColor);
    ObjectSetInteger(0, tname, OBJPROP_FONTSIZE,   (int)MathMax(5, MathMin(20, InpFontSize)));
    //--- anchored right-lower: the text sits just above the line and ends at the
    //    anchor bar, so it stays on screen even with chart shift switched off
