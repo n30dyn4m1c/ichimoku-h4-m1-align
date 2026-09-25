@@ -99,13 +99,19 @@
 //|  the moment price fills it. The FAIR VALUE GAPS section below    |
 //|  sets out the rules.                                             |
 //|                                                                  |
+//|  The three kihon blocks - count, segments, schedule - each have  |
+//|  a button in a row at the bottom left of the chart, so a block   |
+//|  can be hidden and brought back with one click instead of a trip |
+//|  to the properties dialog. All three start hidden; the schedule  |
+//|  is the tall one.                                                |
+//|                                                                  |
 //|  Verified against the PO3 workbook's Gold sheet, 14 Mar 2025:    |
 //|    2187  around 2900 -> 2799.36 .. 3083.67   (row 35, x128..141) |
 //|    6561  around 2950 -> 2755.62 .. 3149.28   (row 39, x42..48)   |
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.46"
+#property version   "1.47"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -703,7 +709,7 @@ input group "Candle count panel";
 //--- block carries its own anchor. What you read for is agreement - one row on
 //--- a kihon number is a small turn due, several blocks landing together is a
 //--- bigger one.
-input bool             InpShowPanel   = true;               // Show the count panel
+input bool             InpShowPanel   = false;              // Show the count panel
 input bool             InpShowYear    = true;               // Year block    - MN1, W1, D1
 input bool             InpShowMonth   = true;               // Month block   - D1, H4, H1
 input bool             InpShowWeek    = true;               // Week block    - H4, H1, M30
@@ -754,7 +760,7 @@ input group "Kihon segment panel";
 //--- Colours and text size come from the panel group above too, so the two read
 //--- as one instrument in three blocks - the schedule panel past it takes
 //--- them from the same place.
-input bool  InpShowSeg = true;   // Show the kihon segment panel
+input bool  InpShowSeg = false;  // Show the kihon segment panel
 input bool  InpSegH4   = true;   // Segments inside a kihon H4 candle
 input bool  InpSegH1   = true;   // Segments inside a kihon H1 candle
 input int   InpSegGap  = 8;      // Gap between the two blocks, in pixels
@@ -783,7 +789,7 @@ input group "Kihon schedule panel";
 //--- edge, one gap further along - so the only thing to set is how far it
 //--- stands from the block before it. Colours and text size come from the
 //--- count panel group, so all three read as one instrument in three blocks.
-input bool  InpShowSched = true;   // Show the kihon schedule panel
+input bool  InpShowSched = false;  // Show the kihon schedule panel
 input bool  InpSchedWeek = true;   // This week's kihon candles, D1 down to M15
 input bool  InpSchedDay  = true;   // Still ahead today, H1 down to M15
 //--- The today list is held to 9-33 like the week list above, and on the finer
@@ -811,6 +817,21 @@ input bool   InpSchedTzBoth  = false;  // ... and keep the server time beside it
 //--- print period opens, not appointments, and 00:00 there is a label on an
 //--- anchor rather than a time anyone reads off and acts on.
 input bool   InpSchedAmPm    = true;   // Write the times as AM / PM, not 24-hour
+
+input group "Kihon panel buttons";
+//--- One click shows or hides a block, without opening the properties dialog.
+//--- All three blocks start hidden - the schedule alone is taller than most
+//--- charts have room for - and a click brings back the one wanted.
+//--- The three "Show the ..." inputs above set how each block starts; the
+//--- buttons flip it from there, and the choice survives a timeframe change.
+//--- Changing the inputs, or re-adding the indicator, goes back to them.
+//---
+//--- Bottom left by default: the panel sits mid left and the session timer top
+//--- right, so the corner is otherwise empty.
+input bool             InpShowButtons  = true;               // Show the Count / Segments / Schedule buttons
+input ENUM_BASE_CORNER InpButtonCorner = CORNER_LEFT_LOWER;  // Corner
+input int              InpButtonX      = 12;                 // Distance from corner, X
+input int              InpButtonY      = 12;                 // Distance from corner, Y
 
 input group "Unraided liquidity";
 //--- Swing highs and lows that price has not yet traded through, drawn from
@@ -931,6 +952,8 @@ input color InpCol_19683 = clrCrimson;         // 19683  - colour
 #define PO3_LIQR    "PO3_UR"
 //--- Fair value gap boxes. "PO3_F" is no other sub-prefix's prefix either.
 #define PO3_FVG     "PO3_F"
+//--- The panel toggle buttons.
+#define PO3_BTN     "PO3_B"
 
 //--- The last number of the band that carries the reading. At or below it a
 //--- marker takes one of the two prominent colours; above it the recessive one.
@@ -1032,6 +1055,13 @@ bool     g_pDirty   = true;
 //--- pass costs nothing next to the rebuild it usually prevents.
 int      g_pHeight  = 0;
 
+//--- What the kihon blocks are showing right now: the inputs to start with,
+//--- then whatever the buttons last set. See ToggleInit.
+bool     g_showPanel = true;
+bool     g_showSeg   = true;
+bool     g_showSched = true;
+string   g_gvToggle  = "";
+
 string   g_gvStart      = "";
 string   g_gvCarry      = "";
 string   g_gvAlerted    = "";
@@ -1130,6 +1160,7 @@ int OnInit()
      }
 
    SessionInit();
+   ToggleInit(UninitializeReason());
 
    //--- Before the early return below, so a chart with no grid ticked still
    //--- gets its candle count rebuilt on an input change.
@@ -1265,6 +1296,7 @@ void OnDeinit(const int reason)
       GlobalVariableDel(g_gvCarry);
       GlobalVariableDel(g_gvAlerted);
      }
+   ToggleSave(reason);
 
    ObjectsDeleteAll(0, PO3_PREFIX, -1, -1);
    ChartRedraw();
@@ -2654,7 +2686,7 @@ void SchedBuild(string &txt[], color &clr[], int &n)
   {
    n = 0;
 
-   if(!InpShowSched)
+   if(!g_showSched)
       return;
 
    if(InpSchedWeek)
@@ -2754,7 +2786,7 @@ void UpdatePanel()
    color  clr[KP_MAX_ROWS];
    int    n = 0;
 
-   if(InpShowPanel)
+   if(g_showPanel)
      {
       if(InpShowYear)
          PanelAdd("Year", KihonPeriodOpen(true), TIME_DATE,
@@ -2804,7 +2836,7 @@ void UpdatePanel()
    color  scl[KP_MAX_ROWS];
    int    sn = 0;
 
-   if(InpShowSeg)
+   if(g_showSeg)
      {
       PanelPush(stx, scl, sn, "Kihon Suchi segments", InpPanelColor);
 
@@ -3468,6 +3500,120 @@ bool RefreshFvg()
   }
 
 //+------------------------------------------------------------------+
+//| The kihon panel buttons: one click shows or hides a block.       |
+//|                                                                  |
+//| The state starts from the three "Show the ..." inputs. A         |
+//| timeframe change reloads the indicator, and a toggle lost on     |
+//| every switch would be worse than no toggle, so OnDeinit parks    |
+//| the state in a terminal global keyed by chart id and the next    |
+//| OnInit adopts it - the session timer's trick. Any other reload,  |
+//| an input change included, starts from the inputs again, so       |
+//| setting one in the dialog always does what it says.              |
+//+------------------------------------------------------------------+
+void ToggleInit(const int reason)
+  {
+   g_gvToggle  = "PO3_Toggle_" + IntegerToString(ChartID());
+   g_showPanel = InpShowPanel;
+   g_showSeg   = InpShowSeg;
+   g_showSched = InpShowSched;
+
+   if(reason == REASON_CHARTCHANGE && GlobalVariableCheck(g_gvToggle))
+     {
+      int bits    = (int)GlobalVariableGet(g_gvToggle);
+      g_showPanel = (bits & 1) != 0;
+      g_showSeg   = (bits & 2) != 0;
+      g_showSched = (bits & 4) != 0;
+     }
+   GlobalVariableDel(g_gvToggle);
+  }
+
+void ToggleSave(const int reason)
+  {
+   if(reason == REASON_CHARTCHANGE)
+      GlobalVariableSet(g_gvToggle, (double)((g_showPanel ? 1 : 0) |
+                                             (g_showSeg   ? 2 : 0) |
+                                             (g_showSched ? 4 : 0)));
+   else
+      GlobalVariableDel(g_gvToggle);
+  }
+
+//--- One button. Fixed properties once; state and colours on every call.
+//--- Lit in the panel's hit colour while its block is showing, dimmed and
+//--- unpressed while it is hidden.
+void ButtonDraw(const string key, const string text, const int slot, const bool on)
+  {
+   string name = PO3_BTN + key;
+   int    w    = 76;
+   int    h    = 20;
+   int    gap  = 4;
+
+   if(ObjectFind(0, name) < 0)
+     {
+      //--- A button is placed by its top-left corner whatever corner it is
+      //--- measured from, so from a right or lower corner the distance has to
+      //--- take in its own width or height to keep it on screen.
+      bool right = (InpButtonCorner == CORNER_RIGHT_UPPER || InpButtonCorner == CORNER_RIGHT_LOWER);
+      bool lower = (InpButtonCorner == CORNER_LEFT_LOWER  || InpButtonCorner == CORNER_RIGHT_LOWER);
+      int  x     = InpButtonX + slot * (w + gap) + (right ? w : 0);
+      int  y     = InpButtonY + (lower ? h : 0);
+
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER,       InpButtonCorner);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE,    x);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE,    y);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE,        w);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE,        h);
+      ObjectSetString (0, name, OBJPROP_TEXT,         text);
+      ObjectSetString (0, name, OBJPROP_FONT,         "Consolas");
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE,     8);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, InpPanelBorder);
+      ObjectSetInteger(0, name, OBJPROP_BACK,         false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE,   false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTED,     false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN,       true);
+      ObjectSetString (0, name, OBJPROP_TOOLTIP,      "Show or hide the kihon " + text + " block");
+     }
+   ObjectSetInteger(0, name, OBJPROP_STATE,   on);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, InpPanelBg);
+   ObjectSetInteger(0, name, OBJPROP_COLOR,   on ? InpPanelHit : clrDimGray);
+  }
+
+void UpdateButtons()
+  {
+   if(!InpShowButtons)
+     {
+      ObjectsDeleteAll(0, PO3_BTN, -1, -1);
+      return;
+     }
+   ButtonDraw("P", "Count",    0, g_showPanel);
+   ButtonDraw("S", "Segments", 1, g_showSeg);
+   ButtonDraw("C", "Schedule", 2, g_showSched);
+  }
+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+  {
+   if(id != CHARTEVENT_OBJECT_CLICK || StringFind(sparam, PO3_BTN) != 0)
+      return;
+
+   string key = StringSubstr(sparam, StringLen(PO3_BTN));
+   if(key == "P")
+      g_showPanel = !g_showPanel;
+   else if(key == "S")
+      g_showSeg = !g_showSeg;
+   else if(key == "C")
+      g_showSched = !g_showSched;
+   else
+      return;
+
+   //--- the whole panel is re-laid out: a block switched off hands its place
+   //--- along to the one after it
+   g_pDirty = true;
+   UpdatePanel();
+   UpdateButtons();
+   ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
 //| Ticks are not guaranteed once a minute, so the clock runs off a  |
 //| timer instead. Without it the countdown would sit frozen through |
 //| a quiet session and read wrong.                                  |
@@ -3481,6 +3627,7 @@ void OnTimer()
    UpdatePanel();
    UpdateClock();
    UpdateSession();
+   UpdateButtons();
    ChartRedraw();
   }
 

@@ -6908,3 +6908,29 @@ one shows its range, timeframe and middle-candle time. `InpFvgBull` /
 
 Compiled clean in MetaEditor (0 errors, 0 warnings); not yet checked on a live
 chart.
+
+## 61. Kihon panel buttons — show or hide the timetables from the chart
+
+**File:** `po3-levels.mq5` (indicator, no magic number, v1.47) — the
+"Kihon panel buttons" input group
+
+The three kihon blocks of the PO3 levels indicator (§38) — the count panel,
+the segment panel and the schedule panel — now **start hidden**
+(`InpShowPanel`, `InpShowSeg`, `InpShowSched` default to `false`). The schedule
+alone is taller than most charts have room for. A row of three buttons,
+**Count / Segments / Schedule**, at the bottom left of the chart
+(`InpButtonCorner`, `InpButtonX`, `InpButtonY`) shows or hides each block with
+one click, without the properties dialog. A lit button (the panel's hit
+colour, pressed) means its block is showing. Hiding a block hands its place to
+the one after it, as the input switches always did.
+
+The three inputs set how the blocks start. The buttons flip them from there,
+and the choice **survives a timeframe change**: OnDeinit keeps it in a terminal
+global keyed by chart id (`PO3_Toggle_<chart>`), the same trick the session
+timer uses. Any other reload, including an input change, starts from the
+inputs again, so a value set in the dialog always does what it says.
+`InpShowButtons` removes the button row.
+
+Charts that already carry the indicator keep their stored inputs (on); re-add
+it to get the hidden defaults. Compiled clean in MetaEditor (0 errors,
+0 warnings).
