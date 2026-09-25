@@ -14,12 +14,12 @@
 #   # optional second channel (ntfy.sh needs an account token to send email):
 #   # NOTIFY_EMAIL=you@example.com  NTFY_TOPIC=mt5-check-<random>  NTFY_TOKEN=tk_...
 #
-# healthchecks.io check: schedule type Cron "0 10 * * 1-5" in your time zone,
+# healthchecks.io check: schedule type Cron "30 9 * * 1-5" in your time zone (not UTC),
 # grace 1 h, and "notify when up" turned off on the email integration.
 #
 # Install (see README, "Health check"):
 #   chmod +x ~/mt5-check.sh
-#   crontab -e   ->   0 10 * * 1-5 ~/mt5-check.sh    (hour in the VPS's time zone)
+#   crontab -e   ->   30 23 * * 0-4 ~/mt5-check.sh   (VPS is UTC: 09:30 UTC+10 Mon-Fri)
 #   ~/mt5-check.sh --test                             (sends a test email)
 
 CONF="${MT5_CHECK_CONF:-$HOME/.mt5-check.conf}"

@@ -354,9 +354,9 @@ and the EA are loading fine, you hear nothing. It exists because of the
 2026-09-18 → 09-23 outage, when a MetaTrader auto-update left the terminal
 restart-looping and the EA did not run for five days without anyone noticing.
 
-**When it runs:** 10:00 (UTC+10), Monday to Friday. There are no weekend
+**When it runs:** 09:30 (UTC+10), Monday to Friday. There are no weekend
 checks, so anything that breaks over a weekend is reported on Monday morning.
-The VPS clock is UTC, so the crontab entry is `0 0 * * 1-5`.
+The VPS clock is UTC, and 09:30 UTC+10 is 23:30 UTC on the previous day, so the crontab entry is `30 23 * * 0-4` (Sunday to Thursday in UTC).
 
 **What it checks:**
 
@@ -365,7 +365,7 @@ The VPS clock is UTC, so the crontab entry is `0 0 * * 1-5`.
 | Service | `mt5.service` is not active | `mt5.service is not running (…)` |
 | EA loaded | no `expert ichimoku-h4-m1-vps-ea … loaded successfully` line in the terminal log after the most recent `… started for …` line (terminal up for more than 5 min) | `terminal is running but ichimoku-h4-m1-vps-ea has not loaded since its last start (…)` |
 | Update loop | more than 3 `LiveUpdate start` lines in yesterday's and today's terminal logs | `LiveUpdate started N times since yesterday: possible update/restart loop` |
-| VPS alive | no ping reaches healthchecks.io by 11:00 (1 h grace) | healthchecks.io's own "is DOWN" email |
+| VPS alive | no ping reaches healthchecks.io by 10:30 (1 h grace) | healthchecks.io's own "is DOWN" email |
 
 The terminal logs are UTF-16, so the script converts them with `iconv`
 before searching. The failure email also carries the last 15 terminal-log
@@ -389,8 +389,8 @@ longer forwards email for anonymous users. The script uses
 | Script (source) | `tools/mt5-check.sh` in this repo |
 | Script (installed) | `~/mt5-check.sh` on the VPS |
 | Config | `~/.mt5-check.conf` on the VPS (`chmod 600`): `HC_PING=https://hc-ping.com/<uuid>`. The ping URL is kept out of the repo. |
-| Schedule | `crontab -l` on the VPS: `0 0 * * 1-5 $HOME/mt5-check.sh` |
-| healthchecks.io check | schedule type Cron `0 10 * * 1-5` in your time zone, 1 h grace, email integration with "notify when up" turned off |
+| Schedule | `crontab -l` on the VPS: `30 23 * * 0-4 $HOME/mt5-check.sh` |
+| healthchecks.io check | schedule type Cron `30 9 * * 1-5` in your time zone (not UTC), 1 h grace, email integration with "notify when up" turned off |
 
 **Everyday use:**
 
