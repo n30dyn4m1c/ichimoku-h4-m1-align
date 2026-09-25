@@ -7008,3 +7008,10 @@ M1 bar, so it opens and closes within a second of the candle changing.
 Charts that already carry the indicator pick the new input up at its default.
 Compiled clean in MetaEditor (0 errors, 0 warnings); not yet checked on a live
 chart.
+
+**Bold level labels (v1.51).** The PO3 number written on each level was drawn
+in the terminal's default regular face, which at size 7 and in the level's
+own colour was hard to read against the candles. A new `InpLabelFont` input in
+the "Labels" group sets the face, default **Arial Black**; "Arial" restores
+the old look. Only the level labels change: the liquidity prices keep
+`InpLiqFont` and the panels keep Consolas. Compiled clean in MetaEditor.
