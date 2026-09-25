@@ -7026,3 +7026,14 @@ instead of 0, so the level numbers sit in the chart-shift margin past the
 developing candle rather than ending on it. They are still right-anchored, so
 they need chart shift on (or at least 5 bars of margin) to stay on screen; 0
 puts them back at the last bar. Compiled clean in MetaEditor.
+
+**Fair value gaps end on a close, not a wick (v1.54).** Changes the
+mitigation rule of §60. A new `InpFvgMit` choice, **`FVG_MIT_CLOSE`**, is now
+the default: a bullish gap is removed only when a **closed** candle after its
+third candle **closes below the gap's bottom**, and a bearish gap only when one
+**closes above its top**. A wick through the gap that closes back inside or
+behind it leaves the box standing, and the live candle cannot remove a gap
+until it has closed. Because nothing can change before a source candle closes,
+the live-price check in the refresh gate is skipped in this mode. The three
+wick rules (`FVG_MIT_FULL`, `FVG_MIT_HALF`, `FVG_MIT_TOUCH`) are still there;
+`FVG_MIT_FULL` is the old default. Compiled clean in MetaEditor.

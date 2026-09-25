@@ -117,7 +117,7 @@
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.53"
+#property version   "1.54"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -617,13 +617,17 @@ enum ENUM_LIQ_RAID
    LIQ_RAID_CLOSE = 1    // A candle closes through the level
   };
 
-//--- How far price has to trade back into a fair value gap before it is
-//--- mitigated and its box goes. Read off wicks, so it lands on the live candle.
+//--- What ends a fair value gap and takes its box away. The default is a
+//--- CLOSE beyond the far edge: a wick through the gap that closes back
+//--- inside or behind it leaves the gap standing. Only closed candles count,
+//--- so the live candle cannot end it until it has closed. The other three
+//--- are read off wicks, so they land on the live candle.
 enum ENUM_FVG_MIT
   {
    FVG_MIT_FULL  = 0,   // Price trades through the whole gap
    FVG_MIT_HALF  = 1,   // Price reaches the middle of the gap
-   FVG_MIT_TOUCH = 2    // Price trades into the gap at all
+   FVG_MIT_TOUCH = 2,   // Price trades into the gap at all
+   FVG_MIT_CLOSE = 3    // A candle closes beyond the gap (wicks ignored)
   };
 
 input group "Grid";
@@ -891,7 +895,7 @@ input group "Fair value gaps";
 input bool            InpShowFvg      = true;              // Show unmitigated fair value gaps
 input ENUM_TIMEFRAMES InpFvgTF        = PERIOD_CURRENT;    // Timeframe (current = follow the chart)
 input int             InpFvgLookback  = 200;               // Candles of history to search
-input ENUM_FVG_MIT    InpFvgMit       = FVG_MIT_FULL;      // What counts as mitigated
+input ENUM_FVG_MIT    InpFvgMit       = FVG_MIT_CLOSE;     // What counts as mitigated
 input int             InpFvgMinPts    = 0;                 // Smallest gap drawn, in points (0 = all)
 input bool            InpFvgBull      = true;              // Show bullish gaps
 input bool            InpFvgBear      = true;              // Show bearish gaps
@@ -3397,9 +3401,12 @@ bool RefreshLiquidity()
 //|                                                                  |
 //|  A gap is only confirmed once its third candle has closed, so a  |
 //|  box never appears and then vanishes because the live candle     |
-//|  wicked back. Mitigation is read off the wicks of the candles    |
-//|  after the third, the live one included, so a box goes the       |
-//|  moment price reaches it:                                        |
+//|  wicked back. By default (FVG_MIT_CLOSE) a gap ends only when a  |
+//|  CLOSED candle after the third closes beyond its far edge -      |
+//|  below the bottom of a bullish gap, above the top of a bearish   |
+//|  one. A wick through it that closes back does not end it. The    |
+//|  other modes read the wicks of the candles after the third, the  |
+//|  live one included, so a box goes the moment price reaches:      |
 //|    FVG_MIT_FULL   the far edge - the whole gap is filled         |
 //|    FVG_MIT_HALF   the middle (the consequent encroachment)       |
 //|    FVG_MIT_TOUCH  the near edge - any trade into the gap         |
@@ -3467,27 +3474,42 @@ void FvgDraw(const datetime t, const double bot, const double top,
 //--- nothing since has reached its trigger, so one pass settles every gap.
 //--- m is the middle candle: m - 1 the third (closed, so m >= 2), m + 1 the
 //--- first, and 0 .. m - 2 the candles that can mitigate it.
+//--- In FVG_MIT_CLOSE the lowest and highest CLOSE are carried instead, over
+//--- the closed candles only (index 1 and up), and a gap stands while none of
+//--- them closed beyond its far edge.
 void FvgScan(const MqlRates &r[], const int n, const ENUM_TIMEFRAMES tf, const datetime edge)
   {
+   bool   byClose = (InpFvgMit == FVG_MIT_CLOSE);
    double minGap = MathMax(0, InpFvgMinPts) * _Point;
    double lo = DBL_MAX;
    double hi = -DBL_MAX;
 
    for(int m = 2; m + 1 < n; m++)
      {
-      lo = MathMin(lo, r[m - 2].low);
-      hi = MathMax(hi, r[m - 2].high);
+      if(!byClose)
+        {
+         lo = MathMin(lo, r[m - 2].low);
+         hi = MathMax(hi, r[m - 2].high);
+        }
+      else
+         if(m - 2 >= 1)
+           {
+            lo = MathMin(lo, r[m - 2].close);
+            hi = MathMax(hi, r[m - 2].close);
+           }
 
       if(InpFvgBull && r[m - 1].low > r[m + 1].high)
         {
          double bot = r[m + 1].high, top = r[m - 1].low;
-         if(top - bot >= minGap && lo > FvgTrigger(bot, top, true))
+         bool   open = byClose ? (lo >= bot) : (lo > FvgTrigger(bot, top, true));
+         if(top - bot >= minGap && open)
             FvgDraw(r[m].time, bot, top, true, tf, edge);
         }
       if(InpFvgBear && r[m - 1].high < r[m + 1].low)
         {
          double bot = r[m - 1].high, top = r[m + 1].low;
-         if(top - bot >= minGap && hi < FvgTrigger(bot, top, false))
+         bool   open = byClose ? (hi <= top) : (hi < FvgTrigger(bot, top, false));
+         if(top - bot >= minGap && open)
             FvgDraw(r[m].time, bot, top, false, tf, edge);
         }
      }
@@ -3511,6 +3533,10 @@ bool RefreshFvg()
 
    if(!g_fvgDirty && bar == g_fvgBar && edge == g_fvgEdge)
      {
+      //--- By close, nothing can end a gap until a source candle closes,
+      //--- which is the new-bar case above - the live price is no reason.
+      if(InpFvgMit == FVG_MIT_CLOSE)
+         return(false);
       double hi = iHigh(_Symbol, tf, 0);
       double lo = iLow (_Symbol, tf, 0);
       if(hi <= 0.0 || (lo > g_fvgBullNear && hi < g_fvgBearNear))
