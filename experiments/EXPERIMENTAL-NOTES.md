@@ -7114,7 +7114,26 @@ test, no tier ladder.
 
 ### Status
 
-Compiled clean in MetaEditor (0 errors, 0 warnings). **Not yet
-backtested.** Questions for the tester: how often the limit fills, the
-reward:risk the opposing-gap exit gives against a fractal stop, and whether
-the near-edge entry does better than the middle.
+Compiled clean in MetaEditor (0 errors, 0 warnings).
+
+**Backtest (GOLDm#, M1, 100% real ticks, 2026-09-01 to 09-25, $10k,
+default inputs): −$3,880, PF 0.63, 41% drawdown.** 722 limits were placed
+and 459 filled (64%). 28% of trades won, and the average trade was held
+9 minutes.
+
+- **The fractal stop is the main loss.** 183 trades (40%) ended at the SL for
+  −$8,203, an average of −1.16R (fills beyond the stop add the 0.16). The
+  median stop was $3.18 of price, the tightest $0.02. Split into quarters by
+  stop size: under $2 the SL was hit 74% of the time (−0.74R a trade,
+  −$2,570); $2–3.2, 48% (−0.26R); $3.2–5.2, 33% (−0.19R); **over $5.2, 5%
+  (+0.17R, +$937)**. The only profitable quarter is the widest stops.
+- **The opposing-gap exit only breaks even.** 276 exits made +$4,322: mean
+  +0.35R but **median −0.02R**. 146 of them closed at a loss, and only 49
+  reached 1R. It cuts trades at a scratch about as often as it lets them
+  run.
+- By hour (server time) only 12:00–16:00 was net positive, and every hour
+  has fewer than 32 trades, so this is a lead, not a result.
+
+One month is a small sample. The stop-size split is the strongest signal:
+next are a minimum stop distance (for example ATR or several spreads) and
+an exit that needs a larger or longer-standing opposing gap.
