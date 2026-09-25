@@ -91,13 +91,21 @@
 //|  the candle that took them out.                                  |
 //|  The UNRAIDED LIQUIDITY section below sets out the rules.        |
 //|                                                                  |
+//|  And it shades the UNMITIGATED FAIR VALUE GAPS - three-candle    |
+//|  imbalances price has not yet traded back through - as a box     |
+//|  from the middle candle to the right edge, dark green for        |
+//|  bullish and dark red for bearish, over the last 200 candles of  |
+//|  the chart's timeframe or of one locked timeframe. A box goes    |
+//|  the moment price fills it. The FAIR VALUE GAPS section below    |
+//|  sets out the rules.                                             |
+//|                                                                  |
 //|  Verified against the PO3 workbook's Gold sheet, 14 Mar 2025:    |
 //|    2187  around 2900 -> 2799.36 .. 3083.67   (row 35, x128..141) |
 //|    6561  around 2950 -> 2755.62 .. 3149.28   (row 39, x42..48)   |
 //|   19683  around 2950 -> 2755.62 .. 3149.28   (row 40, x14..16)   |
 //+------------------------------------------------------------------+
 #property copyright "PO3 Levels"
-#property version   "1.45"
+#property version   "1.46"
 //--- Shown in the Navigator and in the properties dialog. The indicator does
 //--- two things now, and a name that says only "PO3 Levels" undersells half of
 //--- it to anyone reading the list.
@@ -105,7 +113,8 @@
 #property description "Also counts candles from the year, month, week and day opens and marks the"
 #property description "Ichimoku kihon suchi numbers on that count, and times the ones this week"
 #property description "still has to come, and draws the unraided swing highs and lows as liquidity"
-#property description "lines. Draws only - places no orders."
+#property description "lines, and shades the fair value gaps price has not yet filled. Draws only -"
+#property description "places no orders."
 #property indicator_chart_window
 #property indicator_buffers 0
 #property indicator_plots   0
@@ -596,6 +605,15 @@ enum ENUM_LIQ_RAID
    LIQ_RAID_CLOSE = 1    // A candle closes through the level
   };
 
+//--- How far price has to trade back into a fair value gap before it is
+//--- mitigated and its box goes. Read off wicks, so it lands on the live candle.
+enum ENUM_FVG_MIT
+  {
+   FVG_MIT_FULL  = 0,   // Price trades through the whole gap
+   FVG_MIT_HALF  = 1,   // Price reaches the middle of the gap
+   FVG_MIT_TOUCH = 2    // Price trades into the gap at all
+  };
+
 input group "Grid";
 input double InpScale     = 1.0;   // Scale divisor (1 = whole numbers, 100 = workbook 2dp)
 input int    InpEachSide  = 3;     // Levels each side of price
@@ -816,6 +834,25 @@ input bool            InpLiqLastRaid  = true;             // Show the last raide
 input bool            InpLiqValues    = true;             // Write the price beside each unraided / last raided swing
 input string          InpLiqFont      = "Segoe UI Light"; // Price font (size follows the PO3 labels)
 
+input group "Fair value gaps";
+//--- Three-candle imbalances not yet filled, shaded from the middle candle to
+//--- the right edge. The timeframe follows the chart unless locked, like the
+//--- liquidity above. See the FAIR VALUE GAPS section for the rules.
+//---
+//--- The fills are dark on purpose. A box sits behind the candles and MT5
+//--- gives it no transparency, so the colour is the only way to keep it from
+//--- burying them - tuned, like the 1 grid, for a black chart. On a light
+//--- background pick pale fills instead.
+input bool            InpShowFvg      = true;              // Show unmitigated fair value gaps
+input ENUM_TIMEFRAMES InpFvgTF        = PERIOD_CURRENT;    // Timeframe (current = follow the chart)
+input int             InpFvgLookback  = 200;               // Candles of history to search
+input ENUM_FVG_MIT    InpFvgMit       = FVG_MIT_FULL;      // What counts as mitigated
+input int             InpFvgMinPts    = 0;                 // Smallest gap drawn, in points (0 = all)
+input bool            InpFvgBull      = true;              // Show bullish gaps
+input bool            InpFvgBear      = true;              // Show bearish gaps
+input color           InpFvgBullColor = C'0,64,48';        // Bullish gaps - fill colour
+input color           InpFvgBearColor = C'80,24,32';       // Bearish gaps - fill colour
+
 input group "PO3 levels to show";
 //--- Every grid from 3 up is on by default: the model is the whole nest of
 //--- powers, and a level's strength is meant to be read from how many grids
@@ -892,6 +929,8 @@ input color InpCol_19683 = clrCrimson;         // 19683  - colour
 //--- of an unraided name ("PO3_UH_" / "PO3_UL_"), so neither prune takes the
 //--- other's objects, and OnDeinit's PO3_PREFIX sweep takes both.
 #define PO3_LIQR    "PO3_UR"
+//--- Fair value gap boxes. "PO3_F" is no other sub-prefix's prefix either.
+#define PO3_FVG     "PO3_F"
 
 //--- The last number of the band that carries the reading. At or below it a
 //--- marker takes one of the two prominent colours; above it the recessive one.
@@ -946,6 +985,20 @@ datetime g_rdRaid[2];
 double   g_rdLevel[2];
 int      g_rdAge[2];               // source candles since the raid, 0 = live
 string   g_rdKey[2];
+//--- Fair value gaps, kept and pruned the same way as the liquidity lines.
+string   g_fvgKeep[];
+int      g_fvgKeepN  = 0;
+string   g_fvgNames[];
+int      g_fvgNamesN = 0;
+bool     g_fvgChanged = false;
+//--- The gate. Boxes can only change when a source candle opens (a gap is
+//--- confirmed), a chart candle opens (the boxes stretch to it) or price
+//--- reaches the nearest mitigation price on either side.
+bool     g_fvgDirty    = true;
+datetime g_fvgBar      = 0;
+datetime g_fvgEdge     = 0;           // chart candle the boxes run to
+double   g_fvgBullNear = -DBL_MAX;    // highest mitigation price, bullish gaps
+double   g_fvgBearNear = DBL_MAX;     // lowest mitigation price, bearish gaps
 
 bool     g_logged   = false;
 
@@ -1090,6 +1143,9 @@ int OnInit()
    g_liqScale  = -1;
    g_rdKey[0]  = "";
    g_rdKey[1]  = "";
+   g_fvgDirty  = true;
+   g_fvgNamesN = 0;
+   g_fvgEdge   = 0;
    g_pLast    = 0;
    g_pUnknown = true;
    g_pDirty   = true;
@@ -3244,6 +3300,174 @@ bool RefreshLiquidity()
   }
 
 //+------------------------------------------------------------------+
+//|  FAIR VALUE GAPS - three-candle imbalances price has not yet     |
+//|  traded back through. Each is a box from the middle candle to    |
+//|  the right edge; when price fills it, the box goes.              |
+//|                                                                  |
+//|  Of three candles in a row, a bullish gap is the space between   |
+//|  the first candle's high and the third candle's low, when the    |
+//|  third's low is above the first's high - the middle candle moved |
+//|  so fast that no candle traded that range both ways. A bearish   |
+//|  gap mirrors it: the third's high below the first's low.         |
+//|                                                                  |
+//|  A gap is only confirmed once its third candle has closed, so a  |
+//|  box never appears and then vanishes because the live candle     |
+//|  wicked back. Mitigation is read off the wicks of the candles    |
+//|  after the third, the live one included, so a box goes the       |
+//|  moment price reaches it:                                        |
+//|    FVG_MIT_FULL   the far edge - the whole gap is filled         |
+//|    FVG_MIT_HALF   the middle (the consequent encroachment)       |
+//|    FVG_MIT_TOUCH  the near edge - any trade into the gap         |
+//|                                                                  |
+//|  InpFvgTF = PERIOD_CURRENT follows the chart; anything else      |
+//|  locks the gaps and the mitigation check to that timeframe, and  |
+//|  the box starts at the locked middle candle's open.              |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES FvgTF()
+  {
+   return (InpFvgTF == PERIOD_CURRENT) ? (ENUM_TIMEFRAMES)_Period : InpFvgTF;
+  }
+
+//--- The price a wick has to reach for the gap to count as mitigated. A
+//--- bullish gap sits below price and is reached by a low at or under this; a
+//--- bearish one by a high at or over it.
+double FvgTrigger(const double bot, const double top, const bool bull)
+  {
+   if(InpFvgMit == FVG_MIT_HALF)
+      return((bot + top) / 2.0);
+   if(InpFvgMit == FVG_MIT_TOUCH)
+      return(bull ? top : bot);
+   return(bull ? bot : top);
+  }
+
+void FvgDraw(const datetime t, const double bot, const double top,
+             const bool bull, const ENUM_TIMEFRAMES tf, const datetime edge)
+  {
+   string name = PO3_FVG + (bull ? "B_" : "S_") + IntegerToString((long)t);
+   ArrayResize(g_fvgKeep, g_fvgKeepN + 1, 64);
+   g_fvgKeep[g_fvgKeepN++] = name;
+   double trig = FvgTrigger(bot, top, bull);
+   if(bull)
+      g_fvgBullNear = MathMax(g_fvgBullNear, trig);
+   else
+      g_fvgBearNear = MathMin(g_fvgBearNear, trig);
+
+   //--- a confirmed gap never moves; only its right edge follows the chart
+   if(ObjectFind(0, name) >= 0)
+     {
+      if((datetime)ObjectGetInteger(0, name, OBJPROP_TIME, 1) != edge)
+        {
+         ObjectSetInteger(0, name, OBJPROP_TIME, 1, edge);
+         g_fvgChanged = true;
+        }
+      return;
+     }
+
+   if(!ObjectCreate(0, name, OBJ_RECTANGLE, 0, t, top, edge, bot))
+      return;
+   ObjectSetInteger(0, name, OBJPROP_COLOR,      bull ? InpFvgBullColor : InpFvgBearColor);
+   ObjectSetInteger(0, name, OBJPROP_FILL,       true);
+   ObjectSetInteger(0, name, OBJPROP_BACK,       true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+   ObjectSetString(0, name, OBJPROP_TOOLTIP,
+                   (bull ? "Bullish FVG " : "Bearish FVG ") + DoubleToString(bot, _Digits) +
+                   " - " + DoubleToString(top, _Digits) +
+                   "  " + TfNameOf(tf) + "  " + TimeToString(t, TIME_DATE | TIME_MINUTES));
+   g_fvgChanged = true;
+  }
+
+//--- Walk from the newest candle back, carrying the lowest low and highest
+//--- high traded AFTER each gap's third candle. A gap is unmitigated when
+//--- nothing since has reached its trigger, so one pass settles every gap.
+//--- m is the middle candle: m - 1 the third (closed, so m >= 2), m + 1 the
+//--- first, and 0 .. m - 2 the candles that can mitigate it.
+void FvgScan(const MqlRates &r[], const int n, const ENUM_TIMEFRAMES tf, const datetime edge)
+  {
+   double minGap = MathMax(0, InpFvgMinPts) * _Point;
+   double lo = DBL_MAX;
+   double hi = -DBL_MAX;
+
+   for(int m = 2; m + 1 < n; m++)
+     {
+      lo = MathMin(lo, r[m - 2].low);
+      hi = MathMax(hi, r[m - 2].high);
+
+      if(InpFvgBull && r[m - 1].low > r[m + 1].high)
+        {
+         double bot = r[m + 1].high, top = r[m - 1].low;
+         if(top - bot >= minGap && lo > FvgTrigger(bot, top, true))
+            FvgDraw(r[m].time, bot, top, true, tf, edge);
+        }
+      if(InpFvgBear && r[m - 1].high < r[m + 1].low)
+        {
+         double bot = r[m - 1].high, top = r[m + 1].low;
+         if(top - bot >= minGap && hi < FvgTrigger(bot, top, false))
+            FvgDraw(r[m].time, bot, top, false, tf, edge);
+        }
+     }
+  }
+
+//--- Rescan and sync the boxes, but only when the gate says something can
+//--- have changed. The timer calls it too, which fills in a locked timeframe
+//--- whose history was not loaded on the first call.
+//--- Returns true when a box was added, stretched or removed.
+bool RefreshFvg()
+  {
+   if(!InpShowFvg)
+      return(false);                             // nothing drawn; OnDeinit sweeps
+
+   ENUM_TIMEFRAMES tf = FvgTF();
+   datetime bar  = iTime(_Symbol, tf, 0);
+   datetime last = iTime(_Symbol, _Period, 0);
+   if(bar == 0 || last == 0)
+      return(false);                             // history not ready
+   datetime edge = last + PeriodSeconds(_Period);
+
+   if(!g_fvgDirty && bar == g_fvgBar && edge == g_fvgEdge)
+     {
+      double hi = iHigh(_Symbol, tf, 0);
+      double lo = iLow (_Symbol, tf, 0);
+      if(hi <= 0.0 || (lo > g_fvgBullNear && hi < g_fvgBearNear))
+         return(false);
+     }
+
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   int n = CopyRates(_Symbol, tf, 0, (int)MathMax(4, InpFvgLookback), r);
+   if(n < 4)
+      return(false);                             // not loaded yet: keep what is drawn
+
+   g_fvgKeepN    = 0;
+   g_fvgChanged  = false;
+   g_fvgBullNear = -DBL_MAX;
+   g_fvgBearNear = DBL_MAX;
+   FvgScan(r, n, tf, edge);
+
+   //--- Prune against our own list, not every object on the chart.
+   for(int i = 0; i < g_fvgNamesN; i++)
+     {
+      bool keep = false;
+      for(int k = 0; k < g_fvgKeepN && !keep; k++)
+         keep = (g_fvgKeep[k] == g_fvgNames[i]);
+      if(!keep)
+        {
+         ObjectDelete(0, g_fvgNames[i]);
+         g_fvgChanged = true;
+        }
+     }
+   ArrayResize(g_fvgNames, g_fvgKeepN);
+   for(int k = 0; k < g_fvgKeepN; k++)
+      g_fvgNames[k] = g_fvgKeep[k];
+   g_fvgNamesN = g_fvgKeepN;
+
+   g_fvgBar   = bar;
+   g_fvgEdge  = edge;
+   g_fvgDirty = false;
+   return(g_fvgChanged);
+  }
+
+//+------------------------------------------------------------------+
 //| Ticks are not guaranteed once a minute, so the clock runs off a  |
 //| timer instead. Without it the countdown would sit frozen through |
 //| a quiet session and read wrong.                                  |
@@ -3252,6 +3476,7 @@ void OnTimer()
   {
    RefreshLevels();
    RefreshLiquidity();
+   RefreshFvg();
    UpdateCount();
    UpdatePanel();
    UpdateClock();
@@ -3280,7 +3505,9 @@ int OnCalculate(const int rates_total,
    //--- boundary. Leaving them here had every tick rewrite them. The clock
    //--- stays: it is anchored to price and rides it between seconds.
    RefreshLevels();
-   if(RefreshLiquidity())
+   bool liq = RefreshLiquidity();
+   bool fvg = RefreshFvg();
+   if(liq || fvg)
       ChartRedraw();
    UpdateCount();
    UpdateClock();

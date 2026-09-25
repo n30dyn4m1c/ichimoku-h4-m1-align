@@ -6865,3 +6865,46 @@ minimum lot and the account currency.
   spread is wider, entries will be blocked, and the tester will show no
   entries at all. The fix is to raise `InpMaxSpreadPoints`, not to switch it
   off.
+
+## 60. Unmitigated fair value gaps — part of the PO3 levels indicator
+
+**File:** `po3-levels.mq5` (indicator, no magic number, v1.46) — the
+"Fair value gaps" input group
+
+The PO3 levels indicator (§38, §52) also shades every **fair value gap** that
+price has not yet filled, as a box from the gap's middle candle to the right
+edge: **dark green** for bullish gaps (`InpFvgBullColor`, `C'0,64,48'`) and
+**dark red** for bearish ones (`InpFvgBearColor`, `C'80,24,32'`). The boxes
+sit behind the candles, and MT5 gives a rectangle no transparency, so the
+fills are dark on purpose — tuned for a black chart; pick pale fills on a
+light one.
+
+**The gap.** Three candles in a row. Bullish: the third candle's low is above
+the first candle's high, and the gap is the range between them — the middle
+candle moved so fast that nothing traded it both ways. Bearish mirrors it:
+the third's high below the first's low. A gap is confirmed only once its third
+candle has closed, so a box never appears and then vanishes because the live
+candle wicked back. `InpFvgMinPts` (0) drops gaps narrower than that many
+points.
+
+**Mitigation.** Read off the wicks of every candle after the third, the live
+candle included, so a box goes the moment price reaches it.
+`InpFvgMit = FVG_MIT_FULL` (default): price trades to the far edge — the whole
+gap filled. `FVG_MIT_HALF`: price reaches the middle (the consequent
+encroachment). `FVG_MIT_TOUCH`: any trade into the gap.
+
+**The timeframe and scope.** `InpFvgTF = PERIOD_CURRENT` follows the chart, so
+the gaps are always the ones on whatever timeframe is open; any other value
+locks the gaps and the mitigation check to that timeframe on every chart, and
+the box starts at the locked middle candle's open. `InpFvgLookback` (200)
+candles of the source timeframe are searched. One newest-to-oldest pass
+carries the lowest low and highest high since each gap, so every gap's state
+is settled at once. It is gated like the liquidity: a rescan runs only when a
+source candle opens, a chart candle opens (the boxes' right edges move to it)
+or price reaches the nearest mitigation price on either side. The boxes are
+`PO3_F` objects, a sub-prefix no other sweep in the indicator matches; hovering
+one shows its range, timeframe and middle-candle time. `InpFvgBull` /
+`InpFvgBear` hide one side; `InpShowFvg` turns the whole feature off.
+
+Compiled clean in MetaEditor (0 errors, 0 warnings); not yet checked on a live
+chart.
