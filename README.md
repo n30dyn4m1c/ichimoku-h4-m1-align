@@ -108,7 +108,7 @@ Both builds carry their own magic number, so they can run on the same account
 - `archives/` — retired builds, including the 2026-08-18 top-down VPS and desktop originals and the 2026-08-14 pre-merge pair
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `ICHIMOKU-THEORIES.md` — the time/wave/price theory research the filters are drawn from
-- `tools/` — `mt5-check.sh`, the weekday VPS health check
+- `tools/` — `mt5-check.sh`, the weekday VPS health check, and `mt5-run.sh`, the launcher `mt5.service` runs
 - `utilities/` — deployment scripts, the Python monitor and the account-split simulator
 
 > The repository is still named `ichimoku-h4-m1-align` after the original
@@ -323,13 +323,43 @@ The live terminal runs on an Ubuntu VPS under Wine, set up like this:
   systemctl show mt5 -p KillMode      # -> KillMode=process
   ```
 
-  Applied on the live VPS on 2026-09-23. **If the EA goes quiet, first
+  Applied on the live VPS on 2026-09-23. It had a side effect: after an
+  update the updater relaunches the terminal itself, and systemd, seeing its
+  own terminal exit 0, kept starting new ones. Each found the relaunched
+  terminal already running, logged `terminal process already started` and
+  exited, so the service restarted every ~18 s (about 2,800 times on
+  2026-09-28/29) while the orphaned terminal kept trading. **If the EA goes quiet, first
   check the terminal log** (`logs/YYYYMMDD.log`, UTF-16) for `LiveUpdate
   start` repeating every couple of minutes. To clear a stuck update by
   hand: `sudo systemctl stop mt5`, start `terminal64.exe /portable
   /profile:ichimoku-live` on `DISPLAY=:1` so it can update itself, confirm
   `terminal64.exe` has a new date, then `pkill` it and `sudo systemctl start
   mt5`.
+- **The launcher (`tools/mt5-run.sh`), the fix for both loops.** The
+  service runs this wrapper instead of `terminal64.exe`. It starts MT5 only
+  when no terminal or LiveUpdate helper is running. When the terminal exits,
+  it waits 3 minutes for an updater to relaunch it before starting one
+  itself. The wrapper never exits, so systemd never restarts anything, and
+  the updater is not killed. That makes the `KillMode=process` drop-in
+  unnecessary, and without it `systemctl stop mt5` stops the terminal too.
+  Install it (needs sudo):
+
+  ```bash
+  cp mt5-run.sh ~/mt5-run.sh && chmod +x ~/mt5-run.sh      # copied from tools/
+  systemctl cat mt5          # note the old ExecStart/KillMode before changing
+  sudo cp /etc/systemd/system/mt5.service.d/override.conf ~/override.conf.bak
+  printf '[Service]\nExecStart=\nExecStart=%s/mt5-run.sh\n' "$HOME" \
+    | sudo tee /etc/systemd/system/mt5.service.d/override.conf
+  sudo systemctl daemon-reload
+  sudo systemctl restart mt5   # restarts the terminal: pick a quiet moment
+  journalctl -u mt5 | grep mt5-run   # -> "no terminal running, starting MT5"
+  ```
+
+  The wrapper's `/portable /profile:ichimoku-live` arguments match the live
+  terminal. If `systemctl cat mt5` shows other arguments or environment
+  (for example `DISPLAY=:1` set only on the `ExecStart` line), carry them
+  over. To undo it, restore `~/override.conf.bak`, then run `daemon-reload`
+  and `restart`.
 - **Deploying without MetaEditor on the VPS:** back up the old files, copy
   the new `.mq5` over with `scp`, and copy a `.ex5` compiled from the same
   source by a terminal on the **same MT5 build** (so the VPS loads it
@@ -363,9 +393,15 @@ The VPS clock is UTC, and 09:30 UTC+10 is 23:30 UTC on the previous day, so the 
 | Check | Fails when | Email says |
 |---|---|---|
 | Service | `mt5.service` is not active | `mt5.service is not running (…)` |
-| EA loaded | no `expert ichimoku-h4-m1-vps-ea … loaded successfully` line in the terminal log after the most recent `… started for …` line (terminal up for more than 5 min) | `terminal is running but ichimoku-h4-m1-vps-ea has not loaded since its last start (…)` |
+| Terminal | no `terminal64.exe` process is running | `no terminal64.exe process is running` |
+| EA loaded | no `expert ichimoku-h4-m1-vps-ea … loaded successfully` line in the terminal log after the running terminal's `… started for …` line (terminal process up for more than 5 min; launches that exit with `terminal process already started` are skipped) | `terminal is running but ichimoku-h4-m1-vps-ea has not loaded since its last start (…)` |
 | Update loop | more than 3 `LiveUpdate start` lines in yesterday's and today's terminal logs | `LiveUpdate started N times since yesterday: possible update/restart loop` |
+| Launch loop | more than 3 `terminal process already started` lines in yesterday's and today's terminal logs | `… N times since yesterday: mt5.service is restart-looping …` |
 | VPS alive | no ping reaches healthchecks.io by 10:30 (1 h grace) | healthchecks.io's own "is DOWN" email |
+
+The uptime comes from the `terminal64.exe` process, not from the service:
+a restart-looping service resets its own start time every few seconds, which
+used to keep the EA check from ever running.
 
 The terminal logs are UTF-16, so the script converts them with `iconv`
 before searching. The failure email also carries the last 15 terminal-log
@@ -416,6 +452,8 @@ longer forwards email for anonymous users. The script uses
   on the VPS. The config file stays as it is.
 
 **If you get an alert:** start with the terminal log lines in the email. A
+repeating `terminal process already started` means the service is not
+running `mt5-run.sh` yet (see [The VPS host](#the-vps-host-how-the-live-build-actually-runs)). A
 repeating `LiveUpdate start` means a stuck update; clear it with the manual
 restart steps under [The VPS host](#the-vps-host-how-the-live-build-actually-runs).
 If the EA has not loaded, open the chart over VNC and check that the EA is

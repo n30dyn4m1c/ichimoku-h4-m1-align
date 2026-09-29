@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # mt5-check.sh — weekday health check for the live MT5 terminal on the VPS.
 #
-# Checks that mt5.service is up, that the VPS EA loaded after the terminal's
-# last start, and that the terminal is not stuck in a LiveUpdate restart loop.
+# Checks that mt5.service is up, that a terminal64.exe is running, that the
+# VPS EA loaded after that terminal started, and that the terminal is not
+# stuck in a LiveUpdate loop or a duplicate-launch restart loop.
 # All well: stays silent (a quiet success ping). Anything wrong: a short report
 # is emailed. The VPS cannot send mail itself (DigitalOcean blocks SMTP ports
 # 25/465/587), so the email goes out over HTTPS through healthchecks.io: the
@@ -55,13 +56,18 @@ if [ "$1" = "--test" ]; then
   exit $rc
 fi
 
-if ! systemctl is-active --quiet mt5; then
-  fail "mt5.service is not running ($(systemctl is-active mt5))"
+systemctl is-active --quiet mt5 || fail "mt5.service is not running ($(systemctl is-active mt5))"
+
+# Time the running terminal itself, not the service: a restart-looping service
+# resets its start time every few seconds while the real terminal runs on.
+PID=$(pgrep -of 'XM Global MT5.*terminal64\.exe')
+if [ -z "$PID" ]; then
+  fail "no terminal64.exe process is running"
   SINCE=$(date -d '2 days ago' +%Y%m%d)
 else
-  START=$(systemctl show mt5 -p ActiveEnterTimestamp --value)
-  SINCE=$(date -d "$START - 1 day" +%Y%m%d)      # every log since the service last started
-  UP=$(( $(date +%s) - $(date -d "$START" +%s) ))
+  UP=$(ps -o etimes= -p "$PID" | tr -d ' ')
+  START=$(date -d "@$(( $(date +%s) - UP ))" '+%F %H:%M UTC')
+  SINCE=$(date -d "$START - 1 day" +%Y%m%d)      # every log since the terminal started
 fi
 
 # Terminal logs from SINCE to today, oldest first
@@ -71,7 +77,9 @@ done)
 
 if [ -z "$REPORT" ] && [ "${UP:-0}" -gt 300 ]; then
   # The EA must have loaded after the most recent terminal start
-  AFTER=$(printf '%s\n' "$LOGTXT" | awk '/started for/{buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}')
+  # A launch that finds a terminal already running and exits is not a restart:
+  # drop its lines and keep the log from the real terminal's start
+  AFTER=$(printf '%s\n' "$LOGTXT" | awk '/started for/{prev=buf; buf=""} /terminal process already started/{buf=prev; next} {buf=buf $0 "\n"} END{printf "%s", buf}')
   printf '%s' "$AFTER" | grep -q "expert $EA .*loaded successfully" \
     || fail "terminal is running but $EA has not loaded since its last start ($START)"
 fi
@@ -81,10 +89,16 @@ N=$(for d in "$(date -d yesterday +%Y%m%d)" "$(date +%Y%m%d)"; do
   f="$MT5/logs/$d.log"; [ -f "$f" ] && readlog "$f"; done | grep -c 'LiveUpdate start')
 [ "$N" -gt 3 ] && fail "LiveUpdate started $N times since yesterday: possible update/restart loop"
 
+# Duplicate-launch loop: the service keeps relaunching a terminal that finds
+# one already running and exits 0 (seen 2026-09-28, before mt5-run.sh)
+D=$(for d in "$(date -d yesterday +%Y%m%d)" "$(date +%Y%m%d)"; do
+  f="$MT5/logs/$d.log"; [ -f "$f" ] && readlog "$f"; done | grep -c 'terminal process already started')
+[ "$D" -gt 3 ] && fail "'terminal process already started' $D times since yesterday: mt5.service is restart-looping (is ExecStart still terminal64.exe instead of mt5-run.sh?)"
+
 if [ -z "$REPORT" ]; then
   [ -n "$HC_PING" ] && curl -fsS -m 10 "$HC_PING" >/dev/null
   exit 0
 fi
-BODY="MT5 on $(hostname) at $(date -u '+%F %H:%M UTC'):"$'\n'"$REPORT"$'\n'"Last terminal log lines:"$'\n'"$(printf '%s\n' "$LOGTXT" | tail -15)"
+BODY="MT5 on $(hostname) at $(date -u '+%F %H:%M UTC'):"$'\n'"$REPORT"$'\n'"Last terminal log lines:"$'\n'"$(printf '%s\n' "$LOGTXT" | grep -v 'terminal process already started' | tail -15)"
 notify "MT5 is NOT loading on the VPS" "$BODY"
 exit 1
