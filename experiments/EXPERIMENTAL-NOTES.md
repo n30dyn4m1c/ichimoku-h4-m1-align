@@ -7137,3 +7137,55 @@ and 459 filled (64%). 28% of trades won, and the average trade was held
 One month is a small sample. The stop-size split is the strongest signal:
 next are a minimum stop distance (for example ATR or several spreads) and
 an exit that needs a larger or longer-standing opposing gap.
+
+## 65. H4-M1 align only — the live build's H4 tier on its own
+
+**File:** `experimental-h4-m1-align-only-ea.mq5`
+**Magic number:** `20260887`
+
+User request (2026-10-01): "just h4-m1 align, no other tiers". A fork of the
+live VPS build (`ichimoku-h4-m1-vps-ea.mq5`, which was not touched) with every
+tier except H4 removed. With one tier left, the bottom-up stack becomes a
+single H4 → M1 alignment again: M1, M5, M15, M30, H1 and H4 must all agree
+before the one trade opens.
+
+### What was removed
+
+- The M5, M15, M30 and H1 tiers, with their risk inputs.
+- Entry consolidation and supersede-closes: with no smaller tier there is
+  nothing to supersede.
+- The H1 stand-in bias. The live build never let the H4 tier use it.
+- The H4 bias gate as a separate check. H4 is part of the chain, so the
+  chain already requires H4 aligned with the trade.
+
+### What is kept, exactly as the live H4 tier has it
+
+- **Entry:** price and chikou above/below tenkan, kijun and cloud on all six
+  timeframes, in one direction, on the last closed bar.
+- **Cloud bias** (`InpCloudBiasEnabled`): the future cloud of H4 and of the
+  timeframe below it, H1, must be twisted the trade's way. The current
+  cloud may be either direction.
+- **D1 filter** (`InpD1Filter`): buys only when D1 is bullish, sells only when
+  D1 is bearish, nothing while D1 closes in its cloud. Switch it off for a
+  pure H4-M1 alignment.
+- **Spread cap** of 60 points.
+- **Exit:** price touches the H4 cloud edge. The rejection-candle exit is
+  there but off, as in the live build.
+- **Protection:** disaster SL at ATR(H4) × 8, break-even at +0.5 ATR(H4)
+  (entry + 15 points), chandelier 1 ATR(H4) behind the peak once +0.5 ATR(H4).
+- **Risk:** the live H4 regime, 20% below $7,000, 10% to $13,000 and 2%
+  above, against ATR(H4) × 2, capped to 80% of free margin.
+- **Robustness pack** R2–R5. R6 (the twin rule) does not apply; there is no
+  desktop twin.
+- Position comments stay `Exp Buy H4` / `Exp Sell H4`. The magic is new, so
+  this EA never touches live positions.
+
+### Status
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
+
+§50 already ran this logic through the tier switches of the §48 build
+("H4 only", real ticks, $100 start): −$44 in 2024 (PF 0.89, 87% drawdown),
++$303 in 2025 (PF 1.11), +$76 in 2026 to 09-19 (PF 1.11), from 37–67 trades a
+year. A backtest of this file should reproduce those figures; a mismatch
+would mean the fork has drifted from the live H4 tier.
