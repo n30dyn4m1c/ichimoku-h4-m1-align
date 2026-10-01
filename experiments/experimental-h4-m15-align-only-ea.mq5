@@ -29,15 +29,17 @@
 //|        touches the upper edge, a short when the ask touches the   |
 //|        lower edge). Optional strong-rejection-candle exit on H4   |
 //|        (off by default, as live).                                 |
-//| Protection: disaster SL at entry (ATR(H4) x 4 — halved from the   |
-//|        live x 8, user 2026-10-01), break-even                     |
+//| Protection: TIGHT stop loss at entry, ATR(H4) x 1 (user 2026-10-  |
+//|        01: the live build's wide x 8 disaster stop turned into a  |
+//|        real stop to cut H4 losses; a hit costs about half the     |
+//|        risk %, since lots are sized on ATR(H4) x 2), break-even   |
 //|        at +0.5 x ATR(H4) (entry + 15 points), chandelier trail    |
 //|        1 x ATR(H4) behind the peak once +0.5 x ATR(H4).           |
 //| Risk:  one position per symbol, % of actual equity against        |
 //|        ATR(H4) x InpRiskATRMult: 20% below $7000, 10% to $13000,  |
 //|        2% above — the live H4 tier's three regimes. Lots capped   |
 //|        to InpMarginUsePct of free margin.                         |
-//| Robustness pack R2-R5 kept (unknown-position guard, disaster      |
+//| Robustness pack R2-R5 kept (unknown-position guard, stop loss     |
 //| stop, chandelier peak rebuild after restart, per-symbol filling + |
 //| capped margin). VPS-style: journal Print + SendNotification only, |
 //| logic still runs once per closed M1 bar so the cloud-touch exit   |
@@ -79,9 +81,9 @@ input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE sto
 input double InpTrailActivateATR  = 0.5;   // Chandelier trail arms once profit >= this x ATR(H4)
 input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR(H4)
 
-input group  "Disaster Stop (hard tail-risk stop)"
-input bool   InpDisasterStopEnabled = true;   // Attach a wide hard SL at entry (bounds gap/disconnect loss)
-input double InpDisasterATRMult     = 4.0;    // Disaster stop distance = ATR(H4) x this (live build: 8)
+input group  "Stop Loss (tight, ATR(H4))"
+input bool   InpStopLossEnabled = true;   // Attach a tight hard SL at entry
+input double InpStopATRMult     = 1.0;    // Stop distance = ATR(H4) x this (live build's disaster stop: 8)
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close the trade when a very strong rejection candle forms against it on H4
@@ -100,7 +102,7 @@ string          tfName[TFS] = { "M15", "M30", "H1", "H4" };
 
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — bias filter
-int      atr[MAX_SYMS];             // ATR(H4) — sizing, BE, trail, disaster stop
+int      atr[MAX_SYMS];             // ATR(H4) — sizing, BE, trail, stop loss
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -568,12 +570,12 @@ bool OpenTrade(int s, int dir, double lots)
    // R5: pick a filling mode this symbol actually supports.
    trade.SetTypeFillingBySymbol(sym);
 
-   // R3: disaster stop — a wide hard SL bounding gap/disconnect loss,
+   // Stop loss (the live build's R3 disaster stop, made tight),
    // anchored at the entry price. If ATR or the broker distance check makes
    // it invalid right now, the order goes out without it and
    // ManageProtection re-attaches it next minute.
    double sl = 0.0;
-   if(InpDisasterStopEnabled)
+   if(InpStopLossEnabled)
    {
       double a[1];
       if(CopyBuffer(atr[s], 0, 1, 1, a) > 0 && a[0] > 0)
@@ -581,7 +583,7 @@ bool OpenTrade(int s, int dir, double lots)
          double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
          double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
          int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-         double dist    = MathMax(a[0] * InpDisasterATRMult, minDist + point);
+         double dist    = MathMax(a[0] * InpStopATRMult, minDist + point);
          sl             = NormalizeDouble((dir == 1) ? price - dist : price + dist, digits);
 
          // A long's SL triggers on the BID, a short's on the ASK — validate
@@ -653,7 +655,7 @@ bool ClosePositions(int s)
 //     ATR(H4). The reference is the highest high / lowest low of
 //     H4, including the bar still forming; it only ever tightens
 //     and never sits inside the broker minimum stop.
-// The only hard stop is the wide R3 disaster SL; if it ever goes
+// The hard stop is the tight ATR(H4) stop loss; if it ever goes
 // missing, it is re-attached here.
 //==============================================================
 
@@ -706,13 +708,13 @@ void ManageProtection(int s)
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
 
-   // R3: self-heal a missing disaster stop. Anchored at the ENTRY price so
+   // R3: self-heal a missing stop loss. Anchored at the ENTRY price so
    // the tail definition never drifts; only attaches while no other stop
    // exists — BE/chandelier take over from there and only ever tighten.
-   if(InpDisasterStopEnabled && slCur == 0.0)
+   if(InpStopLossEnabled && slCur == 0.0)
    {
-      double dSl = NormalizeDouble(isLong ? entryPrice[s] - InpDisasterATRMult * atrVal
-                                          : entryPrice[s] + InpDisasterATRMult * atrVal,
+      double dSl = NormalizeDouble(isLong ? entryPrice[s] - InpStopATRMult * atrVal
+                                          : entryPrice[s] + InpStopATRMult * atrVal,
                                    digits);
       bool okD = isLong ? (dSl > 0 && dSl < bid - minDist)
                         : (dSl > ask + minDist);
@@ -721,7 +723,7 @@ void ManageProtection(int s)
          if(trade.PositionModify(ticket, dSl, 0))
             slCur = dSl;
          else
-            Print(PCTime() + " | " + syms[s] + " H4 disaster SL attach failed, retcode " +
+            Print(PCTime() + " | " + syms[s] + " H4 stop loss attach failed, retcode " +
                   IntegerToString(trade.ResultRetcode()));
       }
    }

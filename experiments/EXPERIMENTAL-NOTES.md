@@ -7170,7 +7170,7 @@ the chain was cut to M15..H4 (both below); the file was renamed from
 - **Spread cap** of 60 points.
 - **Exit:** price touches the H4 cloud edge. The rejection-candle exit is
   there but off, as in the live build.
-- **Protection:** disaster SL at ATR(H4) × 8 (now × 4, below), break-even at +0.5 ATR(H4)
+- **Protection:** disaster SL at ATR(H4) × 8 (now a tight × 1 stop, below), break-even at +0.5 ATR(H4)
   (entry + 15 points), chandelier 1 ATR(H4) behind the peak once +0.5 ATR(H4).
 - **Risk:** the live H4 regime, 20% below $7,000, 10% to $13,000 and 2%
   above, against ATR(H4) × 2, capped to 80% of free margin.
@@ -7205,6 +7205,20 @@ now sits 4 × ATR(H4) from entry. Lots are still sized as if the stop were
 twice the risk %: roughly 40% of equity at the 20% tier-1 risk, against
 about 80% with the old × 8 stop. The stop also comes into play more often,
 cutting trades that the H4 cloud-touch exit would otherwise have held.
+
+### Tight stop loss (2026-10-01)
+
+Asked to cut the H4 losses, the user had the disaster stop turned into a
+**tight stop loss at 1 × ATR(H4)** from entry. The inputs are renamed to
+`InpStopLossEnabled` / `InpStopATRMult` (1.0). Lots are still sized on
+2 × ATR(H4), so a stop-out costs about **half the risk %**: roughly 10% of
+equity at the 20% tier-1 risk (it was about 40% at × 4 and 80% at × 8).
+The mechanics are unchanged: anchored at entry, re-attached if missing,
+and break-even (+0.5 ATR) and the chandelier take over from it and only
+tighten. Expect more and smaller losers: a 1-ATR adverse move inside an H4
+trend is common, so trades the cloud-touch exit used to ride through will
+now be stopped out. If the hit rate is too high, 1.5–2 is the next step;
+at 2 a stop-out costs exactly the risk %.
 
 ### Status
 
