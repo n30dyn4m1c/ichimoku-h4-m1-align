@@ -1,50 +1,57 @@
 //+------------------------------------------------------------------+
-//| Ichimoku H4-M15 Align Only EA — the live build's H4 tier alone,   |
-//| chain cut to M15                                                  |
+//| Ichimoku M15-H1-H4 Tiers EA — two tiers on an M15 base            |
 //| EXPERIMENTAL (2026-10-01). Started as "just h4-m1 align, no other |
 //| tiers": a fork of the live VPS build ichimoku-h4-m1-vps-ea.mq5    |
-//| with every tier except H4 removed, which turns the bottom-up      |
-//| stack back into a single top-down alignment. Then, on user        |
-//| instruction, the D1 filter was turned off and the chain was cut   |
-//| from M1..H4 to M15..H4: M15, M30, H1 and H4 must all agree before |
-//| the one trade opens; M1 and M5 no longer take part. The tier      |
-//| ladder, the entry consolidation (supersede-closes) and the H1     |
-//| stand-in bias are gone — the H4 tier never used the stand-in, and |
-//| with no smaller tiers there is nothing to supersede. Everything   |
-//| else that applied to the H4 tier in the live build is kept:       |
+//| with every tier except H4 removed. Then, on user instruction, the |
+//| D1 filter was turned off, the chain was cut from M1..H4 to        |
+//| M15..H4, the disaster stop became a tight ATR x 1 stop loss, and  |
+//| an M15-H1 tier was added. Two tiers now, grown bottom-up from M15 |
+//| as in the live build (M1 and M5 take no part):                    |
+//|   Tier H1: M15 + M30 + H1 aligned        -> open an H1 trade      |
+//|   Tier H4: M15 + M30 + H1 + H4 aligned   -> open an H4 trade      |
 //| Entry: per-TF alignment (price + chikou above/below tenkan,       |
-//|        kijun and cloud) on M15, M30, H1 and H4, all in the same   |
-//|        direction. H4 is part of the chain, so the H4 bias is      |
-//|        satisfied by construction.                                 |
+//|        kijun and cloud), all TFs of the tier's chain in the same  |
+//|        direction.                                                 |
 //|        Cloud bias (InpCloudBiasEnabled): the FUTURE cloud (Span A |
-//|        vs Span B, Kijun bars ahead) of H4 and of the TF directly  |
-//|        below it, H1, must be twisted the trade's way; the current |
-//|        cloud may be either direction.                             |
-//|        D1 filter (InpD1Filter): OFF by default (user, 2026-10-01) |
-//|        — the trade needs only H4 down to M15. On, it restores the |
-//|        live H4 tier's rule: D1 bullish -> buys only, D1 bearish   |
-//|        -> sells only, D1 in the cloud -> no trades.               |
+//|        vs Span B, Kijun bars ahead) of the tier TF and of the TF  |
+//|        directly below it (H1 tier: H1 + M30; H4 tier: H4 + H1)    |
+//|        must be twisted the trade's way; the current cloud may be  |
+//|        either direction — the live build's rule for M5+.          |
+//|        H4 gate on the H1 tier (InpH1H4Gate, OFF by default): the  |
+//|        live H1 tier needs H4 aligned WITH it, but on an M15 base  |
+//|        that is the H4 tier's own signal, so the H1 tier would     |
+//|        never trade on its own. Off, it trades M15..H1 alone;      |
+//|        H1H4_NOT_AGAINST skips H1 trades against an aligned H4;    |
+//|        H1H4_WITH restores the live rule.                          |
+//|        D1 filter on the H4 tier (InpD1Filter): OFF by default.    |
+//|        On, H4 trades only in the D1's direction, none while D1    |
+//|        closes in its cloud — the live H4 tier's rule.             |
 //|        Spread cap InpMaxSpreadPoints.                             |
-//| Exit:  price TOUCHES the H4 cloud edge (a long when the bid       |
-//|        touches the upper edge, a short when the ask touches the   |
-//|        lower edge). Optional strong-rejection-candle exit on H4   |
-//|        (off by default, as live).                                 |
-//| Protection: TIGHT stop loss at entry, ATR(H4) x 1 (user 2026-10-  |
-//|        01: the live build's wide x 8 disaster stop turned into a  |
-//|        real stop to cut H4 losses; a hit costs about half the     |
-//|        risk %, since lots are sized on ATR(H4) x 2), break-even   |
-//|        at +0.5 x ATR(H4) (entry + 15 points), chandelier trail    |
-//|        1 x ATR(H4) behind the peak once +0.5 x ATR(H4).           |
-//| Risk:  one position per symbol, % of actual equity against        |
-//|        ATR(H4) x InpRiskATRMult: 20% below $7000, 10% to $13000,  |
-//|        2% above — the live H4 tier's three regimes. Lots capped   |
-//|        to InpMarginUsePct of free margin.                         |
+//| Consolidation (as live): tiers are scanned largest first and only |
+//| the largest aligned tier opens. When the H4 tier opens, a running |
+//| H1 trade is closed first (superseded). An H4 trade already open   |
+//| does not stop the H1 tier from opening.                           |
+//| Exit:  price TOUCHES the tier TF's cloud edge (a long when the    |
+//|        bid touches the upper edge, a short when the ask touches   |
+//|        the lower edge). Optional strong-rejection-candle exit on  |
+//|        the tier TF (off by default, as live).                     |
+//| Protection (ATR of the tier's own TF): TIGHT stop loss at entry,  |
+//|        ATR x InpStopATRMult (1; the live build's wide x 8         |
+//|        disaster stop turned into a real stop to cut losses — a    |
+//|        hit costs about half the risk %, since lots are sized on   |
+//|        ATR x 2), break-even at +0.5 x ATR (entry + 15 points),    |
+//|        chandelier trail 1 x ATR behind the peak once +0.5 x ATR   |
+//|        — the live H1/H4 tier settings.                            |
+//| Risk:  % of actual equity against ATR(tier TF) x InpRiskATRMult,  |
+//|        the live tiers' regimes: H1 10/5/1%, H4 20/10/2% (below    |
+//|        $7000 / to $13000 / above). Lots capped to                 |
+//|        InpMarginUsePct of free margin.                            |
 //| Robustness pack R2-R5 kept (unknown-position guard, stop loss     |
-//| stop, chandelier peak rebuild after restart, per-symbol filling + |
-//| capped margin). VPS-style: journal Print + SendNotification only, |
-//| logic still runs once per closed M1 bar so the cloud-touch exit   |
-//| and the stops react within a minute. Position comment "Exp Buy    |
-//| H4" / "Exp Sell H4", as in the live build.                        |
+//| self-heal, chandelier peak rebuild after restart, per-symbol      |
+//| filling + capped margin). VPS-style: journal Print +              |
+//| SendNotification only; logic runs once per closed M1 bar so the   |
+//| cloud-touch exits and the stops react within a minute. Position   |
+//| comments "Exp Buy H1" / "Exp Sell H4" etc., as in the live build. |
 //| Magic: 20260887 — unique (see notes §65).                         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -59,69 +66,84 @@ input int    Kijun    = 26;
 input int    SenkouB  = 52;
 input int    Slippage = 30;
 
-input group  "Risk Management (% of actual equity)"
+input group  "Risk Management (per tier, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
-input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(H4) x this (risk sizing basis)
+input double InpRiskATRMult     = 2.0;    // Reference stop distance = ATR(tier TF) x this (risk sizing basis)
 input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
-input double InpRiskPct         = 20.0;   // Risk % — tier 1 (equity < Tier2At)
-input double InpRiskPct_T2      = 10.0;   // Risk % — tier 2 (half regime)
-input double InpRiskPct_T3      = 2.0;    // Risk % — tier 3 (equity >= Tier3At)
+input double InpRiskPctH1       = 10.0;   // H1 — tier 1 (equity < Tier2At)
+input double InpRiskPctH4       = 20.0;   // H4 — tier 1
+input double InpRiskPctH1_T2    = 5.0;    // H1 — tier 2 (half regime)
+input double InpRiskPctH4_T2    = 10.0;   // H4 — tier 2
+input double InpRiskPctH1_T3    = 1.0;    // H1 — tier 3 (equity >= Tier3At)
+input double InpRiskPctH4_T3    = 2.0;    // H4 — tier 3
 input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may commit
 
+// What the H4 alignment means for the H1 tier.
+//   H1H4_OFF         : ignored — the H1 tier trades M15..H1 on its own
+//   H1H4_NOT_AGAINST : no H1 trade against an ALIGNED H4 (flat H4 is fine)
+//   H1H4_WITH        : H4 must be aligned with the trade (the live rule)
+enum ENUM_H1_H4_GATE { H1H4_OFF = 0, H1H4_NOT_AGAINST = 1, H1H4_WITH = 2 };
+
 input group  "Entry Filters"
-input bool   InpCloudBiasEnabled = true;   // Require the H4 and H1 future clouds (Span A vs Span B) to carry the trade
-input bool   InpD1Filter         = false;  // D1 bias (off by default; true = live H4 tier): trade only in the D1's direction, D1 in the cloud = no trades
+input bool   InpH1Tier           = true;   // H1 tier (M15 + M30 + H1 aligned) opens trades
+input bool   InpH4Tier           = true;   // H4 tier (M15 + M30 + H1 + H4 aligned) opens trades
+input bool   InpCloudBiasEnabled = true;   // Require the tier TF and the TF below to have their future cloud (Span A vs Span B) with the trade
+input ENUM_H1_H4_GATE InpH1H4Gate = H1H4_OFF; // H1 tier vs H4: 0=ignore H4, 1=not against an aligned H4, 2=H4 aligned with it (live)
+input bool   InpD1Filter         = false;  // H4 tier only: trade in the D1's direction, D1 in the cloud = no H4 trades (live: on)
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group  "Profit Protection"
-input int    InpATRPeriod         = 14;    // ATR period (H4)
-input double InpBEProfitATR       = 0.5;   // BE arms once profit >= this x ATR(H4)
+input int    InpATRPeriod         = 14;    // ATR period (each tier uses its own TF's ATR)
+input double InpBEProfitATR       = 0.5;   // BE arms once profit >= this x ATR
 input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE stop (covers spread)
-input double InpTrailActivateATR  = 0.5;   // Chandelier trail arms once profit >= this x ATR(H4)
-input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR(H4)
+input double InpTrailActivateATR  = 0.5;   // Chandelier trail arms once profit >= this x ATR
+input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR
 
-input group  "Stop Loss (tight, ATR(H4))"
+input group  "Stop Loss (tight, ATR of the tier TF)"
 input bool   InpStopLossEnabled = true;   // Attach a tight hard SL at entry
-input double InpStopATRMult     = 1.0;    // Stop distance = ATR(H4) x this (live build's disaster stop: 8)
+input double InpStopATRMult     = 1.0;    // Stop distance = ATR(tier TF) x this (live build's disaster stop: 8)
 
 input group  "Rejection Exit (strong rejection candle)"
-input bool   InpRejectionExit = false;  // Close the trade when a very strong rejection candle forms against it on H4
+input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
 input int    InpRejSwingBars  = 8;      // Recent swing window (bars) the rejection candle must sweep
 input double InpRejWickPct    = 0.5;    // Wick must be >= this fraction of the candle's total range
 input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this fraction of the range (strong close-back)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
-#define TFS      4      // chain: M15, M30, H1, H4
-#define IDX_H1   2      // index of H1 in tfs[] — the TF below H4 in the cloud bias gate
-#define IDX_H4   3      // index of H4 in tfs[] — the traded timeframe
+#define TFS      4      // stack: M15, M30, H1, H4
+#define LEVELS   2      // tradable tiers: H1, H4
+#define IDX_H4   3      // index of H4 in tfs[]
+#define LVL_H1   0
+#define LVL_H4   1
 
-ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
-string          tfName[TFS] = { "M15", "M30", "H1", "H4" };
+ENUM_TIMEFRAMES tfs[TFS]     = { PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
+string          tfName[TFS]  = { "M15", "M30", "H1", "H4" };
+int             lvlTf[LEVELS] = { 2, 3 };   // tfs[] index of each tier's TF
 
 int      ich[MAX_SYMS][TFS];
-int      ichD1[MAX_SYMS];           // D1 ichimoku handle — bias filter
-int      atr[MAX_SYMS];             // ATR(H4) — sizing, BE, trail, stop loss
+int      ichD1[MAX_SYMS];             // D1 ichimoku handle — H4-tier bias filter
+int      atr[MAX_SYMS][LEVELS];       // ATR(tier TF) — sizing, BE, trail, stop loss
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
-int      state[MAX_SYMS];           // 0 = flat, 1 = long, -1 = short
+int      state[MAX_SYMS][LEVELS];     // per tier: 0 = flat, 1 = long, -1 = short
 int      lastMinuteKey = -1;
 
-double   entryPrice[MAX_SYMS];      // reference entry price (BE + trail arming)
-double   peakHigh[MAX_SYMS];        // highest high since entry (long chandelier reference)
-double   peakLow[MAX_SYMS];         // lowest low since entry (short chandelier reference)
-bool     beMoved[MAX_SYMS];         // BE stop already moved to break even (one-shot)
+double   entryPrice[MAX_SYMS][LEVELS];   // reference entry price per tier (BE + trail arming)
+double   peakHigh[MAX_SYMS][LEVELS];     // highest high since entry (long chandelier reference)
+double   peakLow[MAX_SYMS][LEVELS];      // lowest low since entry (short chandelier reference)
+bool     beMoved[MAX_SYMS][LEVELS];      // BE stop already moved to break even (one-shot)
 
 // R2: unknown-position guard. A position carrying our magic whose comment
-// no longer reads "Exp Buy/Sell H4" cannot be managed — track it, block new
-// entries on its symbol until it is gone, and log it once per ticket.
+// no longer names a tier cannot be managed — track it, block new entries
+// on its symbol until it is gone, and log it once per ticket.
 bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-int MAGIC = 20260887;   // H4-M15 align only — unique
+int MAGIC = 20260887;   // M15-H1-H4 tiers — unique
 
 CTrade trade;
 
@@ -158,11 +180,14 @@ int OnInit()
    {
       lastM1bar[s] = 0;
       symBlockedUnknown[s] = false;
-      state[s] = 0;
-      entryPrice[s] = 0.0;
-      peakHigh[s]   = 0.0;
-      peakLow[s]    = 0.0;
-      beMoved[s]    = false;
+      for(int l = 0; l < LEVELS; l++)
+      {
+         state[s][l] = 0;
+         entryPrice[s][l] = 0.0;
+         peakHigh[s][l]   = 0.0;
+         peakLow[s][l]    = 0.0;
+         beMoved[s][l]    = false;
+      }
 
       for(int t = 0; t < TFS; t++)
       {
@@ -173,8 +198,11 @@ int OnInit()
       ichD1[s] = iIchimoku(syms[s], PERIOD_D1, Tenkan, Kijun, SenkouB);
       if(ichD1[s] == INVALID_HANDLE) return(INIT_FAILED);
 
-      atr[s] = iATR(syms[s], PERIOD_H4, InpATRPeriod);
-      if(atr[s] == INVALID_HANDLE) return(INIT_FAILED);
+      for(int l = 0; l < LEVELS; l++)
+      {
+         atr[s][l] = iATR(syms[s], tfs[lvlTf[l]], InpATRPeriod);
+         if(atr[s][l] == INVALID_HANDLE) return(INIT_FAILED);
+      }
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -190,7 +218,8 @@ void OnDeinit(const int reason)
       for(int t = 0; t < TFS; t++)
          if(ich[s][t] != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
       if(ichD1[s] != INVALID_HANDLE) IndicatorRelease(ichD1[s]);
-      if(atr[s] != INVALID_HANDLE) IndicatorRelease(atr[s]);
+      for(int l = 0; l < LEVELS; l++)
+         if(atr[s][l] != INVALID_HANDLE) IndicatorRelease(atr[s][l]);
    }
 }
 
@@ -198,14 +227,19 @@ void OnDeinit(const int reason)
 // Position State Sync (recover after restart)
 //==============================================================
 
-string TradeComment(int dir)
+string LvlName(int lvl)
 {
-   return (dir == 1) ? "Exp Buy H4" : "Exp Sell H4";
+   return tfName[lvlTf[lvl]];
 }
 
-bool IsOurComment(string comm)
+string LevelComment(int lvl, int dir)
 {
-   return comm == TradeComment(1) || comm == TradeComment(-1);
+   return (dir == 1 ? "Exp Buy " : "Exp Sell ") + LvlName(lvl);
+}
+
+bool IsLevelComment(int lvl, string comm)
+{
+   return comm == LevelComment(lvl, 1) || comm == LevelComment(lvl, -1);
 }
 
 // R2: log an unparseable magic position once per ticket — without the
@@ -218,22 +252,25 @@ void LogUnknownOnce(ulong ticket, string sym, string comm)
    if(unknownLoggedCount < 64) unknownLoggedTickets[unknownLoggedCount++] = ticket;
    Print(PCTime() + " | !! " + sym + " position #" + IntegerToString((long)ticket) +
          " carries this EA's magic but its comment \"" + comm +
-         "\" is not this EA's — BE/trail/cloud exits CANNOT manage it." +
+         "\" names no tier — BE/trail/cloud exits CANNOT manage it." +
          " New entries on " + sym + " are blocked until it is closed.");
 }
 
-// Rebuild state from the positions on the account so a restart mid-trade
-// resumes the trade. Entry/peak/BE memory is rebuilt for a restart mid-
-// trade — the chandelier references from the H4 history since the
-// position opened (R4) — and cleared when the symbol is flat.
+// Rebuild per-tier state from the positions on the account so a restart
+// mid-trade resumes the correct tiers. Entry/peak/BE memory is rebuilt for
+// a restart mid-trade — the chandelier references from the tier-TF history
+// since the position opened (R4) — and cleared when the tier is flat.
 void SyncStateFromPositions()
 {
-   bool hasPos[MAX_SYMS];
+   bool hasPos[MAX_SYMS][LEVELS];
    for(int s = 0; s < symsCount; s++)
    {
       symBlockedUnknown[s] = false;              // R2: re-evaluated every sync
-      state[s]  = 0;
-      hasPos[s] = false;
+      for(int l = 0; l < LEVELS; l++)
+      {
+         state[s][l]  = 0;
+         hasPos[s][l] = false;
+      }
    }
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -254,26 +291,30 @@ void SyncStateFromPositions()
       {
          if(syms[s] != sym) continue;
 
-         if(!IsOurComment(comm))
+         int lvlMatch = -1;
+         for(int l = 0; l < LEVELS; l++)
+            if(IsLevelComment(l, comm)) { lvlMatch = l; break; }
+
+         if(lvlMatch < 0)
          {
             symBlockedUnknown[s] = true;
             LogUnknownOnce(ticket, sym, comm);
             continue;
          }
 
-         state[s]  = dir;
-         hasPos[s] = true;
+         state[s][lvlMatch]  = dir;
+         hasPos[s][lvlMatch] = true;
 
          // EA (re)started mid-trade — rebuild the protection references.
-         // R4: peaks come from the H4 bars since the position actually
+         // R4: peaks come from the tier-TF bars since the position actually
          // opened, so the chandelier resumes where it left off.
-         if(entryPrice[s] == 0.0)
+         if(entryPrice[s][lvlMatch] == 0.0)
          {
-            entryPrice[s] = PositionGetDouble(POSITION_PRICE_OPEN);
-            double hi = entryPrice[s];
-            double lo = entryPrice[s];
+            entryPrice[s][lvlMatch] = PositionGetDouble(POSITION_PRICE_OPEN);
+            double hi = entryPrice[s][lvlMatch];
+            double lo = entryPrice[s][lvlMatch];
             MqlRates hist[];
-            int nb = CopyRates(sym, PERIOD_H4,
+            int nb = CopyRates(sym, tfs[lvlTf[lvlMatch]],
                                (datetime)PositionGetInteger(POSITION_TIME),
                                TimeCurrent(), hist);
             for(int b = 0; b < nb; b++)
@@ -281,22 +322,25 @@ void SyncStateFromPositions()
                if(hist[b].high > hi) hi = hist[b].high;
                if(hist[b].low  < lo) lo = hist[b].low;
             }
-            peakHigh[s] = hi;
-            peakLow[s]  = lo;
+            peakHigh[s][lvlMatch] = hi;
+            peakLow[s][lvlMatch]  = lo;
          }
          break;
       }
    }
 
-   // Symbols with no open position get their protection memory cleared
+   // Tiers with no open position get their protection memory cleared
    for(int s = 0; s < symsCount; s++)
    {
-      if(!hasPos[s])
+      for(int l = 0; l < LEVELS; l++)
       {
-         entryPrice[s] = 0.0;
-         peakHigh[s]   = 0.0;
-         peakLow[s]    = 0.0;
-         beMoved[s]    = false;
+         if(!hasPos[s][l])
+         {
+            entryPrice[s][l] = 0.0;
+            peakHigh[s][l]   = 0.0;
+            peakLow[s][l]    = 0.0;
+            beMoved[s][l]    = false;
+         }
       }
    }
 }
@@ -354,17 +398,16 @@ int CheckAlign(int s, int tfIdx)
 }
 
 //==============================================================
-// Chain Check: M15, M30, H1 and H4 must all be aligned in the
-// SAME direction. Checked from M15 up so the most often failing
-// timeframe short-circuits first.
+// Chain Check (bottom-up): the stack M15..topIdx must be aligned
+// in the SAME direction for a tier to open.
 //==============================================================
 
-int ChainAligned(int s)
+int ChainAligned(int s, int topIdx)
 {
    int dir = CheckAlign(s, 0);
    if(dir == 0) return 0;
 
-   for(int t = 1; t < TFS; t++)
+   for(int t = 1; t <= topIdx; t++)
    {
       if(CheckAlign(s, t) != dir) return 0;
    }
@@ -372,9 +415,10 @@ int ChainAligned(int s)
 }
 
 //==============================================================
-// Daily Bias Filter: D1 bullish (price + chikou above tenkan,
-// kijun and cloud) allows only buys, D1 bearish only sells. A D1
-// close INSIDE the cloud (or unreadable) returns 0 — no trades.
+// Daily Bias Filter (H4 tier): D1 bullish (price + chikou above
+// tenkan, kijun and cloud) allows only H4 buys, D1 bearish only
+// H4 sells. A D1 close INSIDE the cloud (or unreadable) returns
+// 0 — no new H4 trades then.
 //==============================================================
 
 int DailyAlign(int s)
@@ -401,7 +445,7 @@ int DailyAlign(int s)
 
    bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
    bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
-   if(!above && !below) return 0;   // D1 close inside the cloud — no trades
+   if(!above && !below) return 0;   // D1 close inside the cloud — no H4 trades
 
    double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
    if(CopyBuffer(ichD1[s], 0, chShift, 1, tenkan_ch) <= 0) return 0;
@@ -427,7 +471,8 @@ int DailyAlign(int s)
 // cloud window (Kijun bars ahead of the last closed bar) must
 // carry the trade's bias; the immediate cloud where price sits
 // may be either direction. Unreadable values count as blocking.
-// The live build's H4 tier checks H4 and the TF below it, H1.
+// Checked on the tier TF and the TF directly below it, as in
+// the live build: H1 tier -> H1 + M30, H4 tier -> H4 + H1.
 //==============================================================
 
 bool CloudBiasFarOK(int s, int tfIdx, int dir)
@@ -440,23 +485,37 @@ bool CloudBiasFarOK(int s, int tfIdx, int dir)
    return aFar[0] < bFar[0];
 }
 
-bool CloudBiasOK(int s, int dir)
+bool LevelCloudBiasOK(int s, int lvl, int dir)
 {
-   return CloudBiasFarOK(s, IDX_H4, dir) && CloudBiasFarOK(s, IDX_H1, dir);
+   int t = lvlTf[lvl];
+   return CloudBiasFarOK(s, t, dir) && CloudBiasFarOK(s, t - 1, dir);
 }
 
 //==============================================================
-// Exit Check: price TOUCHES the H4 cloud edge — no wait for a
-// candle to close inside it. A long exits when the bid touches
-// the cloud's upper edge; a short when the ask touches the lower
-// edge. Evaluated once per closed M1 bar.
+// H4 gate for the H1 tier (InpH1H4Gate). The H4 tier needs no
+// gate — H4 is part of its own chain.
 //==============================================================
 
-bool InCloudTouch(int s, int dir)
+bool H1TierH4OK(int s, int dir)
+{
+   if(InpH1H4Gate == H1H4_OFF) return true;
+   int h4 = CheckAlign(s, IDX_H4);
+   if(InpH1H4Gate == H1H4_WITH) return h4 == dir;
+   return h4 != -dir;                // NOT_AGAINST: flat or with
+}
+
+//==============================================================
+// Exit Check: price TOUCHES the tier TF's cloud edge — no wait
+// for a candle to close inside it. A long exits when the bid
+// touches the cloud's upper edge; a short when the ask touches
+// the lower edge. Evaluated once per closed M1 bar.
+//==============================================================
+
+bool InCloudTouch(int s, int tfIdx, int dir)
 {
    double senA[1], senB[1];
-   if(CopyBuffer(ich[s][IDX_H4], 2, 1, 1, senA) <= 0) return false;
-   if(CopyBuffer(ich[s][IDX_H4], 3, 1, 1, senB) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 2, 1, 1, senA) <= 0) return false;
+   if(CopyBuffer(ich[s][tfIdx], 3, 1, 1, senB) <= 0) return false;
 
    if(dir ==  1)
    {
@@ -493,28 +552,29 @@ bool SpreadOK(string sym)
 }
 
 //==============================================================
-// Risk Management — risk as a fixed % of the ACTUAL equity at
-// entry, in the live H4 tier's three regimes that DE-RISK as the
-// account grows (20% / 10% / 2% by default), measured against a
-// reference distance of ATR(H4) x InpRiskATRMult. Falls back to
-// InpFixedLots when the sizing data is unavailable.
+// Risk Management — per-tier risk as a fixed % of the ACTUAL
+// equity at entry, in the live tiers' three regimes that DE-RISK
+// as the account grows (H1 10/5/1%, H4 20/10/2%), measured
+// against a reference distance of ATR(tier TF) x InpRiskATRMult.
+// Falls back to InpFixedLots when the sizing data is unavailable.
 //==============================================================
 
-double RiskPct()
+double LevelRiskPct(int lvl)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq >= InpRiskTier3At) return InpRiskPct_T3;
-   if(eq >= InpRiskTier2At) return InpRiskPct_T2;
-   return InpRiskPct;
+   bool t3 = (eq >= InpRiskTier3At);
+   bool t2 = (eq >= InpRiskTier2At);
+   if(lvl == LVL_H1) return t3 ? InpRiskPctH1_T3 : t2 ? InpRiskPctH1_T2 : InpRiskPctH1;
+   return t3 ? InpRiskPctH4_T3 : t2 ? InpRiskPctH4_T2 : InpRiskPctH4;
 }
 
-double RiskLots(int s)
+double RiskLots(int s, int lvl)
 {
-   double riskPct = RiskPct();
+   double riskPct = LevelRiskPct(lvl);
    if(riskPct <= 0) return InpFixedLots;
 
    double a[1];
-   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
+   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
    double stopDist = a[0] * InpRiskATRMult;
 
    double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
@@ -560,25 +620,25 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
 // Trading Functions
 //==============================================================
 
-bool OpenTrade(int s, int dir, double lots)
+bool OpenLevel(int s, int lvl, int dir, double lots)
 {
    string sym = syms[s];
-   string comment = TradeComment(dir);
+   string comment = LevelComment(lvl, dir);
    double price = (dir == 1) ? SymbolInfoDouble(sym, SYMBOL_ASK)
                              : SymbolInfoDouble(sym, SYMBOL_BID);
 
    // R5: pick a filling mode this symbol actually supports.
    trade.SetTypeFillingBySymbol(sym);
 
-   // Stop loss (the live build's R3 disaster stop, made tight),
-   // anchored at the entry price. If ATR or the broker distance check makes
-   // it invalid right now, the order goes out without it and
-   // ManageProtection re-attaches it next minute.
+   // Stop loss (the live build's R3 disaster stop, made tight), anchored
+   // at the entry price. If ATR or the broker distance check makes it
+   // invalid right now, the order goes out without it and
+   // ManageLevelProtection re-attaches it next minute.
    double sl = 0.0;
    if(InpStopLossEnabled)
    {
       double a[1];
-      if(CopyBuffer(atr[s], 0, 1, 1, a) > 0 && a[0] > 0)
+      if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) > 0 && a[0] > 0)
       {
          double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
          double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
@@ -600,23 +660,23 @@ bool OpenTrade(int s, int dir, double lots)
                         : trade.Sell(lots, sym, price, sl, 0, comment);
    if(ok)
    {
-      state[s]      = dir;
-      entryPrice[s] = price;
-      peakHigh[s]   = price;
-      peakLow[s]    = price;
-      beMoved[s]    = false;
+      state[s][lvl]      = dir;
+      entryPrice[s][lvl] = price;
+      peakHigh[s][lvl]   = price;
+      peakLow[s][lvl]    = price;
+      beMoved[s][lvl]    = false;
       string action = (dir == 1) ? "Buy" : "Sell";
-      string msg = PCTime() + " | " + action + " " + sym + " H4 @ " +
-                   DoubleToString(lots, 2) + " (H4-M15 align)";
+      string msg = PCTime() + " | " + action + " " + sym + " " + LvlName(lvl) +
+                   " @ " + DoubleToString(lots, 2) + " (M15 base)";
       Print(msg); SendNotification(msg);
    }
    return ok;
 }
 
-// Close the symbol's positions; returns true only when none remain open,
-// so a failed close (requote, halt) is retried instead of freeing the
-// symbol for a fresh entry.
-bool ClosePositions(int s)
+// Close all positions of the tier; returns true only when none remain
+// open, so a failed close (requote, halt) is retried instead of freeing
+// the tier for a fresh entry.
+bool CloseLevelPositions(int s, int lvl)
 {
    string sym = syms[s];
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -626,10 +686,10 @@ bool ClosePositions(int s)
 
       if(PositionGetString(POSITION_SYMBOL) == sym &&
          (int)PositionGetInteger(POSITION_MAGIC) == MAGIC &&
-         IsOurComment(PositionGetString(POSITION_COMMENT)))
+         IsLevelComment(lvl, PositionGetString(POSITION_COMMENT)))
       {
          if(!trade.PositionClose(ticket))
-            Print(PCTime() + " | " + sym + " H4 close failed, retcode " +
+            Print(PCTime() + " | " + sym + " " + LvlName(lvl) + " close failed, retcode " +
                   IntegerToString(trade.ResultRetcode()));
       }
    }
@@ -640,26 +700,26 @@ bool ClosePositions(int s)
       if(!PositionSelectByTicket(ticket)) continue;
       if(PositionGetString(POSITION_SYMBOL) == sym &&
          (int)PositionGetInteger(POSITION_MAGIC) == MAGIC &&
-         IsOurComment(PositionGetString(POSITION_COMMENT))) return false;
+         IsLevelComment(lvl, PositionGetString(POSITION_COMMENT))) return false;
    }
    return true;
 }
 
 //==============================================================
-// Profit Protection (the live build's H4-tier rules):
+// Profit Protection (the live build's H1/H4 rules, per tier):
 //   * Break-even — once the trade is in profit by >=
-//     InpBEProfitATR x ATR(H4), the stop moves to entry plus
+//     InpBEProfitATR x ATR, the stop moves to entry plus
 //     InpBECoverPoints. One-shot per trade (beMoved).
-//   * Chandelier trail — trails the stop InpTrailATR x ATR(H4)
-//     behind the peak once profitable by InpTrailActivateATR x
-//     ATR(H4). The reference is the highest high / lowest low of
-//     H4, including the bar still forming; it only ever tightens
-//     and never sits inside the broker minimum stop.
-// The hard stop is the tight ATR(H4) stop loss; if it ever goes
-// missing, it is re-attached here.
+//   * Chandelier trail — trails the stop InpTrailATR x ATR behind
+//     the peak once profitable by InpTrailActivateATR x ATR. The
+//     reference is the highest high / lowest low of the tier TF,
+//     including the bar still forming; it only ever tightens and
+//     never sits inside the broker minimum stop.
+// ATR comes from the tier's own TF. The hard stop is the tight
+// ATR stop loss; if it ever goes missing, it is re-attached here.
 //==============================================================
 
-bool TradeTicket(int s, ulong &ticket)
+bool LevelTicket(int s, int lvl, ulong &ticket)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -667,34 +727,34 @@ bool TradeTicket(int s, ulong &ticket)
       if(!PositionSelectByTicket(ticket)) continue;
       if(PositionGetString(POSITION_SYMBOL) != syms[s]) continue;
       if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
-      if(IsOurComment(PositionGetString(POSITION_COMMENT))) return true;
+      if(IsLevelComment(lvl, PositionGetString(POSITION_COMMENT))) return true;
    }
    return false;
 }
 
-void ManageProtection(int s)
+void ManageLevelProtection(int s, int lvl)
 {
-   int dir = state[s];
+   int dir = state[s][lvl];
    if(dir == 0) return;
 
    double a[1];
-   if(CopyBuffer(atr[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
+   if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
    double atrVal = a[0];
 
-   // The reference point is the extreme of the H4 bar that is still
+   // The reference point is the extreme of the tier-TF bar that is still
    // forming, so a peak is locked in before it retraces
    MqlRates tfx[];
-   if(CopyRates(syms[s], PERIOD_H4, 0, 1, tfx) <= 0) return;
+   if(CopyRates(syms[s], tfs[lvlTf[lvl]], 0, 1, tfx) <= 0) return;
    ArraySetAsSeries(tfx, true);
 
    bool isLong = (dir == 1);
    if(isLong)
    {
-      if(tfx[0].high > peakHigh[s]) peakHigh[s] = tfx[0].high;
+      if(tfx[0].high > peakHigh[s][lvl]) peakHigh[s][lvl] = tfx[0].high;
    }
    else
    {
-      if(tfx[0].low < peakLow[s]) peakLow[s] = tfx[0].low;
+      if(tfx[0].low < peakLow[s][lvl]) peakLow[s][lvl] = tfx[0].low;
    }
 
    double point   = SymbolInfoDouble(syms[s], SYMBOL_POINT);
@@ -702,19 +762,19 @@ void ManageProtection(int s)
    int    digits  = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
 
    ulong ticket;
-   if(!TradeTicket(s, ticket)) return;
+   if(!LevelTicket(s, lvl, ticket)) return;
    double slCur = PositionGetDouble(POSITION_SL);
 
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
 
-   // R3: self-heal a missing stop loss. Anchored at the ENTRY price so
-   // the tail definition never drifts; only attaches while no other stop
-   // exists — BE/chandelier take over from there and only ever tighten.
+   // R3: self-heal a missing stop loss. Anchored at the ENTRY price so it
+   // never drifts; only attaches while no other stop exists — BE/chandelier
+   // take over from there and only ever tighten.
    if(InpStopLossEnabled && slCur == 0.0)
    {
-      double dSl = NormalizeDouble(isLong ? entryPrice[s] - InpStopATRMult * atrVal
-                                          : entryPrice[s] + InpStopATRMult * atrVal,
+      double dSl = NormalizeDouble(isLong ? entryPrice[s][lvl] - InpStopATRMult * atrVal
+                                          : entryPrice[s][lvl] + InpStopATRMult * atrVal,
                                    digits);
       bool okD = isLong ? (dSl > 0 && dSl < bid - minDist)
                         : (dSl > ask + minDist);
@@ -723,20 +783,20 @@ void ManageProtection(int s)
          if(trade.PositionModify(ticket, dSl, 0))
             slCur = dSl;
          else
-            Print(PCTime() + " | " + syms[s] + " H4 stop loss attach failed, retcode " +
+            Print(PCTime() + " | " + syms[s] + " " + LvlName(lvl) + " stop loss attach failed, retcode " +
                   IntegerToString(trade.ResultRetcode()));
       }
    }
 
    // Break-even
-   if(!beMoved[s])
+   if(!beMoved[s][lvl])
    {
-      bool armed = isLong ? (bid >= entryPrice[s] + InpBEProfitATR * atrVal)
-                          : (ask <= entryPrice[s] - InpBEProfitATR * atrVal);
+      bool armed = isLong ? (bid >= entryPrice[s][lvl] + InpBEProfitATR * atrVal)
+                          : (ask <= entryPrice[s][lvl] - InpBEProfitATR * atrVal);
       if(armed)
       {
-         double slNew = isLong ? entryPrice[s] + InpBECoverPoints * point
-                               : entryPrice[s] - InpBECoverPoints * point;
+         double slNew = isLong ? entryPrice[s][lvl] + InpBECoverPoints * point
+                               : entryPrice[s][lvl] - InpBECoverPoints * point;
          slNew = NormalizeDouble(slNew, digits);
 
          bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist)
@@ -744,10 +804,10 @@ void ManageProtection(int s)
          if(ok)
          {
             if(!trade.PositionModify(ticket, slNew, 0))
-               Print(PCTime() + " | " + syms[s] + " H4 BE SL modify failed, retcode " +
+               Print(PCTime() + " | " + syms[s] + " " + LvlName(lvl) + " BE SL modify failed, retcode " +
                      IntegerToString(trade.ResultRetcode()));
             else
-               beMoved[s] = true;
+               beMoved[s][lvl] = true;
          }
       }
    }
@@ -755,15 +815,15 @@ void ManageProtection(int s)
    // Chandelier trail behind the peak. Only ever tightens, keeps out of the
    // broker minimum stop distance, and skips microscopic improvements
    // (0.3x ATR). Re-read the current stop first — BE may have moved it.
-   if(!TradeTicket(s, ticket)) return;
+   if(!LevelTicket(s, lvl, ticket)) return;
    slCur = PositionGetDouble(POSITION_SL);
 
-   bool armed = isLong ? (bid >= entryPrice[s] + InpTrailActivateATR * atrVal)
-                       : (ask <= entryPrice[s] - InpTrailActivateATR * atrVal);
+   bool armed = isLong ? (bid >= entryPrice[s][lvl] + InpTrailActivateATR * atrVal)
+                       : (ask <= entryPrice[s][lvl] - InpTrailActivateATR * atrVal);
    if(armed)
    {
-      double slNew = isLong ? peakHigh[s] - InpTrailATR * atrVal
-                            : peakLow[s] + InpTrailATR * atrVal;
+      double slNew = isLong ? peakHigh[s][lvl] - InpTrailATR * atrVal
+                            : peakLow[s][lvl] + InpTrailATR * atrVal;
       slNew = NormalizeDouble(slNew, digits);
 
       bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist &&
@@ -773,25 +833,25 @@ void ManageProtection(int s)
       if(ok)
       {
          if(!trade.PositionModify(ticket, slNew, 0))
-            Print(PCTime() + " | " + syms[s] + " H4 trail SL modify failed, retcode " +
+            Print(PCTime() + " | " + syms[s] + " " + LvlName(lvl) + " trail SL modify failed, retcode " +
                   IntegerToString(trade.ResultRetcode()));
       }
    }
 }
 
 //==============================================================
-// Rejection Candle Exit: closes the trade when a VERY STRONG
-// rejection forms against it on H4 (last closed bar). All four
-// conditions must hold — a swing sweep plus a dominant wick plus
-// a strong close-back on a candle whose body opposes the trade.
-// Returns 1 (bullish), -1 (bearish), 0 (none).
+// Rejection Candle Exit: closes a trade when a VERY STRONG
+// rejection forms against it on the tier TF (last closed bar).
+// All four conditions must hold — a swing sweep plus a dominant
+// wick plus a strong close-back on a candle whose body opposes
+// the trade. Returns 1 (bullish), -1 (bearish), 0 (none).
 //==============================================================
 
-int RejectionCandle(int s)
+int RejectionCandle(int s, int tfIdx)
 {
    int need = 2 + InpRejSwingBars;
    MqlRates r[];
-   if(CopyRates(syms[s], PERIOD_H4, 0, need, r) < need) return 0;
+   if(CopyRates(syms[s], tfs[tfIdx], 0, need, r) < need) return 0;
    ArraySetAsSeries(r, true);
 
    double o1 = r[1].open, c1 = r[1].close, h1 = r[1].high, l1 = r[1].low;
@@ -829,22 +889,23 @@ int RejectionCandle(int s)
    return 0;
 }
 
-// Close the trade with a notification; returns true only when nothing
-// remains open, so a failed close is retried next bar.
-bool ExitTrade(int s, string reason)
+// Close a tier's positions with a notification; returns true only when
+// nothing remains open, so a failed close is retried next bar.
+bool ExitLevel(int s, int l, string reason)
 {
-   string side = (state[s] == 1) ? "Long" : "Short";
-   string msg  = PCTime() + " | Close " + syms[s] + " " + side + " H4 (" + reason + ")";
+   string side = (state[s][l] == 1) ? "Long" : "Short";
+   string msg  = PCTime() + " | Close " + syms[s] + " " + side + " " +
+                 LvlName(l) + " (" + reason + ")";
    Print(msg); SendNotification(msg);
 
-   if(ClosePositions(s))
+   if(CloseLevelPositions(s, l))
    {
-      state[s] = 0;
-      msg = PCTime() + " | " + syms[s] + " H4 trade closed";
+      state[s][l] = 0;
+      msg = PCTime() + " | " + syms[s] + " " + LvlName(l) + " tier closed";
       Print(msg); SendNotification(msg);
       return true;
    }
-   Print(PCTime() + " | " + syms[s] + " H4 exit signal but positions still open — will retry");
+   Print(PCTime() + " | " + syms[s] + " " + LvlName(l) + " exit signal but positions still open — will retry");
    return false;
 }
 
@@ -872,35 +933,72 @@ void OnTick()
 
       if(!synced) { SyncStateFromPositions(); synced = true; }
 
-      // Exits and profit protection
-      if(state[s] != 0 && InCloudTouch(s, state[s]))
-         ExitTrade(s, "kumo touch");
-
-      if(InpRejectionExit && state[s] != 0)
+      // Exits and profit protection per tier
+      for(int l = 0; l < LEVELS; l++)
       {
-         int rj = RejectionCandle(s);
-         if(rj != 0 && rj == -state[s])
-            ExitTrade(s, "rejection");
+         if(state[s][l] != 0 && InCloudTouch(s, lvlTf[l], state[s][l]))
+            ExitLevel(s, l, "kumo touch");
+
+         if(InpRejectionExit && state[s][l] != 0)
+         {
+            int rj = RejectionCandle(s, lvlTf[l]);
+            if(rj != 0 && rj == -state[s][l])
+               ExitLevel(s, l, "rejection");
+         }
+
+         if(state[s][l] != 0) ManageLevelProtection(s, l);
       }
 
-      if(state[s] != 0) ManageProtection(s);
+      // Entry consolidation: tiers are scanned largest first and only the
+      // largest aligned one opens; when H4 opens, a running H1 trade is
+      // closed first. R2: never add exposure while an unmanageable magic
+      // position sits on this symbol.
+      int topTier = -1;
+      int topDir  = 0;
+      if(!symBlockedUnknown[s] && SpreadOK(syms[s]))
+      {
+         for(int l = LEVELS - 1; l >= 0; l--)
+         {
+            if(state[s][l] != 0) continue;
+            if(l == LVL_H4 && !InpH4Tier) continue;
+            if(l == LVL_H1 && !InpH1Tier) continue;
 
-      // Entry: one trade per symbol, only when M15..H4 all agree.
-      // R2: never add exposure while an unmanageable magic position sits
-      // on this symbol.
-      if(state[s] != 0 || symBlockedUnknown[s] || !SpreadOK(syms[s])) continue;
+            int st = ChainAligned(s, lvlTf[l]);
+            if(st == 0) continue;
+            if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
+            if(l == LVL_H1 && !H1TierH4OK(s, st)) continue;
+            if(l == LVL_H4 && InpD1Filter && DailyAlign(s) != st) continue;
 
-      int dir = ChainAligned(s);
-      if(dir == 0) continue;
-      if(InpCloudBiasEnabled && !CloudBiasOK(s, dir)) continue;
-      if(InpD1Filter && DailyAlign(s) != dir) continue;
+            topTier = l;
+            topDir  = st;
+            break;
+         }
+      }
 
-      double lots = RiskLots(s);
-      CapLotsToMargin(syms[s], (dir == 1), lots);
+      if(topTier < 0) continue;
 
-      if(!OpenTrade(s, dir, lots))
-         Print(PCTime() + " | " + syms[s] + " H4 entry signal but order failed, retcode " +
-               IntegerToString(trade.ResultRetcode()));
+      // Close any smaller (lower-tier) trades still running
+      for(int l = 0; l < topTier; l++)
+      {
+         if(state[s][l] != 0)
+         {
+            string msg = PCTime() + " | Close " + syms[s] + " " + LvlName(l) +
+                         " (superseded by " + LvlName(topTier) + ")";
+            Print(msg); SendNotification(msg);
+
+            if(CloseLevelPositions(s, l))
+               state[s][l] = 0;
+            else
+               Print(PCTime() + " | " + syms[s] + " " + LvlName(l) + " superseded but positions still open — will retry");
+         }
+      }
+
+      double lots = RiskLots(s, topTier);
+      CapLotsToMargin(syms[s], (topDir == 1), lots);
+
+      if(!OpenLevel(s, topTier, topDir, lots))
+         Print(PCTime() + " | " + syms[s] + " " + LvlName(topTier) +
+               " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
    }
 }
 //This work is my worship unto GOD

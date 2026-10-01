@@ -7138,9 +7138,9 @@ One month is a small sample. The stop-size split is the strongest signal:
 next are a minimum stop distance (for example ATR or several spreads) and
 an exit that needs a larger or longer-standing opposing gap.
 
-## 65. H4-M15 align only — the live build's H4 tier on its own, chain cut to M15
+## 65. M15-H1-H4 tiers — the live build cut to two tiers on an M15 base
 
-**File:** `experimental-h4-m15-align-only-ea.mq5`
+**File:** `experimental-m15-h1-h4-tiers-ea.mq5`
 **Magic number:** `20260887`
 
 User request (2026-10-01): "just h4-m1 align, no other tiers". A fork of the
@@ -7148,10 +7148,14 @@ live VPS build (`ichimoku-h4-m1-vps-ea.mq5`, which was not touched) with every
 tier except H4 removed. With one tier left, the bottom-up stack becomes a
 single H4 → M1 alignment again: M1, M5, M15, M30, H1 and H4 must all agree
 before the one trade opens. The same day the D1 filter was turned off and
-the chain was cut to M15..H4 (both below); the file was renamed from
-`experimental-h4-m1-align-only-ea.mq5` to match.
+the chain was cut to M15..H4, the disaster stop became a tight stop loss,
+and an M15-H1 tier was added (all below). The file was renamed twice to
+match: `experimental-h4-m1-align-only-ea.mq5` →
+`experimental-h4-m15-align-only-ea.mq5` → `experimental-m15-h1-h4-tiers-ea.mq5`.
 
-### What was removed
+### What was removed (first version)
+
+The H1 tier and the consolidation came back later; see "M15-H1 tier added".
 
 - The M5, M15, M30 and H1 tiers, with their risk inputs.
 - Entry consolidation and supersede-closes: with no smaller tier there is
@@ -7219,6 +7223,34 @@ tighten. Expect more and smaller losers: a 1-ATR adverse move inside an H4
 trend is common, so trades the cloud-touch exit used to ride through will
 now be stopped out. If the hit rate is too high, 1.5–2 is the next step;
 at 2 a stop-out costs exactly the risk %.
+
+### M15-H1 tier added (2026-10-01)
+
+On user request a second tier: **H1 = M15 + M30 + H1 aligned**, next to
+**H4 = M15 + M30 + H1 + H4 aligned**. The EA is a bottom-up stack again,
+with the live build's per-tier layout and consolidation: tiers are scanned
+largest first and only the largest aligned one opens; when H4 opens, a
+running H1 trade is closed first; an open H4 trade does not stop the H1
+tier from opening.
+
+The H1 tier takes the live H1 tier's settings:
+
+- **Cloud bias:** the future clouds of H1 and M30 (the tier TF and the one
+  below).
+- **Risk:** 10% / 5% / 1% (live H1). The H4 inputs are now `InpRiskPctH4*`.
+- **Exits and protection:** H1 cloud touch, with BE, the chandelier and the
+  tight stop loss all on ATR(H1).
+
+**One deliberate difference: the H4 gate.** The live H1 tier only trades
+with an aligned H4. Here, M15..H1 aligned plus an aligned H4 is the H4
+tier's own chain, so with that rule the H1 tier would only fire when the
+H4 tier is blocked by its cloud bias or already open. `InpH1H4Gate`
+therefore defaults to **off**, and the H1 tier trades M15..H1 on its own,
+even against H4. `1` (not against an aligned H4) and `2` (H4 aligned with
+it, the live rule) are there for A/B.
+
+`InpH1Tier` / `InpH4Tier` switch each tier off. With `InpH1Tier = false`
+the EA is the previous H4-only version.
 
 ### Status
 
