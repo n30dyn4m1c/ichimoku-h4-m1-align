@@ -7285,3 +7285,38 @@ switches of the §48 build ("H4 only", real ticks, $100 start): −$44 in
 09-19 (PF 1.11), from 37–67 trades a year. Those figures no longer apply to
 this file: with the D1 filter off and the chain cut to M15 it is a new,
 untested setup.
+
+## 66. Half disaster stop — the live build with the hard SL at 4 × ATR
+
+**File:** `experimental-bottomup-stack-half-disaster-stop-vps-ea.mq5`
+**Magic number:** `20260888`
+
+User request (2026-10-01): the current VPS EA with a disaster stop half the
+size. A copy of `ichimoku-h4-m1-vps-ea.mq5` as of `3b26578` (the live file was
+not touched) with one input changed: **`InpDisasterATRMult` 8 → 4**. Every
+tier's hard SL now sits ATR(tier TF) × 4 from entry instead of × 8. The only
+other difference is the magic number, so it can run beside the live build
+without touching its positions. `diff` against the live file shows those two
+lines and the added header block, nothing else.
+
+### What it changes
+
+- **Loss on a full disaster hit.** Lots are sized as if the stop were
+  ATR × 2 away (`InpRiskATRMult`), so a hit costs about stop / 2 times the
+  tier's risk %. At × 8 that was about 4× the risk % (80% of equity on an H4
+  trade at the 20% tier-1 risk, 40% on H1); at × 4 it is about 2× (40% and
+  20%).
+- **How often it is hit.** The live disaster stop is meant for gaps and a
+  dead VPS, and almost never trades. At 4 × ATR it sits closer, so some
+  trades that dipped deep and then recovered to the cloud-touch exit or
+  break-even will now be stopped out instead. A backtest will show whether
+  the smaller losses outweigh those.
+- Unchanged: entries, the H4/H1 bias gates, the D1 filter, the cloud-touch
+  and rejection exits, break-even, the chandelier, the risk regimes, the
+  robustness pack and the dropped M5 tier.
+
+### Status
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested. The
+comparison to run is this file against the live build on the same data, as
+in §48/§50 (GOLDm#, real ticks, $100 start, 2024, 2025 and 2026).
