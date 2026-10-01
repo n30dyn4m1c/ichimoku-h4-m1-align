@@ -9,7 +9,7 @@
 //| (supersede-closes) and the H1 stand-in bias are gone — the H4     |
 //| tier never used the stand-in, and with no smaller tiers there is  |
 //| nothing to supersede. Everything that applied to the H4 tier in   |
-//| the live build is kept as it was:                                 |
+//| the live build is kept as it was, except the D1 filter (now off): |
 //| Entry: per-TF alignment (price + chikou above/below tenkan,       |
 //|        kijun and cloud) on M1, M5, M15, M30, H1 and H4, all in    |
 //|        the same direction. H4 is part of the chain, so the H4     |
@@ -18,8 +18,10 @@
 //|        vs Span B, Kijun bars ahead) of H4 and of the TF directly  |
 //|        below it, H1, must be twisted the trade's way; the current |
 //|        cloud may be either direction.                             |
-//|        D1 filter (InpD1Filter): D1 bullish -> buys only, D1       |
-//|        bearish -> sells only, D1 in the cloud -> no trades.       |
+//|        D1 filter (InpD1Filter): OFF by default (user, 2026-10-01) |
+//|        — the trade needs only H4 down to M1. On, it restores the  |
+//|        live H4 tier's rule: D1 bullish -> buys only, D1 bearish   |
+//|        -> sells only, D1 in the cloud -> no trades.               |
 //|        Spread cap InpMaxSpreadPoints.                             |
 //| Exit:  price TOUCHES the H4 cloud edge (a long when the bid       |
 //|        touches the upper edge, a short when the ask touches the   |
@@ -66,7 +68,7 @@ input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may 
 
 input group  "Entry Filters"
 input bool   InpCloudBiasEnabled = true;   // Require the H4 and H1 future clouds (Span A vs Span B) to carry the trade
-input bool   InpD1Filter         = true;   // D1 bias: trade only in the D1's direction; D1 in the cloud = no trades
+input bool   InpD1Filter         = false;  // D1 bias (off by default; true = live H4 tier): trade only in the D1's direction, D1 in the cloud = no trades
 input int    InpMaxSpreadPoints  = 60;     // Max spread in points to allow entry (0 = no limit)
 
 input group  "Profit Protection"

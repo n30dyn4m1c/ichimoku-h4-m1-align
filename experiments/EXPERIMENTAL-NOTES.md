@@ -7165,9 +7165,6 @@ before the one trade opens.
 - **Cloud bias** (`InpCloudBiasEnabled`): the future cloud of H4 and of the
   timeframe below it, H1, must be twisted the trade's way. The current
   cloud may be either direction.
-- **D1 filter** (`InpD1Filter`): buys only when D1 is bullish, sells only when
-  D1 is bearish, nothing while D1 closes in its cloud. Switch it off for a
-  pure H4-M1 alignment.
 - **Spread cap** of 60 points.
 - **Exit:** price touches the H4 cloud edge. The rejection-candle exit is
   there but off, as in the live build.
@@ -7180,12 +7177,21 @@ before the one trade opens.
 - Position comments stay `Exp Buy H4` / `Exp Sell H4`. The magic is new, so
   this EA never touches live positions.
 
+### D1 filter off (2026-10-01)
+
+The live H4 tier also needs D1 to agree: buys only when D1 is bullish,
+sells only when D1 is bearish, nothing while D1 closes in its cloud. On user
+instruction `InpD1Filter` now defaults to **false**, so the trade needs only
+H4 down to M1. Setting it to `true` restores the live H4 tier's rule.
+
 ### Status
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
 
-§50 already ran this logic through the tier switches of the §48 build
-("H4 only", real ticks, $100 start): −$44 in 2024 (PF 0.89, 87% drawdown),
-+$303 in 2025 (PF 1.11), +$76 in 2026 to 09-19 (PF 1.11), from 37–67 trades a
-year. A backtest of this file should reproduce those figures; a mismatch
-would mean the fork has drifted from the live H4 tier.
+§50 already ran the live H4 tier, D1 filter included, through the tier
+switches of the §48 build ("H4 only", real ticks, $100 start): −$44 in
+2024 (PF 0.89, 87% drawdown), +$303 in 2025 (PF 1.11), +$76 in 2026 to
+09-19 (PF 1.11), from 37–67 trades a year. A backtest of this file with
+`InpD1Filter = true` should reproduce those figures; a mismatch would mean
+the fork has drifted from the live H4 tier. The default (D1 off) is new
+and untested.
