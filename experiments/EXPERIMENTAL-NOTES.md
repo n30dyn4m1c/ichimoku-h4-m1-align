@@ -7138,16 +7138,18 @@ One month is a small sample. The stop-size split is the strongest signal:
 next are a minimum stop distance (for example ATR or several spreads) and
 an exit that needs a larger or longer-standing opposing gap.
 
-## 65. H4-M1 align only — the live build's H4 tier on its own
+## 65. H4-M15 align only — the live build's H4 tier on its own, chain cut to M15
 
-**File:** `experimental-h4-m1-align-only-ea.mq5`
+**File:** `experimental-h4-m15-align-only-ea.mq5`
 **Magic number:** `20260887`
 
 User request (2026-10-01): "just h4-m1 align, no other tiers". A fork of the
 live VPS build (`ichimoku-h4-m1-vps-ea.mq5`, which was not touched) with every
 tier except H4 removed. With one tier left, the bottom-up stack becomes a
 single H4 → M1 alignment again: M1, M5, M15, M30, H1 and H4 must all agree
-before the one trade opens.
+before the one trade opens. The same day the D1 filter was turned off and
+the chain was cut to M15..H4 (both below); the file was renamed from
+`experimental-h4-m1-align-only-ea.mq5` to match.
 
 ### What was removed
 
@@ -7160,8 +7162,8 @@ before the one trade opens.
 
 ### What is kept, exactly as the live H4 tier has it
 
-- **Entry:** price and chikou above/below tenkan, kijun and cloud on all six
-  timeframes, in one direction, on the last closed bar.
+- **Entry:** price and chikou above/below tenkan, kijun and cloud on every
+  timeframe of the chain, in one direction, on the last closed bar.
 - **Cloud bias** (`InpCloudBiasEnabled`): the future cloud of H4 and of the
   timeframe below it, H1, must be twisted the trade's way. The current
   cloud may be either direction.
@@ -7182,16 +7184,26 @@ before the one trade opens.
 The live H4 tier also needs D1 to agree: buys only when D1 is bullish,
 sells only when D1 is bearish, nothing while D1 closes in its cloud. On user
 instruction `InpD1Filter` now defaults to **false**, so the trade needs only
-H4 down to M1. Setting it to `true` restores the live H4 tier's rule.
+H4 down to the bottom of the chain. Setting it to `true` restores the live
+H4 tier's rule.
+
+### Chain cut to M15..H4 (2026-10-01)
+
+On user instruction the chain is now **M15, M30, H1 and H4**; M1 and M5 no
+longer take part in the entry. The cloud bias is unchanged (H4 and H1
+future clouds), as are the exits, protection and risk. The EA still wakes
+on every closed M1 bar, so the cloud-touch exit and the stops react within
+a minute, and a fresh M15..H4 alignment is caught within a minute of the
+M15 close that completes it. Without the M1 and M5 rungs the entry fires
+more often and earlier than the live H4 tier's, so expect more trades.
 
 ### Status
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.
 
-§50 already ran the live H4 tier, D1 filter included, through the tier
+§50 already ran the live H4 tier (D1 filter on, chain M1..H4) through the tier
 switches of the §48 build ("H4 only", real ticks, $100 start): −$44 in
 2024 (PF 0.89, 87% drawdown), +$303 in 2025 (PF 1.11), +$76 in 2026 to
-09-19 (PF 1.11), from 37–67 trades a year. A backtest of this file with
-`InpD1Filter = true` should reproduce those figures; a mismatch would mean
-the fork has drifted from the live H4 tier. The default (D1 off) is new
-and untested.
+09-19 (PF 1.11), from 37–67 trades a year. Those figures no longer apply to
+this file: with the D1 filter off and the chain cut to M15 it is a new,
+untested setup.

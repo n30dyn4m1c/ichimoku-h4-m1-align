@@ -1,25 +1,27 @@
 //+------------------------------------------------------------------+
-//| Ichimoku H4-M1 Align Only EA — the live build's H4 tier alone     |
-//| EXPERIMENTAL (2026-10-01, user request: "just h4-m1 align, no     |
-//| other tiers"). A fork of the live VPS build ichimoku-h4-m1-vps-   |
-//| ea.mq5 with every tier except H4 removed. With one tier left the  |
-//| bottom-up stack collapses back into a single H4 -> M1 alignment:  |
-//| every timeframe M1, M5, M15, M30, H1 and H4 must agree before the |
-//| one trade opens. The tier ladder, the entry consolidation         |
-//| (supersede-closes) and the H1 stand-in bias are gone — the H4     |
-//| tier never used the stand-in, and with no smaller tiers there is  |
-//| nothing to supersede. Everything that applied to the H4 tier in   |
-//| the live build is kept as it was, except the D1 filter (now off): |
+//| Ichimoku H4-M15 Align Only EA — the live build's H4 tier alone,   |
+//| chain cut to M15                                                  |
+//| EXPERIMENTAL (2026-10-01). Started as "just h4-m1 align, no other |
+//| tiers": a fork of the live VPS build ichimoku-h4-m1-vps-ea.mq5    |
+//| with every tier except H4 removed, which turns the bottom-up      |
+//| stack back into a single top-down alignment. Then, on user        |
+//| instruction, the D1 filter was turned off and the chain was cut   |
+//| from M1..H4 to M15..H4: M15, M30, H1 and H4 must all agree before |
+//| the one trade opens; M1 and M5 no longer take part. The tier      |
+//| ladder, the entry consolidation (supersede-closes) and the H1     |
+//| stand-in bias are gone — the H4 tier never used the stand-in, and |
+//| with no smaller tiers there is nothing to supersede. Everything   |
+//| else that applied to the H4 tier in the live build is kept:       |
 //| Entry: per-TF alignment (price + chikou above/below tenkan,       |
-//|        kijun and cloud) on M1, M5, M15, M30, H1 and H4, all in    |
-//|        the same direction. H4 is part of the chain, so the H4     |
-//|        bias is satisfied by construction.                         |
+//|        kijun and cloud) on M15, M30, H1 and H4, all in the same   |
+//|        direction. H4 is part of the chain, so the H4 bias is      |
+//|        satisfied by construction.                                 |
 //|        Cloud bias (InpCloudBiasEnabled): the FUTURE cloud (Span A |
 //|        vs Span B, Kijun bars ahead) of H4 and of the TF directly  |
 //|        below it, H1, must be twisted the trade's way; the current |
 //|        cloud may be either direction.                             |
 //|        D1 filter (InpD1Filter): OFF by default (user, 2026-10-01) |
-//|        — the trade needs only H4 down to M1. On, it restores the  |
+//|        — the trade needs only H4 down to M15. On, it restores the |
 //|        live H4 tier's rule: D1 bullish -> buys only, D1 bearish   |
 //|        -> sells only, D1 in the cloud -> no trades.               |
 //|        Spread cap InpMaxSpreadPoints.                             |
@@ -37,11 +39,9 @@
 //| Robustness pack R2-R5 kept (unknown-position guard, disaster      |
 //| stop, chandelier peak rebuild after restart, per-symbol filling + |
 //| capped margin). VPS-style: journal Print + SendNotification only, |
-//| logic on closed M1 bars. Position comment "Exp Buy H4" / "Exp     |
-//| Sell H4", as in the live build.                                   |
-//| Note: notes §50 already measured "H4 only" through the tier       |
-//| switches of the §48 build (+$76 to +$303 a year from $100); this  |
-//| file is the same logic as a standalone EA.                        |
+//| logic still runs once per closed M1 bar so the cloud-touch exit   |
+//| and the stops react within a minute. Position comment "Exp Buy    |
+//| H4" / "Exp Sell H4", as in the live build.                        |
 //| Magic: 20260887 — unique (see notes §65).                         |
 //| Author: Neo Malesa                                               |
 //+------------------------------------------------------------------+
@@ -90,12 +90,12 @@ input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this 
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
-#define TFS      6      // chain: M1, M5, M15, M30, H1, H4
-#define IDX_H1   4      // index of H1 in tfs[] — the TF below H4 in the cloud bias gate
-#define IDX_H4   5      // index of H4 in tfs[] — the traded timeframe
+#define TFS      4      // chain: M15, M30, H1, H4
+#define IDX_H1   2      // index of H1 in tfs[] — the TF below H4 in the cloud bias gate
+#define IDX_H4   3      // index of H4 in tfs[] — the traded timeframe
 
-ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
-string          tfName[TFS] = { "M1", "M5", "M15", "M30", "H1", "H4" };
+ENUM_TIMEFRAMES tfs[TFS] = { PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
+string          tfName[TFS] = { "M15", "M30", "H1", "H4" };
 
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];           // D1 ichimoku handle — bias filter
@@ -118,7 +118,7 @@ bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-int MAGIC = 20260887;   // H4-M1 align only — unique
+int MAGIC = 20260887;   // H4-M15 align only — unique
 
 CTrade trade;
 
@@ -351,9 +351,9 @@ int CheckAlign(int s, int tfIdx)
 }
 
 //==============================================================
-// Chain Check: M1, M5, M15, M30, H1 and H4 must all be aligned
-// in the SAME direction. Checked from M1 up so the cheap, most
-// often failing timeframe short-circuits first.
+// Chain Check: M15, M30, H1 and H4 must all be aligned in the
+// SAME direction. Checked from M15 up so the most often failing
+// timeframe short-circuits first.
 //==============================================================
 
 int ChainAligned(int s)
@@ -604,7 +604,7 @@ bool OpenTrade(int s, int dir, double lots)
       beMoved[s]    = false;
       string action = (dir == 1) ? "Buy" : "Sell";
       string msg = PCTime() + " | " + action + " " + sym + " H4 @ " +
-                   DoubleToString(lots, 2) + " (H4-M1 align)";
+                   DoubleToString(lots, 2) + " (H4-M15 align)";
       Print(msg); SendNotification(msg);
    }
    return ok;
@@ -882,7 +882,7 @@ void OnTick()
 
       if(state[s] != 0) ManageProtection(s);
 
-      // Entry: one trade per symbol, only when M1..H4 all agree.
+      // Entry: one trade per symbol, only when M15..H4 all agree.
       // R2: never add exposure while an unmanageable magic position sits
       // on this symbol.
       if(state[s] != 0 || symBlockedUnknown[s] || !SpreadOK(syms[s])) continue;
