@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
-//| EXPERIMENTAL — HALF DISASTER STOP (2026-10-01, user request).     |
+//| EXPERIMENTAL — QUARTER DISASTER STOP (2026-10-02, user request).  |
 //| A copy of the live VPS build ichimoku-h4-m1-vps-ea.mq5 (3b26578)  |
-//| with ONE change: the R3 disaster stop is half the size,           |
-//| InpDisasterATRMult 8 -> 4, so every tier's hard SL sits           |
-//| ATR(tier TF) x 4 from entry instead of x 8. Lots are sized on     |
-//| ATR x 2, so a full disaster hit now costs about twice the tier's  |
-//| risk % instead of about four times it. Everything else — entries, |
-//| bias gates, exits, BE/chandelier, risk regimes — is the live      |
-//| build's byte for byte. Magic 20260888 (live: 20260858). Notes §66.|
+//| with ONE change: the R3 disaster stop is a quarter of the size,   |
+//| InpDisasterATRMult 8 -> 2 (it was halved to 4 first, 2026-10-01), |
+//| so every tier's hard SL sits ATR(tier TF) x 2 from entry instead  |
+//| of x 8. That is the risk-sizing distance (InpRiskATRMult = 2), so |
+//| a full stop-out now costs about the tier's risk % itself instead  |
+//| of about four times it. Everything else — entries, bias gates,    |
+//| exits, BE/chandelier, risk regimes — is the live build's byte for |
+//| byte. Magic 20260888 (live: 20260858). Notes §66.                 |
 //| The live build's own header follows unchanged.                    |
 //| Ichimoku Bottom-Up Stack EA (H1 bias) — M1-STRICT CLOUD BIAS      |
 //| The live VPS build since 2026-08-23. The M1-strict cloud-bias     |
@@ -218,7 +219,7 @@ input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x 
 
 input group  "Disaster Stop (hard tail-risk stop)"
 input bool   InpDisasterStopEnabled = true;   // Attach a wide hard SL at entry (bounds gap/disconnect loss)
-input double InpDisasterATRMult     = 4.0;    // Disaster stop distance = ATR(level TF) x this (live: 8 — halved)
+input double InpDisasterATRMult     = 2.0;    // Disaster stop distance = ATR(level TF) x this (live: 8 — a quarter)
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
@@ -258,7 +259,7 @@ bool              symBlockedUnknown[MAX_SYMS];
 ulong             unknownLoggedTickets[64];
 int               unknownLoggedCount   = 0;
 
-int MAGIC = 20260888;   // half-disaster-stop experiment (live VPS build runs 20260858)
+int MAGIC = 20260888;   // quarter-disaster-stop experiment (live VPS build runs 20260858)
 
 CTrade trade;
 
