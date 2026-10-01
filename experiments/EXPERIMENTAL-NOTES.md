@@ -7170,7 +7170,7 @@ the chain was cut to M15..H4 (both below); the file was renamed from
 - **Spread cap** of 60 points.
 - **Exit:** price touches the H4 cloud edge. The rejection-candle exit is
   there but off, as in the live build.
-- **Protection:** disaster SL at ATR(H4) × 8, break-even at +0.5 ATR(H4)
+- **Protection:** disaster SL at ATR(H4) × 8 (now × 4, below), break-even at +0.5 ATR(H4)
   (entry + 15 points), chandelier 1 ATR(H4) behind the peak once +0.5 ATR(H4).
 - **Risk:** the live H4 regime, 20% below $7,000, 10% to $13,000 and 2%
   above, against ATR(H4) × 2, capped to 80% of free margin.
@@ -7196,6 +7196,15 @@ on every closed M1 bar, so the cloud-touch exit and the stops react within
 a minute, and a fresh M15..H4 alignment is caught within a minute of the
 M15 close that completes it. Without the M1 and M5 rungs the entry fires
 more often and earlier than the live H4 tier's, so expect more trades.
+
+### Smaller disaster stop (2026-10-01)
+
+On user instruction `InpDisasterATRMult` drops from 8 to **4**: the hard SL
+now sits 4 × ATR(H4) from entry. Lots are still sized as if the stop were
+2 × ATR(H4) away (`InpRiskATRMult`), so a full disaster-stop hit costs about
+twice the risk %: roughly 40% of equity at the 20% tier-1 risk, against
+about 80% with the old × 8 stop. The stop also comes into play more often,
+cutting trades that the H4 cloud-touch exit would otherwise have held.
 
 ### Status
 

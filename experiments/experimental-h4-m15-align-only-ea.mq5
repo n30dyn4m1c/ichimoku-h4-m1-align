@@ -29,7 +29,8 @@
 //|        touches the upper edge, a short when the ask touches the   |
 //|        lower edge). Optional strong-rejection-candle exit on H4   |
 //|        (off by default, as live).                                 |
-//| Protection: wide disaster SL at entry (ATR(H4) x 8), break-even   |
+//| Protection: disaster SL at entry (ATR(H4) x 4 — halved from the   |
+//|        live x 8, user 2026-10-01), break-even                     |
 //|        at +0.5 x ATR(H4) (entry + 15 points), chandelier trail    |
 //|        1 x ATR(H4) behind the peak once +0.5 x ATR(H4).           |
 //| Risk:  one position per symbol, % of actual equity against        |
@@ -80,7 +81,7 @@ input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x 
 
 input group  "Disaster Stop (hard tail-risk stop)"
 input bool   InpDisasterStopEnabled = true;   // Attach a wide hard SL at entry (bounds gap/disconnect loss)
-input double InpDisasterATRMult     = 8.0;    // Disaster stop distance = ATR(H4) x this
+input double InpDisasterATRMult     = 4.0;    // Disaster stop distance = ATR(H4) x this (live build: 8)
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close the trade when a very strong rejection candle forms against it on H4
