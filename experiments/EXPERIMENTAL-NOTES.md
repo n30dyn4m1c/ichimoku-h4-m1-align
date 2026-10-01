@@ -7252,6 +7252,29 @@ it, the live rule) are there for A/B.
 `InpH1Tier` / `InpH4Tier` switch each tier off. With `InpH1Tier = false`
 the EA is the previous H4-only version.
 
+### Both tiers at once, one stop size (2026-10-01)
+
+Three user instructions:
+
+- **H1 and H4 may fire at the same time.** The consolidation is gone. Each
+  tier opens on its own signal, so both can open on the same bar, and an
+  H4 entry no longer closes a running H1 trade. Each tier still holds at
+  most one position per symbol.
+- **The H1 tier's tight stop is the H4 tier's.** Both tiers put the stop
+  loss `InpStopATRMult` (1) × **ATR(H4)** from entry, so the H1 stop is now
+  wider than before (it was 1 × ATR(H1)). H1 lots are still sized on
+  2 × ATR(H1), so an H1 stop-out costs about the H1 risk % times
+  ATR(H4) / (2 × ATR(H1)): roughly the full risk % when ATR(H4) is about
+  twice ATR(H1). BE and the chandelier keep using the tier's own ATR.
+- **Risk stays as in the live VPS build.** It already matched: H1
+  10 / 5 / 1%, H4 20 / 10 / 2%, steps at $7,000 and $13,000, sizing on
+  ATR(tier TF) × 2, lots capped to 80% of free margin. With both tiers
+  open the account carries both, **30% at tier 1**.
+
+With no consolidation, `InpH1H4Gate = 2` (the live "H4 aligned with it"
+rule) is no longer pointless: the H1 tier would then mostly open next to
+an H4 trade, as a second position.
+
 ### Status
 
 Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested.

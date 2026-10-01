@@ -20,32 +20,33 @@
 //|        H4 gate on the H1 tier (InpH1H4Gate, OFF by default): the  |
 //|        live H1 tier needs H4 aligned WITH it, but on an M15 base  |
 //|        that is the H4 tier's own signal, so the H1 tier would     |
-//|        never trade on its own. Off, it trades M15..H1 alone;      |
+//|        only fire alongside H4. Off, it trades M15..H1 alone;      |
 //|        H1H4_NOT_AGAINST skips H1 trades against an aligned H4;    |
 //|        H1H4_WITH restores the live rule.                          |
 //|        D1 filter on the H4 tier (InpD1Filter): OFF by default.    |
 //|        On, H4 trades only in the D1's direction, none while D1    |
 //|        closes in its cloud — the live H4 tier's rule.             |
 //|        Spread cap InpMaxSpreadPoints.                             |
-//| Consolidation (as live): tiers are scanned largest first and only |
-//| the largest aligned tier opens. When the H4 tier opens, a running |
-//| H1 trade is closed first (superseded). An H4 trade already open   |
-//| does not stop the H1 tier from opening.                           |
+//| No consolidation (user, 2026-10-01): H1 and H4 fire on their own  |
+//| signals and may both open on the same bar when both are aligned;  |
+//| an H4 entry no longer closes a running H1 trade. Each tier keeps  |
+//| one position per symbol.                                          |
 //| Exit:  price TOUCHES the tier TF's cloud edge (a long when the    |
 //|        bid touches the upper edge, a short when the ask touches   |
 //|        the lower edge). Optional strong-rejection-candle exit on  |
 //|        the tier TF (off by default, as live).                     |
-//| Protection (ATR of the tier's own TF): TIGHT stop loss at entry,  |
-//|        ATR x InpStopATRMult (1; the live build's wide x 8         |
-//|        disaster stop turned into a real stop to cut losses — a    |
-//|        hit costs about half the risk %, since lots are sized on   |
-//|        ATR x 2), break-even at +0.5 x ATR (entry + 15 points),    |
-//|        chandelier trail 1 x ATR behind the peak once +0.5 x ATR   |
-//|        — the live H1/H4 tier settings.                            |
-//| Risk:  % of actual equity against ATR(tier TF) x InpRiskATRMult,  |
-//|        the live tiers' regimes: H1 10/5/1%, H4 20/10/2% (below    |
-//|        $7000 / to $13000 / above). Lots capped to                 |
-//|        InpMarginUsePct of free margin.                            |
+//| Protection: TIGHT stop loss at entry, ATR(H4) x InpStopATRMult    |
+//|        (1) on BOTH tiers — the H1 tier uses the H4 tier's stop    |
+//|        distance (user, 2026-10-01). It replaces the live build's  |
+//|        wide x 8 disaster stop. Break-even at +0.5 x ATR (entry +  |
+//|        15 points) and a chandelier trail 1 x ATR behind the peak  |
+//|        once +0.5 x ATR, on the tier's own TF ATR — the live H1/H4 |
+//|        tier settings.                                             |
+//| Risk:  unchanged from the live VPS build — % of actual equity     |
+//|        against ATR(tier TF) x InpRiskATRMult: H1 10/5/1%, H4      |
+//|        20/10/2% (below $7000 / to $13000 / above), lots capped to |
+//|        InpMarginUsePct of free margin. With both tiers open at    |
+//|        once the account carries both risks (30% at tier 1).       |
 //| Robustness pack R2-R5 kept (unknown-position guard, stop loss     |
 //| self-heal, chandelier peak rebuild after restart, per-symbol      |
 //| filling + capped margin). VPS-style: journal Print +              |
@@ -100,9 +101,9 @@ input int    InpBECoverPoints     = 15;    // Points beyond entry for the BE sto
 input double InpTrailActivateATR  = 0.5;   // Chandelier trail arms once profit >= this x ATR
 input double InpTrailATR          = 1.0;   // Trail distance behind the peak, x ATR
 
-input group  "Stop Loss (tight, ATR of the tier TF)"
+input group  "Stop Loss (tight, ATR(H4) on both tiers)"
 input bool   InpStopLossEnabled = true;   // Attach a tight hard SL at entry
-input double InpStopATRMult     = 1.0;    // Stop distance = ATR(tier TF) x this (live build's disaster stop: 8)
+input double InpStopATRMult     = 1.0;    // Stop distance = ATR(H4) x this, H1 and H4 tiers alike (live build's disaster stop: 8)
 
 input group  "Rejection Exit (strong rejection candle)"
 input bool   InpRejectionExit = false;  // Close a trade when a very strong rejection candle forms against it on the tier TF
@@ -124,7 +125,7 @@ int             lvlTf[LEVELS] = { 2, 3 };   // tfs[] index of each tier's TF
 
 int      ich[MAX_SYMS][TFS];
 int      ichD1[MAX_SYMS];             // D1 ichimoku handle — H4-tier bias filter
-int      atr[MAX_SYMS][LEVELS];       // ATR(tier TF) — sizing, BE, trail, stop loss
+int      atr[MAX_SYMS][LEVELS];       // ATR(tier TF) — sizing, BE, trail; ATR(H4) also sizes both stop losses
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 datetime lastM1bar[MAX_SYMS];
@@ -630,15 +631,15 @@ bool OpenLevel(int s, int lvl, int dir, double lots)
    // R5: pick a filling mode this symbol actually supports.
    trade.SetTypeFillingBySymbol(sym);
 
-   // Stop loss (the live build's R3 disaster stop, made tight), anchored
-   // at the entry price. If ATR or the broker distance check makes it
+   // Stop loss (the live build's R3 disaster stop, made tight), sized on
+   // ATR(H4) for BOTH tiers and anchored at the entry price. If ATR or the broker distance check makes it
    // invalid right now, the order goes out without it and
    // ManageLevelProtection re-attaches it next minute.
    double sl = 0.0;
    if(InpStopLossEnabled)
    {
       double a[1];
-      if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) > 0 && a[0] > 0)
+      if(CopyBuffer(atr[s][LVL_H4], 0, 1, 1, a) > 0 && a[0] > 0)
       {
          double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
          double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
@@ -715,8 +716,9 @@ bool CloseLevelPositions(int s, int lvl)
 //     reference is the highest high / lowest low of the tier TF,
 //     including the bar still forming; it only ever tightens and
 //     never sits inside the broker minimum stop.
-// ATR comes from the tier's own TF. The hard stop is the tight
-// ATR stop loss; if it ever goes missing, it is re-attached here.
+// BE and trail use the tier's own TF ATR. The hard stop is the
+// tight ATR(H4) stop loss on both tiers; if it ever goes missing,
+// it is re-attached here.
 //==============================================================
 
 bool LevelTicket(int s, int lvl, ulong &ticket)
@@ -768,13 +770,16 @@ void ManageLevelProtection(int s, int lvl)
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    double ask = SymbolInfoDouble(syms[s], SYMBOL_ASK);
 
-   // R3: self-heal a missing stop loss. Anchored at the ENTRY price so it
-   // never drifts; only attaches while no other stop exists — BE/chandelier
-   // take over from there and only ever tighten.
-   if(InpStopLossEnabled && slCur == 0.0)
+   // R3: self-heal a missing stop loss. Sized on ATR(H4) for both tiers and
+   // anchored at the ENTRY price so it never drifts; only attaches while no
+   // other stop exists — BE/chandelier take over from there and only ever
+   // tighten.
+   double aH4[1];
+   if(InpStopLossEnabled && slCur == 0.0 &&
+      CopyBuffer(atr[s][LVL_H4], 0, 1, 1, aH4) > 0 && aH4[0] > 0)
    {
-      double dSl = NormalizeDouble(isLong ? entryPrice[s][lvl] - InpStopATRMult * atrVal
-                                          : entryPrice[s][lvl] + InpStopATRMult * atrVal,
+      double dSl = NormalizeDouble(isLong ? entryPrice[s][lvl] - InpStopATRMult * aH4[0]
+                                          : entryPrice[s][lvl] + InpStopATRMult * aH4[0],
                                    digits);
       bool okD = isLong ? (dSl > 0 && dSl < bid - minDist)
                         : (dSl > ask + minDist);
@@ -949,56 +954,31 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
       }
 
-      // Entry consolidation: tiers are scanned largest first and only the
-      // largest aligned one opens; when H4 opens, a running H1 trade is
-      // closed first. R2: never add exposure while an unmanageable magic
-      // position sits on this symbol.
-      int topTier = -1;
-      int topDir  = 0;
-      if(!symBlockedUnknown[s] && SpreadOK(syms[s]))
+      // Entries: every flat tier that is aligned opens on its own — no
+      // consolidation, so H1 and H4 can both open on the same bar and an H4
+      // entry leaves a running H1 trade alone. R2: never add exposure while
+      // an unmanageable magic position sits on this symbol.
+      if(symBlockedUnknown[s] || !SpreadOK(syms[s])) continue;
+
+      for(int l = LEVELS - 1; l >= 0; l--)
       {
-         for(int l = LEVELS - 1; l >= 0; l--)
-         {
-            if(state[s][l] != 0) continue;
-            if(l == LVL_H4 && !InpH4Tier) continue;
-            if(l == LVL_H1 && !InpH1Tier) continue;
+         if(state[s][l] != 0) continue;
+         if(l == LVL_H4 && !InpH4Tier) continue;
+         if(l == LVL_H1 && !InpH1Tier) continue;
 
-            int st = ChainAligned(s, lvlTf[l]);
-            if(st == 0) continue;
-            if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
-            if(l == LVL_H1 && !H1TierH4OK(s, st)) continue;
-            if(l == LVL_H4 && InpD1Filter && DailyAlign(s) != st) continue;
+         int st = ChainAligned(s, lvlTf[l]);
+         if(st == 0) continue;
+         if(InpCloudBiasEnabled && !LevelCloudBiasOK(s, l, st)) continue;
+         if(l == LVL_H1 && !H1TierH4OK(s, st)) continue;
+         if(l == LVL_H4 && InpD1Filter && DailyAlign(s) != st) continue;
 
-            topTier = l;
-            topDir  = st;
-            break;
-         }
+         double lots = RiskLots(s, l);
+         CapLotsToMargin(syms[s], (st == 1), lots);
+
+         if(!OpenLevel(s, l, st, lots))
+            Print(PCTime() + " | " + syms[s] + " " + LvlName(l) +
+                  " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
       }
-
-      if(topTier < 0) continue;
-
-      // Close any smaller (lower-tier) trades still running
-      for(int l = 0; l < topTier; l++)
-      {
-         if(state[s][l] != 0)
-         {
-            string msg = PCTime() + " | Close " + syms[s] + " " + LvlName(l) +
-                         " (superseded by " + LvlName(topTier) + ")";
-            Print(msg); SendNotification(msg);
-
-            if(CloseLevelPositions(s, l))
-               state[s][l] = 0;
-            else
-               Print(PCTime() + " | " + syms[s] + " " + LvlName(l) + " superseded but positions still open — will retry");
-         }
-      }
-
-      double lots = RiskLots(s, topTier);
-      CapLotsToMargin(syms[s], (topDir == 1), lots);
-
-      if(!OpenLevel(s, topTier, topDir, lots))
-         Print(PCTime() + " | " + syms[s] + " " + LvlName(topTier) +
-               " entry signal but order failed, retcode " + IntegerToString(trade.ResultRetcode()));
    }
 }
 //This work is my worship unto GOD
