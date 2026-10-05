@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
-//| EXPERIMENT — M1/M5 LIQUIDITY SWEEP, THEN CHIKOU BREAKOUT (notes   |
-//| §71, magic 20260892). Two TIERS, M1 and M5, each trading its own  |
-//| timeframe alone — no timeframe looks at another:                  |
+//| EXPERIMENT — M1..H1 LIQUIDITY SWEEP, THEN CHIKOU BREAKOUT (notes  |
+//| §71, magic 20260892). Five TIERS — M1, M5, M15, M30 and H1 — each |
+//| trading its own timeframe alone; no timeframe looks at another:   |
 //|   * SWEEP: a wick trades beyond an UNRAIDED swing — the           |
 //|     po3-levels rules (§52): strictly beyond the InpLiqLeft candles|
 //|     before it, at least as far as the InpLiqRight after it, all   |
@@ -18,15 +18,15 @@
 //|     since it trips on the ask). A stop closer than the tier's     |
 //|     minimum ($2 on gold) is skipped: the spread eats small stops. |
 //|   * TP: the tier's target, 3 times the stop distance (3R).        |
-//|   * TIERS: M1 (InpM1Tier) and M5 (InpM5Tier) run the same rules   |
-//|     on their own bars, with their own window, minimum stop and    |
-//|     target, and hold one position each — tagged by comment, so an |
-//|     M1 and an M5 trade can run side by side. Bars, windows and    |
-//|     lookbacks are counted in the tier's own candles.              |
+//|   * TIERS: M1, M5, M15, M30 and H1 (InpM1Tier .. InpH1Tier) run   |
+//|     the same rules on their own bars, with their own window,      |
+//|     minimum stop, target and sizing basis, and hold one position  |
+//|     each — tagged by comment, so several tiers can run side by    |
+//|     side. Bars, windows and lookbacks count the tier's candles.   |
 //|   * SIZE: the live VPS build's M5 regime — 1% of equity below     |
-//|     $7000, 0.5% to $13000, 0.1% above — on each tier. M1 measures |
-//|     it on the ACTUAL stop (InpM1SizeBasis = SIZE_STOP), so a stop- |
-//|     out loses that %. M5 sizes it exactly as the live VPS M5 tier |
+//|     $7000, 0.5% to $13000, 0.1% above — on every tier. M1, M15,   |
+//|     M30 and H1 measure it on the ACTUAL stop (SIZE_STOP), so a    |
+//|     stop-out loses that %. M5 sizes it as the live VPS M5 tier    |
 //|     does (InpM5SizeBasis = SIZE_VPS_ATR), against ATR(M5, 14) x   |
 //|     InpRiskATRMult (2); the sweep stop is a median 2.6x that, so  |
 //|     an M5 stop-out loses ~2.6x the %. Capped to 80% of free       |
@@ -71,25 +71,46 @@ input int    InpM5SweepWindow    = 90;    // M5 bars after the sweep the chikou 
 input double InpM5MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM5TargetR        = 3.0;   // Take profit at this multiple of the stop distance
 
+input group  "M15 tier"
+input bool   InpM15Tier          = true;  // Trade the M15 tier
+input int    InpM15SweepWindow   = 90;    // M15 bars after the sweep the chikou breakout may come
+input double InpM15MinStop       = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
+input double InpM15TargetR       = 3.0;   // Take profit at this multiple of the stop distance
+
+input group  "M30 tier"
+input bool   InpM30Tier          = true;  // Trade the M30 tier
+input int    InpM30SweepWindow   = 90;    // M30 bars after the sweep the chikou breakout may come
+input double InpM30MinStop       = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
+input double InpM30TargetR       = 3.0;   // Take profit at this multiple of the stop distance
+
+input group  "H1 tier"
+input bool   InpH1Tier           = true;  // Trade the H1 tier
+input int    InpH1SweepWindow    = 90;    // H1 bars after the sweep the chikou breakout may come
+input double InpH1MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
+input double InpH1TargetR        = 3.0;   // Take profit at this multiple of the stop distance
+
 input group  "Risk Management (the live VPS build's M5/M15 regime, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
 input ENUM_SIZE_BASIS InpM1SizeBasis = SIZE_STOP;    // M1: distance the % is measured against
 input ENUM_SIZE_BASIS InpM5SizeBasis = SIZE_VPS_ATR; // M5: distance the % is measured against (the live VPS M5 tier's)
+input ENUM_SIZE_BASIS InpM15SizeBasis = SIZE_STOP;   // M15: distance the % is measured against
+input ENUM_SIZE_BASIS InpM30SizeBasis = SIZE_STOP;   // M30: distance the % is measured against
+input ENUM_SIZE_BASIS InpH1SizeBasis  = SIZE_STOP;   // H1: distance the % is measured against
 input double InpRiskATRMult     = 2.0;    // SIZE_VPS_ATR: reference stop = ATR(tier, InpATRPeriod) x this (the VPS value)
 input int    InpATRPeriod       = 14;     // ATR period (the VPS value)
 input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
-input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At), each of M1 and M5
+input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At), each timeframe tier
 input double InpRiskPct_T2      = 0.5;    // Tier 2 (half regime)
 input double InpRiskPct_T3      = 0.1;    // Tier 3 (equity >= Tier3At)
 input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may commit
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
-#define NT       2               // tiers: 0 = M1, 1 = M5
+#define NT       5               // tiers: 0 = M1, 1 = M5, 2 = M15, 3 = M30, 4 = H1
 
-const ENUM_TIMEFRAMES TF[NT]   = {PERIOD_M1, PERIOD_M5};
-const string          TFN[NT]  = {"M1", "M5"};
+const ENUM_TIMEFRAMES TF[NT]   = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1};
+const string          TFN[NT]  = {"M1", "M5", "M15", "M30", "H1"};
 
 string   syms[MAX_SYMS];
 int      symsCount = 0;
@@ -105,12 +126,62 @@ datetime lastShort[MAX_SYMS][NT];  // the newest sweep of a high
 int MAGIC = 20260892;   // M1/M5 liquidity sweep, then chikou breakout
 
 // Per-tier settings, read from the inputs.
-bool   TierOn(int t)     { return (t == 0) ? InpM1Tier        : InpM5Tier;        }
-int    TierWindow(int t) { return (t == 0) ? InpM1SweepWindow : InpM5SweepWindow; }
-double TierMinStop(int t){ return (t == 0) ? InpM1MinStop     : InpM5MinStop;     }
-double TierTargetR(int t){ return (t == 0) ? InpM1TargetR     : InpM5TargetR;     }
-string TierComment(int t){ return TFN[t] + " sweep chikou"; }
-ENUM_SIZE_BASIS TierBasis(int t) { return (t == 0) ? InpM1SizeBasis : InpM5SizeBasis; }
+bool TierOn(int t)
+{
+   switch(t)
+   {
+      case 0:  return InpM1Tier;
+      case 1:  return InpM5Tier;
+      case 2:  return InpM15Tier;
+      case 3:  return InpM30Tier;
+      default: return InpH1Tier;
+   }
+}
+int TierWindow(int t)
+{
+   switch(t)
+   {
+      case 0:  return InpM1SweepWindow;
+      case 1:  return InpM5SweepWindow;
+      case 2:  return InpM15SweepWindow;
+      case 3:  return InpM30SweepWindow;
+      default: return InpH1SweepWindow;
+   }
+}
+double TierMinStop(int t)
+{
+   switch(t)
+   {
+      case 0:  return InpM1MinStop;
+      case 1:  return InpM5MinStop;
+      case 2:  return InpM15MinStop;
+      case 3:  return InpM30MinStop;
+      default: return InpH1MinStop;
+   }
+}
+double TierTargetR(int t)
+{
+   switch(t)
+   {
+      case 0:  return InpM1TargetR;
+      case 1:  return InpM5TargetR;
+      case 2:  return InpM15TargetR;
+      case 3:  return InpM30TargetR;
+      default: return InpH1TargetR;
+   }
+}
+ENUM_SIZE_BASIS TierBasis(int t)
+{
+   switch(t)
+   {
+      case 0:  return InpM1SizeBasis;
+      case 1:  return InpM5SizeBasis;
+      case 2:  return InpM15SizeBasis;
+      case 3:  return InpM30SizeBasis;
+      default: return InpH1SizeBasis;
+   }
+}
+string TierComment(int t) { return TFN[t] + " sweep chikou"; }
 
 CTrade trade;
 
@@ -293,11 +364,12 @@ bool HasPosition(string sym, int t)
 // trade loses that %. SIZE_VPS_ATR measures it against ATR(tier) x
 // InpRiskATRMult as the VPS build does — it has no entry stop, this
 // EA does, and the sweep stop is usually 2.5-3x that reference. The
-// basis is set per tier: M1 on the stop, M5 the VPS way.
+// basis is set per tier: M5 the VPS way, the others on the stop.
 // Falls back to InpFixedLots when the sizing data is unavailable;
 // every order is capped to the free margin. Each tier risks the %
-// on its own, so with an M1 and an M5 trade open together the
-// account carries twice it.
+// on its own, so with several tiers open at once the account
+// carries that many times it. On a small account the broker's
+// minimum lot can exceed the % on the wide M30/H1 stops.
 //==============================================================
 
 double RiskPct()

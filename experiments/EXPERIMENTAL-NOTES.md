@@ -7952,6 +7952,48 @@ about 2.6× the nominal %:
 
 `InpM5SizeBasis = SIZE_STOP` puts M5 back on the actual stop.
 
+### M15, M30 and H1 tiers (added 2026-10-06)
+
+Three more tiers run the same rules on their own candles (`InpM15Tier`,
+`InpM30Tier`, `InpH1Tier`, all on). They use the same untuned settings (90-bar
+window, $2 minimum stop, 3R), so an H1 sweep may wait up to 90 hours for its
+breakout. Every tier holds one position, tagged `M15 sweep chikou` and so on.
+
+**Risk.** The user chose 1% / 0.5% / 0.1% on every tier, measured on the
+actual stop (`InpM15SizeBasis` / `InpM30SizeBasis` / `InpH1SizeBasis =
+SIZE_STOP`), rather than the live VPS figures. M5 keeps the VPS sizing
+chosen earlier. The VPS's own M30 (5%) and H1 (10%) on 2×ATR were simulated
+first and **wipe out a $100 account** on either tier alone. With all five
+tiers, $10,000 suffers a 100% drawdown (worst single loss 60%), because the
+sweep stops are about 2.5× that reference.
+
+Simulated per tier (same data and settings):
+
+| Tier | Trades | Per trade | PF | 2023 / 24 / 25 / 26 | Longs / shorts | Placebo | Beats placebo | Median stop |
+|---|---|---|---|---|---|---|---|---|
+| M15 | 265 | +0.26R | 1.37 | −0.14 / +0.33 / +0.52 / +0.21 | +0.55 / −0.08 | +0.26R | 12/20 | $19 |
+| M30 | 128 | +0.31R | 1.46 | −0.08 / +0.27 / +0.55 / +0.88 | +0.71 / −0.25 | +0.27R | 12/20 | $25 |
+| H1 | 69 | +0.22R | 1.31 | +0.25 / +0.39 / +0.07 / +0.07 | +0.82 / −0.33 | +0.32R | 6/20 | $37 |
+
+Same story as M5: the sweep adds nothing above M1. Random timing earns as
+much, all of it on longs, and shorts lose on every tier. H1 has only 69 trades.
+
+Account (trades merged by entry time; the 0.1-lot minimum included):
+
+| Tiers, as built | From $100 | From $10,000 |
+|---|---|---|
+| M1 + M5 | $3,178, DD 68%, worst loss 19% | $20,664, DD 41% |
+| M15 + M30 + H1 | $227, DD 80%, worst loss 21% | $13,911, DD 14% |
+| **All five** | **$7,866, DD 93%, worst loss 19%** | $22,086, DD 56% |
+| All five, M5 also on the stop | $9,344, DD 50%, worst loss 8% | $21,705, DD 21% |
+
+From $100 the higher tiers are dominated by the **0.1-lot minimum**. A $25–37
+stop at 0.1 lot is $2.50–3.70, 25–37% of the account, whatever the %. Their
+risk only reaches the intended 1% once the account is a few hundred dollars
+per tier.
+
+The file name still says `m1`. It is kept so the references stay valid.
+
 **Status:** compiled clean in MetaEditor (0 errors, 0 warnings). Simulated
 only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R
 drawdown is about 32% of equity (compounded), so test at lower risk before
