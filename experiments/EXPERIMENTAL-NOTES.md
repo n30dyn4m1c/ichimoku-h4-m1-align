@@ -7682,3 +7682,69 @@ tier-3 bands (28%). At the live bands it is ruined in 2023.
 - Caveats: one data feed (HistData, not XM's), constant spread, no swaps (they
   would hurt the multi-day H1/H4 trades) and no slippage. A real-tick MT5
   run of 2023 is the check to make before acting on the 2023 finding.
+
+## 70. M1 chikou breakout to unraided liquidity
+
+**File:** `experimental-m1-chikou-liquidity-ea.mq5`
+**Magic number:** `20260891`
+
+A standalone EA on **one timeframe, M1**. No bias timeframe, no stack, no
+higher-timeframe filter. It joins three ideas: the live build's chikou
+test, the unraided liquidity of §52 as the target, and a "free to move" road
+from the entry to that target. It runs once per closed M1 bar, holds one
+position per symbol and exits only at its SL or TP.
+
+### Entry: the chikou span breakout
+
+The live VPS build's chikou test (`CheckAlign`), applied to the chikou alone.
+For the last closed bar, the chikou (its close, plotted `Kijun` = 26 bars
+back) must, for a **buy**, be:
+
+- above the **cloud** where the chikou is plotted (above both spans there),
+- above the **price** 26 bars back (that candle's high),
+- above the **tenkan and kijun** 26 bars back.
+
+A **sell** is the mirror: below the cloud, the low, the tenkan and the kijun.
+`InpChikouBothLines = false` accepts the tenkan *or* the kijun instead of
+both. It is a **breakout**, so the test must be newly true: it passes on the
+closed bar and did not pass the same way on the bar before.
+
+### Target: unraided M1 liquidity
+
+The nearest unraided M1 swing beyond the entry becomes the broker-side TP: a
+high above for a buy, a low below for a sell. It is found with the
+`po3-levels` rules (§52), ported verbatim from §53/§58: strictly beyond the 6
+candles before, at least as far as the 6 after, within the last 100 candles,
+and unraided while no later wick (the live candle included) has traded beyond
+it. No level means no trade. `InpLiqTPOffsetPoints` pulls the TP in front of
+the level.
+
+### Free to move
+
+A level counts as an obstacle only when it lies **strictly between** the
+start and the target. Anything beyond the target is never reached, because
+the TP fills first.
+
+- **Price** (`InpPriceFree`): the M1 tenkan, kijun and both cloud edges at
+  the closed bar must not lie between the entry and the target.
+- **Chikou** (`InpChikouFreeBars`, 9): over the bars the chikou walks into
+  next (shifts 26, 25, ...), no candle (its high for a buy, low for a sell),
+  tenkan, kijun or cloud edge may lie between the chikou and the target.
+  `0` turns the chikou road check off.
+
+The "no unraided level against the trade on the way" condition holds
+automatically, since the target *is* the nearest unraided level in the
+trade's direction.
+
+### Stop loss and size
+
+`InpSLMode` places the stop behind the M1 kijun (`SL_KIJUN`, default), the
+far edge of the M1 cloud (`SL_CLOUD`), or the further of the two
+(`SL_FURTHER`), at the closed bar, pushed out by `InpSLBufferPoints`. The line
+must sit behind the entry by at least the broker's stop level, or there is no
+trade. Size follows the §58 regime: 1% of equity below $7000, 0.5% to $13000
+and 0.1% above, measured on the distance to the stop and capped at 80% of free
+margin.
+
+**Status:** compiled clean in MetaEditor (0 errors, 0 warnings); not yet
+backtested.

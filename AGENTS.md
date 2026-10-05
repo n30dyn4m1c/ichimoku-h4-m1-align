@@ -105,6 +105,6 @@ grep -hoE '^(int|input +int|const +int) +MAGIC[A-Z_0-9]* *= *[0-9]+' \
   *.mq5 experiments/*.mq5 | grep -oE '[0-9]+$' | sort | uniq -c | sort -rn
 ```
 
-The highest number in use is `20260890` (the M1/M5 kihon kumo scalper
+The highest number in use is `20260891` (the M1 chikou breakout to liquidity
 experiment). This line goes stale every time an
 experiment is added — re-run the command above rather than trusting it.
