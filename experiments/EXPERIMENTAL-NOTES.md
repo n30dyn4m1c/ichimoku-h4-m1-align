@@ -7769,7 +7769,7 @@ margin.
 
 ### Simulated: no edge
 
-`utilities/m1-chikou-liquidity-sim.py` replays the EA's rules on the
+`utilities/m1_chikou_liquidity_sim.py` replays the EA's rules on the
 `vps-sim` data (HistData gold M1 bid bars, Jan 2023 to Oct 2026). It decides
 on the closed bar, enters at the next open, uses a constant $0.30 spread, and
 takes SL first when SL and TP fall in the same bar. Results are in R (the
@@ -7803,3 +7803,81 @@ a coin flip before costs.
 
 **Status:** compiled clean in MetaEditor (0 errors, 0 warnings); simulated,
 not backtested in MT5. Not worth running live in this form.
+
+## 71. M1 liquidity sweep, then chikou breakout
+
+**File:** `experimental-m1-liquidity-sweep-chikou-ea.mq5`
+**Magic number:** `20260892`
+
+The follow-up to §70. There, unraided liquidity was the *target* of a chikou
+breakout, and the breakout turned out to be a coin flip. Here the liquidity is
+the *reason to enter*: a stop hunt through an unraided level, then the turn
+back. One timeframe, M1, nothing above it.
+
+### Rules
+
+- **Sweep:** closed bar 1's wick trades beyond an unraided M1 swing, found
+  with the `po3-levels` rules of §52 (strictly beyond the 6 candles before,
+  at least as far as the 6 after, all 6 right-hand candles closed, within the
+  last 100 candles). The level must have been unraided until bar 1. A swept
+  **low arms a long**, a swept **high arms a short**.
+- **Trigger:** a chikou breakout in the armed direction within
+  `InpSweepWindow` (90) bars of the sweep, the sweep bar included. It uses
+  the live VPS build's chikou test (§70): above the cloud, the high, the
+  tenkan and the kijun 26 bars back, newly true on the closed bar. Entry at
+  the next open. The oldest live sweep is kept, so the stop covers the whole
+  run; when it ages out, the newest sweep inside the window takes over.
+- **SL:** the sweep's extreme, the furthest wick from the sweep bar to the
+  trigger bar. A sell's stop is lifted by the spread, since it trips on the
+  ask. A stop under `InpMinStop` (2.0 in price, $2 on gold) is skipped.
+- **TP:** `InpTargetR` (3) times the stop distance.
+- **Size:** the §58 regime on the stop distance. One position per symbol,
+  exits at SL or TP only. A sweep seen while a position is open does not arm.
+
+### Simulated
+
+`utilities/m1_sweep_chikou_sim.py`, same data and conventions as §70 (HistData
+gold M1, Jan 2023 to Oct 2026, $0.30 spread, SL first on a tie, results in R).
+
+| Year | Trades | Win | Per trade | PF | Max DD |
+|---|---|---|---|---|---|
+| 2023 | 449 | 30% | +0.18R | 1.25 | 36R |
+| 2024 | 620 | 27% | +0.10R | 1.13 | 35R |
+| 2025 | 793 | 28% | +0.10R | 1.14 | 38R |
+| 2026 | 703 | 30% | +0.19R | 1.27 | 22R |
+| **All** | **2,565** | **29%** | **+0.14R** | **1.19** | **38R** |
+
+Longs made +0.24R per trade (PF 1.35) and shorts +0.03R (PF 1.04).
+
+**How the setting was chosen.** The first grid (566 configurations over
+2023–24) included the §70 liquidity target, sweep-and-close-back entries,
+stop buffers, minimum stops in ATR and swing sizes 6/12/24. Only 9 of them
+were positive, and the best of those lost in 2025–26. Two things worked:
+
+- A **minimum stop in dollars**. Small M1 stops are mostly spread.
+- A **wide fixed target** instead of the next liquidity level.
+
+In the 80-configuration neighbourhood (window 20–90 bars, minimum stop
+$2–$5, target 3–6R), 53 were positive overall and 25 in all four years. The
+one carried into the EA (90 bars, $2, 3R) was picked after seeing all four
+years, so the table above is not an out-of-sample result.
+
+**What the sweep adds — the placebo.** The same rules with every sweep moved
+500–5000 bars at random (20 seeds) still made **+0.075R** per trade (range
++0.017 to +0.136R), nearly all on longs. Wide targets on longs paid in gold's
+2023–26 bull run whatever the timing. The real sweeps beat all 20 placebos,
+so the sweep timing adds about **+0.06R** per trade. The rest is gold's
+trend, which the shorts (+0.03R) do not share.
+
+Other findings:
+
+- **Zero spread** gives +0.15R. With $2+ stops the spread costs little.
+- **The plain breakout of §70** has −0.01R gross. The sweep is the first M1
+  entry in this repo with a positive gross edge, small as it is.
+- **Sweep and close back inside** (no chikou) is +0.016R gross and −0.33R
+  after spread, with a sweep-extreme stop and the liquidity target.
+
+**Status:** compiled clean in MetaEditor (0 errors, 0 warnings). Simulated
+only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R
+drawdown is about 32% of equity (compounded), so test at lower risk before
+any live use.

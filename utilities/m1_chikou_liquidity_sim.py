@@ -1,7 +1,7 @@
 """Simulator for experimental-m1-chikou-liquidity-ea.mq5 (notes §70), on the vps-sim data.
 Gold M1 bid bars from HistData. Usage (needs numpy, pandas, numba):
-    m = runpy.run_path("utilities/m1-chikou-liquidity-sim.py")
-    P = m["prep"]();  print(m["stats"](m["go"](P, 2025, 2026, slmode=2)))
+    from m1_chikou_liquidity_sim import *   (from utilities/)
+    P = prep();  print(stats(go(P, 2025, 2026, slmode=2)))
 Decision on closed bar i, entry at the open of i+1 (buy at bid+spread). Exits on bid bars,
 a sell's stops checked against ask = bid + spread. SL and TP in the same bar -> SL.
 Results in R (risk = entry-to-stop distance), spread included."""
