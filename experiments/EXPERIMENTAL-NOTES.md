@@ -7732,9 +7732,30 @@ the TP fills first.
   tenkan, kijun or cloud edge may lie between the chikou and the target.
   `0` turns the chikou road check off.
 
+- **Forming swings** (`InpFormingFree`, on): a swing needs 6 closed candles
+  on its right before it counts, so the newest level the chart or the EA can
+  see is 7 bars old. A high (low) on one of the candles from shift 2 to
+  shift 6 that already beats the 6 candles to its left, and that nothing
+  newer (the live candle included) has traded beyond, is liquidity the chart
+  will mark a few minutes later. If one lies between the entry and the
+  target, the trade is skipped. The breakout candle's own wick (shift 1) is
+  left out, because it is the breakout, not resting liquidity.
+
 The "no unraided level against the trade on the way" condition holds
-automatically, since the target *is* the nearest unraided level in the
-trade's direction.
+automatically for *confirmed* levels, since the target *is* the nearest
+unraided level in the trade's direction. Forming swings are what that misses.
+
+**Why the forming-swing rule.** On HistData gold M1, 2023 to Oct 2026, a
+study of the EA's trades (spread ignored, touch before the kijun stop) found:
+
+| EA trades | Share | Forming swing | Target | Target before stop |
+|---|---|---|---|---|
+| No nearer forming swing | 22% | — | — | 63% |
+| Forming swing from the 5 candles before the breakout | 22% | 0.6 ATR | 1.6 ATR | 52% |
+| Only the breakout candle's own wick | 55% | 0.19 ATR | 1.2 ATR | 62% |
+
+The middle row is the one the rule removes. 12% of breakouts have no
+confirmed level at all (skipped), and in 96% of those a swing is forming.
 
 ### Stop loss and size
 
@@ -7746,5 +7767,39 @@ trade. Size follows the §58 regime: 1% of equity below $7000, 0.5% to $13000
 and 0.1% above, measured on the distance to the stop and capped at 80% of free
 margin.
 
-**Status:** compiled clean in MetaEditor (0 errors, 0 warnings); not yet
-backtested.
+### Simulated: no edge
+
+`utilities/m1-chikou-liquidity-sim.py` replays the EA's rules on the
+`vps-sim` data (HistData gold M1 bid bars, Jan 2023 to Oct 2026). It decides
+on the closed bar, enters at the next open, uses a constant $0.30 spread, and
+takes SL first when SL and TP fall in the same bar. Results are in R (the
+entry-to-stop distance).
+
+| Run | Trades | Win | Per trade | PF |
+|---|---|---|---|---|
+| The EA as built (kijun SL, forming rule on) | 18,071 | 52% | −0.23R | 0.52 |
+| Same, forming rule off | 20,869 | 50% | −0.23R | 0.53 |
+| Same, zero spread | 19,285 | 62% | −0.02R | 0.94 |
+| Best M1-only variant: further of kijun/cloud SL, stop ≥ 2 ATR, price also beyond the lines and cloud | 21,461 | 70% | −0.12R | 0.61 |
+| Best variant, zero spread | 22,610 | 76% | −0.01R | 0.96 |
+| Best variant + H1 and H4 CheckAlign bias agreeing | 3,204 | 72% | −0.10R | 0.64 |
+
+Per year the EA as built ran −0.38R / −0.28R / −0.16R / −0.10R
+(2023 → 2026). Nothing tried turned it positive, in sample (2023–24) or
+out (2025–26). That covers: SL mode, a minimum stop in ATR, a minimum
+reward:risk (1 or 2), the TP at 50% or 80% of the way, break-even at 0.5R or
+1R, time stops (30, 120 bars), sessions (9–17, 15–19, 10–13 server time),
+swing sizes 3/3, 12/12 and 24/24 with a 300-bar lookback, long only, short
+only, and H1/H4 bias.
+
+**The reason is the signal, not the exits.** After an M1 chikou breakout,
+price is further in the trade's direction only 48–50% of the time at every
+horizon from 5 to 480 minutes. The mean move is a few cents (−0.02 to
++0.2 ATR, the long end being gold's uptrend), against a $0.30 spread. The
+liquidity target sits closer than the kijun stop (median reward:risk 0.47),
+so the high win rate is bought with small wins, and at zero spread it nets
+to about nothing. That matches §64 and §68: M1 Ichimoku breakouts on gold are
+a coin flip before costs.
+
+**Status:** compiled clean in MetaEditor (0 errors, 0 warnings); simulated,
+not backtested in MT5. Not worth running live in this form.

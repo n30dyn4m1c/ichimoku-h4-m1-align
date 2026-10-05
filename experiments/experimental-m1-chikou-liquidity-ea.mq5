@@ -17,6 +17,10 @@
 //|     CHIKOU: across the next InpChikouFreeBars bars ahead of the   |
 //|     chikou, no candle (high for a buy, low for a sell), tenkan,   |
 //|     kijun or cloud edge lies between the chikou and the target.   |
+//|     FORMING SWINGS: a high (low) from the InpLiqRight candles     |
+//|     before the breakout candle that already beats its left side   |
+//|     and is still untouched — liquidity the chart will mark a few  |
+//|     minutes later — must not lie between the entry and target.    |
 //|     A line beyond the target does not block — the TP comes first.|
 //|   * SL: behind the M1 kijun (default) or the far edge of the M1   |
 //|     cloud, or the further of the two (InpSLMode). The level must  |
@@ -51,6 +55,7 @@ input int    InpMaxSpreadPoints  = 60;    // Max spread in points to allow entry
 input group  "Free to move"
 input int    InpChikouFreeBars   = 9;     // Bars ahead of the chikou that must be clear to the target (0 = off)
 input bool   InpPriceFree        = true;  // Tenkan, kijun and cloud must not lie between entry and target
+input bool   InpFormingFree      = true;  // A swing still forming (not yet 6 right candles) must not lie between entry and target
 
 input group  "Chikou breakout"
 input bool   InpChikouBothLines  = true;  // Chikou beyond tenkan AND kijun 26 back (live); false = either one
@@ -244,6 +249,44 @@ bool ChikouFree(const M1Pic &p, int dir, double target, string &why)
    return true;
 }
 
+// Forming swings: liquidity that is not confirmed yet. A swing needs
+// InpLiqRight closed candles to its right, so for a while after it prints
+// the chart (and LiqNearest) cannot see it. Here a candle from shift 2 to
+// shift InpLiqRight (the breakout candle, shift 1, is left out — its own
+// wick is the breakout, not resting liquidity) counts when it stands
+// strictly beyond the InpLiqLeft candles before it and nothing newer,
+// the live candle included, has gone beyond it. One of those between the
+// entry and the target blocks the trade.
+bool FormingFree(const M1Pic &p, int dir, double entry, double target, string &why)
+{
+   if(!InpFormingFree) return true;
+   int left  = (int)MathMax(1, InpLiqLeft);
+   int right = (int)MathMax(1, InpLiqRight);
+   bool isHigh = (dir == 1);
+   for(int j = 2; j <= right; j++)
+   {
+      if(j + left >= ArraySize(p.r)) break;
+      double v = isHigh ? p.r[j].high : p.r[j].low;
+      bool ok = true;
+      for(int q = 1; q <= left && ok; q++)
+      {
+         double o = isHigh ? p.r[j + q].high : p.r[j + q].low;
+         if(isHigh ? (v <= o) : (v >= o)) ok = false;
+      }
+      for(int q = 0; q < j && ok; q++)
+      {
+         double o = isHigh ? p.r[q].high : p.r[q].low;
+         if(isHigh ? (o > v) : (o < v)) ok = false;
+      }
+      if(ok && Blocks(v, entry, target))
+      {
+         why = "forming swing " + (isHigh ? "high" : "low") + " in the way";
+         return false;
+      }
+   }
+   return true;
+}
+
 //==============================================================
 // Take Profit — unraided liquidity, the po3-levels rules (§52)
 // as ported in the liquidity-target build (§53). A swing high
@@ -428,7 +471,7 @@ void TryEntry(int s)
    string sym = syms[s];
 
    M1Pic p;
-   if(!LoadPic(s, p, Kijun + 4)) return;
+   if(!LoadPic(s, p, (int)MathMax(Kijun + 4, InpLiqLeft + InpLiqRight + 2))) return;
 
    int dir = ChikouBreakout(p);
    if(dir == 0) { lastSkip[s] = ""; return; }
@@ -453,7 +496,8 @@ void TryEntry(int s)
 
    // Free to move: nothing between the entry (and the chikou) and the level.
    string why = "";
-   if(!PriceFree(p, price, level, why) || !ChikouFree(p, dir, level, why))
+   if(!PriceFree(p, price, level, why) || !ChikouFree(p, dir, level, why) ||
+      !FormingFree(p, dir, price, level, why))
    {
       Skip(s, side + " breakout, not free to move (" + why + ")");
       return;
