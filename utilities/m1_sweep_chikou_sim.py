@@ -85,7 +85,7 @@ def run(o, h, l, c, t, k, sa, sb, atr, hour, contig, allow, i0, i1, spread, L, R
             ev_b[x] = nb if nb < i1 - 100 else ev_b[x] - np.random.randint(500, 5000)
     order = np.argsort(ev_b[:ne], kind='mergesort')
     out_i = np.zeros(200000, np.int64); out_r = np.zeros(200000); out_d = np.zeros(200000, np.int64)
-    out_rr = np.zeros(200000)
+    out_rr = np.zeros(200000); out_sd = np.zeros(200000); out_px = np.zeros(200000)
     nt = 0
     busy = -1
     lastsig = -1
@@ -160,10 +160,10 @@ def run(o, h, l, c, t, k, sa, sb, atr, hour, contig, allow, i0, i1, spread, L, R
             b += 1
         if np.isnan(res):
             continue
-        out_i[nt] = ti; out_r[nt] = res; out_d[nt] = d; out_rr[nt] = rew / risk
+        out_i[nt] = ti; out_r[nt] = res; out_d[nt] = d; out_rr[nt] = rew / risk; out_sd[nt] = risk; out_px[nt] = price
         nt += 1
         busy = b
-    return out_i[:nt], out_r[:nt], out_d[:nt], out_rr[:nt]
+    return out_i[:nt], out_r[:nt], out_d[:nt], out_rr[:nt], out_sd[:nt], out_px[:nt]
 
 
 DEF = dict(spread=0.30, L=6, R=6, LB=100, trig=0, W=30, slbuf=0.0, tpmode=0, minrr=0.0,
@@ -175,8 +175,8 @@ def go(P, y0=2023, y1=2026, **kw):
     yr = P['year']
     i0 = int(np.searchsorted(yr, y0)); i1 = int(np.searchsorted(yr, y1 + 1))
     al = a['allow'] if a['allow'] is not None else np.full(len(P['c']), 2, np.int64)
-    ii, r, d, rr = run(P['o'], P['h'], P['l'], P['c'], P['t'], P['k'], P['sa'], P['sb'], P['atr'],
+    ii, r, d, rr, sd, px = run(P['o'], P['h'], P['l'], P['c'], P['t'], P['k'], P['sa'], P['sb'], P['atr'],
                        P['hour'], P['contig'], al, i0, i1, a['spread'], a['L'], a['R'], a['LB'],
                        a['trig'], a['W'], a['slbuf'], a['tpmode'], a['minrr'], a['minstop'],
                        a['maxstop'], a['h0'], a['h1'], a['needprice'], a['minusd'], a['placebo'])
-    return pd.DataFrame(dict(i=ii, r=r, d=d, rr=rr))
+    return pd.DataFrame(dict(i=ii, r=r, d=d, rr=rr, sd=sd, px=px))

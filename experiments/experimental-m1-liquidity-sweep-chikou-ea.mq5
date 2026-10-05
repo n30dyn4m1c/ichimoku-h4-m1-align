@@ -17,15 +17,25 @@
 //|     since it trips on the ask). A stop closer than InpMinStop in  |
 //|     price is skipped: on M1 the spread eats small stops.          |
 //|   * TP: InpTargetR times the stop distance (3R).                  |
-//|   * SIZE: the §58 regime — 1% of equity below $7000, 0.5% to      |
-//|     $13000, 0.1% above — on the stop distance, capped to 80% of   |
-//|     free margin. One position per symbol, exits at SL or TP only. |
+//|   * SIZE: the live VPS build's regime for its lowest tiers (M5/   |
+//|     M15) — 1% of equity below $7000, 0.5% to $13000, 0.1% above — |
+//|     on the ACTUAL stop distance by default, so a stopped-out trade |
+//|     loses that %. InpSizeBasis = SIZE_VPS_ATR sizes it the VPS     |
+//|     way, against ATR(M1) x InpRiskATRMult; the stops here are ~3x |
+//|     that, so the real loss is ~3x the %. Capped to 80% of free    |
+//|     margin. One position per symbol, exits at SL or TP only.      |
 //|     A sweep seen while a position is open does not arm.           |
 //| Runs once per closed M1 bar.                                      |
 //+------------------------------------------------------------------+
 #property strict
 
 #include <Trade/Trade.mqh>
+
+enum ENUM_SIZE_BASIS
+{
+   SIZE_STOP    = 0,   // The actual stop distance (a stop-out loses the %)
+   SIZE_VPS_ATR = 1    // The VPS build's basis: ATR(M1) x InpRiskATRMult
+};
 
 //--- Input Parameters ---
 input string Symbols  = "GOLDm#";
@@ -47,8 +57,10 @@ input group  "Exits"
 input double InpMinStop          = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpTargetR          = 3.0;   // Take profit at this multiple of the stop distance
 
-input group  "Risk Management (the §58 regime, % of actual equity)"
+input group  "Risk Management (the live VPS build's M5/M15 regime, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
+input ENUM_SIZE_BASIS InpSizeBasis = SIZE_STOP; // Distance the % is measured against
+input double InpRiskATRMult     = 2.0;    // SIZE_VPS_ATR: reference stop = ATR(M1) x this (the VPS value)
 input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
 input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At)
@@ -62,6 +74,7 @@ input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may 
 string   syms[MAX_SYMS];
 int      symsCount = 0;
 int      ichM1[MAX_SYMS];
+int      atrM1[MAX_SYMS];
 datetime lastM1bar[MAX_SYMS];
 string   lastSkip[MAX_SYMS];     // last skip reason printed (logged on change only)
 datetime armLong[MAX_SYMS];      // open time of the oldest live sweep of a low (0 = none)
@@ -111,7 +124,8 @@ int OnInit()
       lastLong[s]  = 0;
       lastShort[s] = 0;
       ichM1[s] = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
-      if(ichM1[s] == INVALID_HANDLE) return(INIT_FAILED);
+      atrM1[s] = iATR(syms[s], PERIOD_M1, 14);
+      if(ichM1[s] == INVALID_HANDLE || atrM1[s] == INVALID_HANDLE) return(INIT_FAILED);
    }
 
    trade.SetDeviationInPoints(Slippage);
@@ -122,7 +136,10 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
+   {
       IndicatorRelease(ichM1[s]);
+      IndicatorRelease(atrM1[s]);
+   }
 }
 
 //==============================================================
@@ -229,13 +246,16 @@ bool HasPosition(string sym)
 }
 
 //==============================================================
-// Risk Management — the §58 regime: risk a fixed % of the ACTUAL
-// equity at entry, de-risking as the account grows (1% below
-// InpRiskTier2At, 0.5% between the tiers, 0.1% at InpRiskTier3At
-// and above), measured against the distance from the entry to the
-// stop, so a stopped-out trade loses that %. Falls back to
-// InpFixedLots when the sizing data is unavailable; every order is
-// capped to the free margin.
+// Risk Management — the live VPS build's regime for its lowest
+// tiers (M5/M15): risk a fixed % of the ACTUAL equity at entry,
+// de-risking as the account grows (1% below InpRiskTier2At, 0.5%
+// between the tiers, 0.1% at InpRiskTier3At and above). SIZE_STOP
+// measures it against the distance to the stop, so a stopped-out
+// trade loses that %. SIZE_VPS_ATR measures it against ATR(M1) x
+// InpRiskATRMult as the VPS build does — it has no entry stop, this
+// EA does, and the sweep stop is usually ~3x that reference.
+// Falls back to InpFixedLots when the sizing data is unavailable;
+// every order is capped to the free margin.
 //==============================================================
 
 double RiskPct()
@@ -249,6 +269,12 @@ double RiskPct()
 double RiskLots(int s, double stopDist)
 {
    double riskPct = RiskPct();
+   if(InpSizeBasis == SIZE_VPS_ATR)
+   {
+      double a[1];
+      if(CopyBuffer(atrM1[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
+      stopDist = a[0] * InpRiskATRMult;
+   }
    if(riskPct <= 0 || stopDist <= 0) return InpFixedLots;
 
    double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);

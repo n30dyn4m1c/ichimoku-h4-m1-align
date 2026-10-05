@@ -7831,8 +7831,31 @@ back. One timeframe, M1, nothing above it.
   trigger bar. A sell's stop is lifted by the spread, since it trips on the
   ask. A stop under `InpMinStop` (2.0 in price, $2 on gold) is skipped.
 - **TP:** `InpTargetR` (3) times the stop distance.
-- **Size:** the §58 regime on the stop distance. One position per symbol,
-  exits at SL or TP only. A sweep seen while a position is open does not arm.
+- **Size:** the live VPS build's regime for its lowest tiers (M5/M15): 1% of
+  equity below $7000, 0.5% to $13000, 0.1% above, capped at 80% of free
+  margin. By default it is measured on the **actual stop distance**
+  (`InpSizeBasis = SIZE_STOP`), so a stop-out loses exactly that %.
+  `SIZE_VPS_ATR` sizes it as the VPS does, against ATR(M1) ×
+  `InpRiskATRMult` (2). One position per symbol, exits at SL or TP only. A
+  sweep seen while a position is open does not arm.
+
+### Sizing basis
+
+The VPS build has no entry stop, so it sizes on a reference distance of
+2×ATR. This EA has a real stop, and the sweep stop is usually wider than that
+reference: stop / (2×ATR(M1)) is 1.6 / 2.2 / 3.0 / 3.9 / 4.9 at the 10th / 25th
+/ 50th / 75th / 90th percentiles. On the VPS basis a nominal 1% trade
+therefore loses about 3% at its stop. The trades from the table below,
+compounded with GOLDm#'s contract (1, 0.1 minimum lot, 0.01 step, 1:1000):
+
+| Start | On the actual stop (default) | VPS basis (2×ATR) |
+|---|---|---|
+| $100 | $2,356, max DD 35%, worst loss 4.6% | $6,649, **max DD 96%**, worst loss 15% |
+| $10,000 | $17,934, max DD 5% | $27,042, max DD 20% |
+
+At $100 the 0.1-lot minimum lifts 20 of the stop-based trades above 1%
+(hence the 4.6% worst loss). The user kept the stop basis (2026-10-06); the
+VPS basis stays as a switch.
 
 ### Simulated
 
