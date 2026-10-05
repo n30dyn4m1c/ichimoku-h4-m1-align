@@ -7994,6 +7994,60 @@ per tier.
 
 The file name still says `m1`. It is kept so the references stay valid.
 
+### Profitability adjustments (2026-10-06)
+
+Three changes from a round of tests, plus one tier switched off, are now the
+defaults:
+
+1. **M5 sized on its actual stop** (`InpM5SizeBasis = SIZE_STOP`). VPS sizing
+   made an M5 stop-out lose about 2.6× its %.
+2. **Shorts on M15, M30 and H1 only while H4 is bearish**, using the live
+   build's `CheckAlign` on the last closed H4 bar (`InpM15ShortH4` /
+   `InpM30ShortH4` / `InpH1ShortH4`). Longs, and the M1 and M5 tiers, are not
+   filtered.
+3. **Minimum-lot guard** (`InpMinLotRiskMult = 2`): a trade is skipped when
+   the broker's minimum lot would lose more than 2× the regime's % at its
+   stop.
+4. **M5 tier off** (`InpM5Tier = false`), since the sweep has no edge there.
+
+The H4 short filter, per tier, 2023–24 / 2025–26:
+
+| Tier | Before | With the filter |
+|---|---|---|
+| M15 | +0.10 / +0.42R | +0.33 / +0.65R |
+| M30 | +0.10 / +0.52R | +0.38 / +0.75R |
+| H1 | +0.23 / +0.20R | +0.63 / +0.44R |
+
+On M1 every direction filter tried hurt, in at least one half:
+
+| M1 filter | 2023–24 / 2025–26 |
+|---|---|
+| None | +0.13 / +0.14R |
+| Long only | −0.01 / +0.05R |
+| H4 bias on both directions | −0.08 / +0.03R |
+| D1 bias on both directions | −0.03 / +0.09R |
+| H4 short filter | +0.01 / +0.05R |
+
+Other tests, not adopted:
+
+- TP 2R or 4R: mixed by tier.
+- Trading hours on M1: no stable pattern.
+- Spread $0.15 instead of $0.30: little change at $2+ stops.
+
+Account effect (stop-based sizing except where noted, trades merged by entry
+time):
+
+| Version | From $100 | From $10,000 | Per trade, 2023 / 24 / 25 / 26 |
+|---|---|---|---|
+| Five tiers, M5 VPS-sized (before) | $7,866, DD 93% | $22,086, DD 56% | +0.08 / +0.17 / +0.17 / +0.18R |
+| 1 only | $9,344, DD 50% | $21,705, DD 21% | |
+| 1 + 2 | $14,192, DD 38% | $24,771, DD 6% | +0.15 / +0.20 / +0.21 / +0.16R |
+| 1 + 2 + 3 | $14,340, DD 37% | $24,911, DD 6% | |
+| **1 + 2 + 3, M5 off (new defaults)** | **$13,181, DD 32%** | **$22,228, DD 6%** | +0.22 / +0.17 / +0.21 / +0.18R |
+
+The H4 short filter was picked after seeing the data, from about 100 trades
+per tier per half. Above M1 the profit still rides gold's 2023–26 uptrend.
+
 **Status:** compiled clean in MetaEditor (0 errors, 0 warnings). Simulated
 only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R
 drawdown is about 32% of equity (compounded), so test at lower risk before

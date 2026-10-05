@@ -18,21 +18,27 @@
 //|     since it trips on the ask). A stop closer than the tier's     |
 //|     minimum ($2 on gold) is skipped: the spread eats small stops. |
 //|   * TP: the tier's target, 3 times the stop distance (3R).        |
+//|   * SHORTS ON M15, M30 AND H1 need H4 BEARISH — the live build's  |
+//|     CheckAlign on the last closed H4 bar (price and chikou below  |
+//|     tenkan, kijun and cloud). Longs and the M1/M5 tiers are not   |
+//|     filtered (InpM15ShortH4 .. InpH1ShortH4).                     |
 //|   * TIERS: M1, M5, M15, M30 and H1 (InpM1Tier .. InpH1Tier) run   |
 //|     the same rules on their own bars, with their own window,      |
 //|     minimum stop, target and sizing basis, and hold one position  |
 //|     each — tagged by comment, so several tiers can run side by    |
 //|     side. Bars, windows and lookbacks count the tier's candles.   |
 //|   * SIZE: the live VPS build's M5 regime — 1% of equity below     |
-//|     $7000, 0.5% to $13000, 0.1% above — on every tier. M1, M15,   |
-//|     M30 and H1 measure it on the ACTUAL stop (SIZE_STOP), so a    |
-//|     stop-out loses that %. M5 sizes it as the live VPS M5 tier    |
-//|     does (InpM5SizeBasis = SIZE_VPS_ATR), against ATR(M5, 14) x   |
-//|     InpRiskATRMult (2); the sweep stop is a median 2.6x that, so  |
-//|     an M5 stop-out loses ~2.6x the %. Capped to 80% of free       |
-//|     margin. One position per tier per symbol, exits at SL or TP   |
-//|     only. A sweep seen while the tier's position is open does not |
-//|     arm. Each tier runs once per closed bar of its timeframe.     |
+//|     $7000, 0.5% to $13000, 0.1% above — on every tier, measured   |
+//|     on the ACTUAL stop (SIZE_STOP) by default, so a stop-out      |
+//|     loses that %. Any tier can be sized the live VPS way |
+//|     (SIZE_VPS_ATR, ATR(tier, 14) x InpRiskATRMult), but the sweep |
+//|     stop is a median ~2.6x that, and so is the real loss.         |
+//|     A trade whose broker MINIMUM lot would lose more than         |
+//|     InpMinLotRiskMult (2) x the % at its stop is skipped. Capped  |
+//|     to 80% of free margin. One position per tier per symbol,      |
+//|     exits at SL or TP only. The M5 tier is OFF by default.        |
+//|     A sweep seen while the tier's position is open does not arm.  |
+//|     Each tier runs once per closed bar of its timeframe.          |
 //+------------------------------------------------------------------+
 #property strict
 
@@ -66,7 +72,7 @@ input double InpM1MinStop        = 2.0;   // Minimum stop distance in PRICE (gol
 input double InpM1TargetR        = 3.0;   // Take profit at this multiple of the stop distance
 
 input group  "M5 tier"
-input bool   InpM5Tier           = true;  // Trade the M5 tier
+input bool   InpM5Tier           = false; // Trade the M5 tier (off: no sweep edge on M5, §71)
 input int    InpM5SweepWindow    = 90;    // M5 bars after the sweep the chikou breakout may come
 input double InpM5MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM5TargetR        = 3.0;   // Take profit at this multiple of the stop distance
@@ -76,23 +82,26 @@ input bool   InpM15Tier          = true;  // Trade the M15 tier
 input int    InpM15SweepWindow   = 90;    // M15 bars after the sweep the chikou breakout may come
 input double InpM15MinStop       = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM15TargetR       = 3.0;   // Take profit at this multiple of the stop distance
+input bool   InpM15ShortH4       = true;  // Shorts only while H4 is bearish (CheckAlign)
 
 input group  "M30 tier"
 input bool   InpM30Tier          = true;  // Trade the M30 tier
 input int    InpM30SweepWindow   = 90;    // M30 bars after the sweep the chikou breakout may come
 input double InpM30MinStop       = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM30TargetR       = 3.0;   // Take profit at this multiple of the stop distance
+input bool   InpM30ShortH4       = true;  // Shorts only while H4 is bearish (CheckAlign)
 
 input group  "H1 tier"
 input bool   InpH1Tier           = true;  // Trade the H1 tier
 input int    InpH1SweepWindow    = 90;    // H1 bars after the sweep the chikou breakout may come
 input double InpH1MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpH1TargetR        = 3.0;   // Take profit at this multiple of the stop distance
+input bool   InpH1ShortH4        = true;  // Shorts only while H4 is bearish (CheckAlign)
 
 input group  "Risk Management (the live VPS build's M5/M15 regime, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
 input ENUM_SIZE_BASIS InpM1SizeBasis = SIZE_STOP;    // M1: distance the % is measured against
-input ENUM_SIZE_BASIS InpM5SizeBasis = SIZE_VPS_ATR; // M5: distance the % is measured against (the live VPS M5 tier's)
+input ENUM_SIZE_BASIS InpM5SizeBasis = SIZE_STOP;    // M5: distance the % is measured against (SIZE_VPS_ATR = the live VPS M5 tier's)
 input ENUM_SIZE_BASIS InpM15SizeBasis = SIZE_STOP;   // M15: distance the % is measured against
 input ENUM_SIZE_BASIS InpM30SizeBasis = SIZE_STOP;   // M30: distance the % is measured against
 input ENUM_SIZE_BASIS InpH1SizeBasis  = SIZE_STOP;   // H1: distance the % is measured against
@@ -104,6 +113,7 @@ input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At), each tim
 input double InpRiskPct_T2      = 0.5;    // Tier 2 (half regime)
 input double InpRiskPct_T3      = 0.1;    // Tier 3 (equity >= Tier3At)
 input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may commit
+input double InpMinLotRiskMult  = 2.0;    // Skip when the MINIMUM lot would lose more than this x the % at the stop (0 = off)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -116,6 +126,7 @@ string   syms[MAX_SYMS];
 int      symsCount = 0;
 int      ich[MAX_SYMS][NT];
 int      atrH[MAX_SYMS][NT];
+int      ichH4[MAX_SYMS];          // H4 Ichimoku for the short filter
 datetime lastBar[MAX_SYMS][NT];
 string   lastSkip[MAX_SYMS][NT];   // last skip reason printed (logged on change only)
 datetime armLong[MAX_SYMS][NT];    // open time of the oldest live sweep of a low (0 = none)
@@ -182,6 +193,16 @@ ENUM_SIZE_BASIS TierBasis(int t)
    }
 }
 string TierComment(int t) { return TFN[t] + " sweep chikou"; }
+bool TierShortNeedsH4(int t)
+{
+   switch(t)
+   {
+      case 2:  return InpM15ShortH4;
+      case 3:  return InpM30ShortH4;
+      case 4:  return InpH1ShortH4;
+      default: return false;
+   }
+}
 
 CTrade trade;
 
@@ -215,6 +236,12 @@ int OnInit()
    if(symsCount <= 0) return(INIT_FAILED);
 
    for(int s = 0; s < symsCount; s++)
+   {
+      ichH4[s] = iIchimoku(syms[s], PERIOD_H4, Tenkan, Kijun, SenkouB);
+      if(ichH4[s] == INVALID_HANDLE) return(INIT_FAILED);
+   }
+
+   for(int s = 0; s < symsCount; s++)
       for(int t = 0; t < NT; t++)
       {
          lastBar[s][t]   = 0;
@@ -235,6 +262,8 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   for(int s = 0; s < symsCount; s++)
+      IndicatorRelease(ichH4[s]);
    for(int s = 0; s < symsCount; s++)
       for(int t = 0; t < NT; t++)
       {
@@ -273,6 +302,59 @@ int ChikouBreakout(int s, int t, const MqlRates &r[])
    int now = ChikouClear(s, t, r, 1);
    if(now == 0) return 0;
    return (ChikouClear(s, t, r, 2) == now) ? 0 : now;
+}
+
+//==============================================================
+// H4 direction — the live build's CheckAlign on the last closed H4
+// bar: price above (below) tenkan, kijun and the cloud, and the
+// chikou (that close, plotted Kijun bars back) above (below) the
+// high (low), tenkan, kijun and cloud there. 1 = bullish,
+// -1 = bearish, 0 = neither. Used to let M15/M30/H1 short only
+// while H4 is bearish.
+//==============================================================
+
+int CheckAlign(string sym, ENUM_TIMEFRAMES tf, int handle)
+{
+   int sh      = 1;              // last closed bar
+   int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
+
+   MqlRates rt[];
+   if(CopyRates(sym, tf, 0, chShift + 1, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+
+   if(ArraySize(rt) <= chShift) return 0;
+
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   if(CopyBuffer(handle, 0, sh, 1, tenkan) <= 0) return 0;
+   if(CopyBuffer(handle, 1, sh, 1, kijun)  <= 0) return 0;
+   if(CopyBuffer(handle, 2, sh, 1, senA)   <= 0) return 0;
+   if(CopyBuffer(handle, 3, sh, 1, senB)   <= 0) return 0;
+
+   double closeP = rt[sh].close;
+   double cHi    = MathMax(senA[0], senB[0]);
+   double cLo    = MathMin(senA[0], senB[0]);
+
+   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
+   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
+   if(!above && !below) return 0;
+
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
+   if(CopyBuffer(handle, 0, chShift, 1, tenkan_ch) <= 0) return 0;
+   if(CopyBuffer(handle, 1, chShift, 1, kijun_ch)  <= 0) return 0;
+   if(CopyBuffer(handle, 2, chShift, 1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(handle, 3, chShift, 1, senB_ch)   <= 0) return 0;
+
+   double chik = closeP;
+   double cHiC = MathMax(senA_ch[0], senB_ch[0]);
+   double cLoC = MathMin(senA_ch[0], senB_ch[0]);
+
+   if(above && chik > rt[chShift].high &&
+      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
+
+   if(below && chik < rt[chShift].low &&
+      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
+
+   return 0;
 }
 
 //==============================================================
@@ -364,7 +446,7 @@ bool HasPosition(string sym, int t)
 // trade loses that %. SIZE_VPS_ATR measures it against ATR(tier) x
 // InpRiskATRMult as the VPS build does — it has no entry stop, this
 // EA does, and the sweep stop is usually 2.5-3x that reference. The
-// basis is set per tier: M5 the VPS way, the others on the stop.
+// basis is set per tier; every tier is on the stop by default.
 // Falls back to InpFixedLots when the sizing data is unavailable;
 // every order is capped to the free margin. Each tier risks the %
 // on its own, so with several tiers open at once the account
@@ -408,6 +490,21 @@ double RiskLots(int s, int t, double stopDist)
    lots = MathMax(lotMin, MathMin(lotMax, lots));
 
    return (lots > 0) ? lots : InpFixedLots;
+}
+
+// True when the broker's MINIMUM lot would lose more than InpMinLotRiskMult
+// x the regime's % at the actual stop — on a small account the wide M30/H1
+// stops cannot be sized down to the %, and 0.1 lot can lose a quarter of it.
+bool MinLotTooRisky(int s, double stopDist)
+{
+   if(InpMinLotRiskMult <= 0 || stopDist <= 0) return false;
+   double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_SIZE);
+   double lotMin    = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN);
+   if(tickValue <= 0 || tickSize <= 0 || lotMin <= 0) return false;
+   double minLoss = lotMin * (stopDist / tickSize) * tickValue;
+   double budget  = AccountInfoDouble(ACCOUNT_EQUITY) * (RiskPct() / 100.0);
+   return minLoss > InpMinLotRiskMult * budget;
 }
 
 // Scale a single order down so it commits at most InpMarginUsePct % of the
@@ -480,6 +577,11 @@ void OnBar(int s, int t)
    if(armed == 0) return;
 
    string side = (dir == 1) ? "buy" : "sell";
+   if(dir == -1 && TierShortNeedsH4(t) && CheckAlign(sym, PERIOD_H4, ichH4[s]) != -1)
+   {
+      Skip(s, t, "sell breakout after sweep, H4 not bearish");
+      return;
+   }
    if(!SpreadOK(sym)) { Skip(s, t, side + " breakout after sweep, spread"); return; }
 
    // The sweep's extreme: the furthest wick from the sweep bar to bar 1.
@@ -508,6 +610,13 @@ void OnBar(int s, int t)
    }
    double tgtR = TierTargetR(t);
    double tp = NormalizeDouble((dir == 1) ? price + tgtR * risk : price - tgtR * risk, digits);
+
+   if(MinLotTooRisky(s, risk))
+   {
+      Skip(s, t, side + " breakout after sweep, minimum lot over " +
+           DoubleToString(InpMinLotRiskMult, 1) + "x the risk at a " + DoubleToString(risk, digits) + " stop");
+      return;
+   }
 
    double lots = RiskLots(s, t, risk);
    CapLotsToMargin(sym, (dir == 1), lots);
