@@ -7833,10 +7833,10 @@ back. One timeframe, M1, nothing above it.
 - **TP:** `InpTargetR` (3) times the stop distance.
 - **Size:** the live VPS build's regime for its lowest tiers (M5/M15): 1% of
   equity below $7000, 0.5% to $13000, 0.1% above, capped at 80% of free
-  margin. By default it is measured on the **actual stop distance**
-  (`InpSizeBasis = SIZE_STOP`), so a stop-out loses exactly that %.
-  `SIZE_VPS_ATR` sizes it as the VPS does, against ATR(M1) ×
-  `InpRiskATRMult` (2). One position per symbol, exits at SL or TP only. A
+  margin. On M1 it is measured on the **actual stop distance**
+  (`InpM1SizeBasis = SIZE_STOP`), so a stop-out loses exactly that %.
+  `SIZE_VPS_ATR` sizes it as the VPS does, against ATR(tier) ×
+  `InpRiskATRMult` (2); the M5 tier uses that by default (see below). One position per symbol, exits at SL or TP only. A
   sweep seen while a position is open does not arm.
 
 ### Sizing basis
@@ -7936,6 +7936,21 @@ Account effect (stop-based sizing, GOLDm# contract, trades merged by time):
 | M1 + M5 | 3,261 | $5,324, max DD 34% | $19,238, max DD 19% |
 
 `InpM5Tier = false` runs the M1 tier alone.
+
+**M5 on the live VPS sizing (2026-10-06).** At the user's request the M5 tier
+sizes exactly as the live VPS M5 tier does: the same 1% / 0.5% / 0.1%,
+measured against 2×ATR(M5, 14) (`InpM5SizeBasis = SIZE_VPS_ATR`, the
+default; `InpATRPeriod` 14). M1 stays on its actual stop
+(`InpM1SizeBasis = SIZE_STOP`). The sweep stop on M5 is 1.4 / 2.6 / 4.9×
+that reference (10th / 50th / 90th percentile), so an M5 stop-out loses
+about 2.6× the nominal %:
+
+| M5 sizing | M5 alone from $100 | M5 alone from $10,000 | M1 + M5 from $100 | M1 + M5 from $10,000 |
+|---|---|---|---|---|
+| Actual stop | $158, DD 50% | $13,573, DD 18% | $5,324, DD 34%, worst loss 4.6% | $19,238, DD 19% |
+| **VPS 2×ATR (default)** | $119, DD 78% | $14,127, DD 64% | **$3,178, DD 68%, worst loss 19%** | $20,664, DD 41% |
+
+`InpM5SizeBasis = SIZE_STOP` puts M5 back on the actual stop.
 
 **Status:** compiled clean in MetaEditor (0 errors, 0 warnings). Simulated
 only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R

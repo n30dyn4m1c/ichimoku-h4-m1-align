@@ -23,12 +23,13 @@
 //|     target, and hold one position each — tagged by comment, so an |
 //|     M1 and an M5 trade can run side by side. Bars, windows and    |
 //|     lookbacks are counted in the tier's own candles.              |
-//|   * SIZE: the live VPS build's regime for its lowest tiers (M5/   |
-//|     M15) — 1% of equity below $7000, 0.5% to $13000, 0.1% above — |
-//|     on the ACTUAL stop distance by default, so a stopped-out trade |
-//|     loses that %. InpSizeBasis = SIZE_VPS_ATR sizes it the VPS     |
-//|     way, against ATR(tier) x InpRiskATRMult; the stops are ~3x    |
-//|     that, so the real loss is ~3x the %. Capped to 80% of free    |
+//|   * SIZE: the live VPS build's M5 regime — 1% of equity below     |
+//|     $7000, 0.5% to $13000, 0.1% above — on each tier. M1 measures |
+//|     it on the ACTUAL stop (InpM1SizeBasis = SIZE_STOP), so a stop- |
+//|     out loses that %. M5 sizes it exactly as the live VPS M5 tier |
+//|     does (InpM5SizeBasis = SIZE_VPS_ATR), against ATR(M5, 14) x   |
+//|     InpRiskATRMult (2); the sweep stop is a median 2.6x that, so  |
+//|     an M5 stop-out loses ~2.6x the %. Capped to 80% of free       |
 //|     margin. One position per tier per symbol, exits at SL or TP   |
 //|     only. A sweep seen while the tier's position is open does not |
 //|     arm. Each tier runs once per closed bar of its timeframe.     |
@@ -72,8 +73,10 @@ input double InpM5TargetR        = 3.0;   // Take profit at this multiple of the
 
 input group  "Risk Management (the live VPS build's M5/M15 regime, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
-input ENUM_SIZE_BASIS InpSizeBasis = SIZE_STOP; // Distance the % is measured against
-input double InpRiskATRMult     = 2.0;    // SIZE_VPS_ATR: reference stop = ATR(tier) x this (the VPS value)
+input ENUM_SIZE_BASIS InpM1SizeBasis = SIZE_STOP;    // M1: distance the % is measured against
+input ENUM_SIZE_BASIS InpM5SizeBasis = SIZE_VPS_ATR; // M5: distance the % is measured against (the live VPS M5 tier's)
+input double InpRiskATRMult     = 2.0;    // SIZE_VPS_ATR: reference stop = ATR(tier, InpATRPeriod) x this (the VPS value)
+input int    InpATRPeriod       = 14;     // ATR period (the VPS value)
 input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
 input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At), each of M1 and M5
@@ -107,6 +110,7 @@ int    TierWindow(int t) { return (t == 0) ? InpM1SweepWindow : InpM5SweepWindow
 double TierMinStop(int t){ return (t == 0) ? InpM1MinStop     : InpM5MinStop;     }
 double TierTargetR(int t){ return (t == 0) ? InpM1TargetR     : InpM5TargetR;     }
 string TierComment(int t){ return TFN[t] + " sweep chikou"; }
+ENUM_SIZE_BASIS TierBasis(int t) { return (t == 0) ? InpM1SizeBasis : InpM5SizeBasis; }
 
 CTrade trade;
 
@@ -149,7 +153,7 @@ int OnInit()
          lastLong[s][t]  = 0;
          lastShort[s][t] = 0;
          ich[s][t]  = iIchimoku(syms[s], TF[t], Tenkan, Kijun, SenkouB);
-         atrH[s][t] = iATR(syms[s], TF[t], 14);
+         atrH[s][t] = iATR(syms[s], TF[t], InpATRPeriod);
          if(ich[s][t] == INVALID_HANDLE || atrH[s][t] == INVALID_HANDLE) return(INIT_FAILED);
       }
 
@@ -288,7 +292,8 @@ bool HasPosition(string sym, int t)
 // measures it against the distance to the stop, so a stopped-out
 // trade loses that %. SIZE_VPS_ATR measures it against ATR(tier) x
 // InpRiskATRMult as the VPS build does — it has no entry stop, this
-// EA does, and the sweep stop is usually ~3x that reference.
+// EA does, and the sweep stop is usually 2.5-3x that reference. The
+// basis is set per tier: M1 on the stop, M5 the VPS way.
 // Falls back to InpFixedLots when the sizing data is unavailable;
 // every order is capped to the free margin. Each tier risks the %
 // on its own, so with an M1 and an M5 trade open together the
@@ -306,7 +311,7 @@ double RiskPct()
 double RiskLots(int s, int t, double stopDist)
 {
    double riskPct = RiskPct();
-   if(InpSizeBasis == SIZE_VPS_ATR)
+   if(TierBasis(t) == SIZE_VPS_ATR)
    {
       double a[1];
       if(CopyBuffer(atrH[s][t], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
