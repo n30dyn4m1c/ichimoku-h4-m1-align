@@ -7326,3 +7326,95 @@ Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested. The
 comparison to run is this file against the live build on the same data, as
 in §48/§50 (GOLDm#, real ticks, $100 start, 2024, 2025 and 2026); running it
 at `InpDisasterATRMult = 4` as well covers the half-size step.
+
+## 67. Kumo-dwell kihon breakout — the one kihon strategy with an edge
+
+**File:** `experimental-kumo-dwell-kihon-ea.mq5`
+**Magic number:** `20260889`
+
+User request (2026-10-05): explore high-probability ways to trade the kihon
+suchi times with Ichimoku, then build the best one "as is" for testing. A
+standalone build; it shares no code path with the live EA.
+
+### The study behind it
+
+Seven strategies were tested in Python on Yahoo data: daily bars 2000–2026
+and two years of H1 resampled to H4, for gold (GC=F), silver (SI=F),
+EURUSD, GBPUSD, USDJPY, AUDUSD, the S&P 500, the Nasdaq 100 and BTC. Each
+strategy was first run with no time rule. The kihon version keeps the
+trades whose bar count is within ±1 of 9, 17, 26, 33, 42, 51, 65 or 76. As
+a control, the same trades were filtered by 400 **placebo** number sets,
+each kihon number moved 3–5 bars either way, so the placebos have the same
+spacing and reach the same part of the count range. "Pctile" is the share of
+placebo sets the kihon set beat. Trades used a structure stop; the win rate
+is at a 1R target and the expectancy at 2R. Swing points are 5-bar fractals.
+
+| # | Strategy | D1 result | vs placebo | Verdict |
+|---|---|---|---|---|
+| 1 | Trend pullback lasting a kihon count from the swing extreme, entered on the close back over Tenkan | 1,116 trades, 50% win, +0.07R | pctile 100, but bootstrap p = 0.12; held in 2000–12, not 2013–26; H4 pctile 71 | weak; only count 17 stands out |
+| 2 | Exhaustion fade: impulse a kihon count old, > 2 ATR from Kijun, fade the first Tenkan break | 49% win, −0.04R | pctile 40 (H4 40) | no edge, as in §2 |
+| 3 | Three ships: ≥ 3 counts from earlier swings land on the bar of a confirmed reversal | 50% win, +0.04R | pctile 99.5; 77 with 3-bar fractals; H4 24 | real but about +0.06R; a filter at most |
+| 4 | **Kumo-dwell breakout**: closed in/behind the cloud a kihon count of bars, then breaks out | **166 trades, 59% win, +0.34R** | **pctile 100**; both halves | **this EA** |
+| 5 | Equal time (taito): leg C→D as long as A→B (±15%) | 12.5% of legs | 11–12% for other nearby legs | no forecasting value |
+| 6 | Kihon time exit after a trend TK cross | R grows smoothly with holding time (+0.07 at 9, +0.24 at 26, +0.53 at 90 bars) | peaks on kihon bars at placebo rate (pctile 60; H4 13) | trail instead |
+| 7 | H1 candles 9 and 17 from the server-day open (the §38/§49 gate) | gold: candle 9 holds the day's high or low 2.3%, candle 17 7.6% (4.2% if even) | candles 16–19 all high; BTC the same | session timing (NY open), not kihon |
+
+Under all of it: 27% of swing-point pairs sit a kihon distance apart against
+24.5% for the placebo distances, on both timeframes and with 3-, 5- and
+8-bar fractals. Kihon timing exists, but it is small.
+
+**Strategy 4 in detail.** Dwell 2–6 bars: +0.04R. Non-kihon dwell 7–80
+bars: 376 trades, 52% win, +0.06R. Kihon dwell: 166 trades, 59% win,
++0.34R (2000–12 +0.41R, 2013–26 +0.29R; longs +0.35R, shorts +0.33R; better
+than non-kihon dwells in 7 of 9 markets, not GBPUSD or USDJPY). Bootstrap
+95% interval of the kihon − non-kihon difference: +0.03 to +0.53R. Exact
+counts (tolerance 0): 58 trades, 66% win, +0.36R. Dwells of 9 and 17 only:
+37 trades, 70% win, +0.79R — chosen after seeing the per-count profile,
+so a hint, not a result. On H4 (two years, 0.05 ATR cost) the kihon subset
+lost to the placebos (113 trades, pctile 0.5).
+
+Caveats: Yahoo gold is the futures contract, daily bars carry no spread,
+trades on different markets overlap in time, and the sample is small. It is
+**rare**: gold had 10 kihon breakouts in 26 years, so the EA is meant to run
+on a list of symbols.
+
+### The rules, as tested
+
+Read once per new bar of `InpTF` (default **D1**) on the last closed bar.
+
+- **Breakout:** the close is above the cloud drawn under it and the bar
+  before closed at or below the cloud top (mirror for a sell).
+- **Dwell:** the number of consecutive closes before the breakout bar at or
+  below the cloud top (at or above the bottom for a sell), counted up to
+  `InpMaxDwell` (200). It must be within `InpKihonTol` (1) of a number in
+  `InpKihonNumbers` (`9,17,26,33,42,51,65,76`).
+- **Filters:** Tenkan above Kijun (`InpTKFilter`) and the close above the
+  close Kijun bars back (`InpChikouFilter`), below for a sell.
+- **Stop:** the lower of the Kijun and the cloud bottom minus
+  `InpStopBufferATR` (0.2) × ATR(14), no further than `InpMaxStopATR` (3) ×
+  ATR from the breakout close. ATR is MT5's `iATR`, the same simple mean of
+  true range the study used.
+- **Entry:** at market on the next bar, as the study entered at its open.
+  The D1 open is the rollover, when spreads are widest, so the signal stays
+  pending through that bar and fills on the first tick at or under
+  `InpMaxSpreadPoints` (60); it expires with the bar. An entry whose
+  distance to the stop is under `InpMinRiskATR` (0.2) or over
+  `InpMaxRiskATR` (6) × ATR is skipped, as in the study. A rejected order is
+  retried twice, then the signal is dropped.
+- **Exit:** `EXIT_TARGET` (default) puts a take profit at `InpTargetR` (2)
+  × the risk on the order. `EXIT_KIJUN` closes on a closed bar beyond the
+  Kijun instead. Either way the trade closes after `InpMaxHoldBars` (60)
+  bars. The study's other numbers: 1R target 59% win; Kijun exit +0.14R.
+- **Risk:** `InpRiskPct` (1%) of equity on the real stop distance, or
+  `InpFixedLots`; capped to `InpMaxMarginPct` (80%) of free margin. One
+  position per symbol. The order filling mode is taken from the symbol.
+- **Logging:** every cloud break that does not qualify is printed with its
+  dwell count (`InpLogSkips`), so a backtest journal shows the counts the
+  rule is turning down.
+
+### Status
+
+Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested in
+MT5. Suggested first run: D1, every symbol the broker offers from the study
+list (gold, silver, the four FX pairs, US500, US100, BTC), 2010 onward, 1%
+risk, once with `EXIT_TARGET` and once with `EXIT_KIJUN`.
