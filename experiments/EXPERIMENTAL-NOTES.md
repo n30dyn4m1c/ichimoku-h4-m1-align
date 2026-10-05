@@ -7900,6 +7900,43 @@ Other findings:
 - **Sweep and close back inside** (no chikou) is +0.016R gross and −0.33R
   after spread, with a sweep-extreme stop and the liquidity target.
 
+### The M5 tier (added 2026-10-06)
+
+The same rules also run on **M5** as a second tier (`InpM5Tier`, on). Swings,
+the 90-bar window and the lookback count M5 candles, and the minimum stop
+($2) and the 3R target are the M1 values, not tuned for M5. Each tier holds
+one position, tagged by its comment (`M1 sweep chikou` / `M5 sweep chikou`),
+so an M1 and an M5 trade can run side by side, each risking the regime's %.
+A position of this magic whose comment names neither tier blocks both.
+
+Simulated on M5 bars resampled from the same HistData M1 (`prep(5)` in
+`m1_chikou_liquidity_sim.py`):
+
+| M5, 90 bars, $2, 3R | Trades | Per trade | PF | Max DD |
+|---|---|---|---|---|
+| All, 2023–Oct 2026 | 696 | +0.135R | 1.19 | 39R |
+| Per year 2023 / 24 / 25 / 26 | | −0.09 / +0.36 / +0.22 / +0.04R | | |
+| Longs / shorts | | +0.29R / −0.03R | | |
+| Zero spread | 691 | +0.154R | 1.21 | 30R |
+| **Placebo (sweeps moved at random, 20 seeds)** | | **+0.163R** (+0.08 to +0.25) | | |
+
+**On M5 the sweep adds nothing.** The real sweeps beat 7 of 20 placebos
+(13 of 20 with a 60-bar window and $3 stop). Of a 120-setting grid, 104 were
+positive overall and none in all four years, since 2023 lost in every one.
+The M5 profit is gold's uptrend on longs, which random timing earns too. The
+stops are wide (median $11, 2.6×ATR(M5)), so the trades hold long enough to
+ride the trend.
+
+Account effect (stop-based sizing, GOLDm# contract, trades merged by time):
+
+| Tiers | Trades | From $100 | From $10,000 |
+|---|---|---|---|
+| M1 only | 2,565 | $2,356, max DD 35% | $17,934, max DD 5% |
+| M5 only | 696 | $158, max DD 50% | $13,573, max DD 18% |
+| M1 + M5 | 3,261 | $5,324, max DD 34% | $19,238, max DD 19% |
+
+`InpM5Tier = false` runs the M1 tier alone.
+
 **Status:** compiled clean in MetaEditor (0 errors, 0 warnings). Simulated
 only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R
 drawdown is about 32% of equity (compounded), so test at lower risk before

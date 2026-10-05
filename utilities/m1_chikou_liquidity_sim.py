@@ -12,8 +12,12 @@ from vpssim import load
 
 K = 26
 
-def prep():
+def prep(minutes=1):
+    """Arrays for the M1 bars, or for bars of `minutes` (5 = M5) resampled from them."""
     df = load()
+    if minutes > 1:
+        df = df.resample('%dmin' % minutes, label='left', closed='left').agg(
+            dict(o='first', h='max', l='min', c='last')).dropna()
     h, l, c, o = df.h.values, df.l.values, df.c.values, df.o.values
     mid = lambda n: ((df.h.rolling(n).max() + df.l.rolling(n).min()) / 2).values
     t, k = mid(9), mid(26)
@@ -24,9 +28,9 @@ def prep():
     hour = df.index.hour.values.astype(np.int64)
     year = df.index.year.values.astype(np.int64)
     dow = df.index.dayofweek.values.astype(np.int64)
-    # gap guard: bar i+1 must follow bar i by one minute (no weekend/holiday gap)
+    # gap guard: bar i+1 must follow bar i by one bar (no weekend/holiday gap)
     ts = df.index.values.astype('datetime64[m]').astype(np.int64)
-    contig = np.r_[ts[1:] - ts[:-1] == 1, False]
+    contig = np.r_[ts[1:] - ts[:-1] == minutes, False]
     return dict(o=o, h=h, l=l, c=c, t=t, k=k, sa=sa, sb=sb, atr=atr, hour=hour, year=year,
                 dow=dow, contig=contig, idx=df.index)
 

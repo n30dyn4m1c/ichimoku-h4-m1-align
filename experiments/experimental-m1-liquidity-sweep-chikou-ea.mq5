@@ -1,31 +1,37 @@
 //+------------------------------------------------------------------+
-//| EXPERIMENT — M1 LIQUIDITY SWEEP, THEN CHIKOU BREAKOUT (notes §71, |
-//| magic 20260892). One timeframe, M1, nothing above it:             |
-//|   * SWEEP: a wick trades beyond an UNRAIDED M1 swing — the        |
+//| EXPERIMENT — M1/M5 LIQUIDITY SWEEP, THEN CHIKOU BREAKOUT (notes   |
+//| §71, magic 20260892). Two TIERS, M1 and M5, each trading its own  |
+//| timeframe alone — no timeframe looks at another:                  |
+//|   * SWEEP: a wick trades beyond an UNRAIDED swing — the           |
 //|     po3-levels rules (§52): strictly beyond the InpLiqLeft candles|
 //|     before it, at least as far as the InpLiqRight after it, all   |
 //|     its right-hand candles closed, within InpLiqLookback candles. |
 //|     A swept LOW arms a LONG, a swept HIGH arms a SHORT — the stop |
 //|     hunt is taken against the side it ran.                        |
-//|   * TRIGGER: within InpSweepWindow bars of the sweep (the sweep   |
+//|   * TRIGGER: within the tier's sweep window (90 bars, the sweep   |
 //|     bar included), a CHIKOU BREAKOUT in the armed direction — the |
 //|     live VPS build's chikou test (above the cloud, the high, the  |
 //|     tenkan and kijun 26 bars back; the mirror for a sell), newly  |
 //|     true on the closed bar. Entry at the next bar's open.         |
 //|   * SL: the sweep's extreme — the furthest wick from the sweep    |
 //|     bar to the trigger bar (a sell's stop is lifted by the spread,|
-//|     since it trips on the ask). A stop closer than InpMinStop in  |
-//|     price is skipped: on M1 the spread eats small stops.          |
-//|   * TP: InpTargetR times the stop distance (3R).                  |
+//|     since it trips on the ask). A stop closer than the tier's     |
+//|     minimum ($2 on gold) is skipped: the spread eats small stops. |
+//|   * TP: the tier's target, 3 times the stop distance (3R).        |
+//|   * TIERS: M1 (InpM1Tier) and M5 (InpM5Tier) run the same rules   |
+//|     on their own bars, with their own window, minimum stop and    |
+//|     target, and hold one position each — tagged by comment, so an |
+//|     M1 and an M5 trade can run side by side. Bars, windows and    |
+//|     lookbacks are counted in the tier's own candles.              |
 //|   * SIZE: the live VPS build's regime for its lowest tiers (M5/   |
 //|     M15) — 1% of equity below $7000, 0.5% to $13000, 0.1% above — |
 //|     on the ACTUAL stop distance by default, so a stopped-out trade |
 //|     loses that %. InpSizeBasis = SIZE_VPS_ATR sizes it the VPS     |
-//|     way, against ATR(M1) x InpRiskATRMult; the stops here are ~3x |
+//|     way, against ATR(tier) x InpRiskATRMult; the stops are ~3x    |
 //|     that, so the real loss is ~3x the %. Capped to 80% of free    |
-//|     margin. One position per symbol, exits at SL or TP only.      |
-//|     A sweep seen while a position is open does not arm.           |
-//| Runs once per closed M1 bar.                                      |
+//|     margin. One position per tier per symbol, exits at SL or TP   |
+//|     only. A sweep seen while the tier's position is open does not |
+//|     arm. Each tier runs once per closed bar of its timeframe.     |
 //+------------------------------------------------------------------+
 #property strict
 
@@ -34,7 +40,7 @@
 enum ENUM_SIZE_BASIS
 {
    SIZE_STOP    = 0,   // The actual stop distance (a stop-out loses the %)
-   SIZE_VPS_ATR = 1    // The VPS build's basis: ATR(M1) x InpRiskATRMult
+   SIZE_VPS_ATR = 1    // The VPS build's basis: ATR(tier) x InpRiskATRMult
 };
 
 //--- Input Parameters ---
@@ -47,42 +53,60 @@ input int    Slippage = 30;
 input group  "Trade"
 input int    InpMaxSpreadPoints  = 60;    // Max spread in points to allow entry (0 = no limit)
 
-input group  "Sweep — unraided M1 liquidity (po3-levels rules)"
+input group  "Sweep — unraided liquidity (po3-levels rules, in the tier's own candles)"
 input int    InpLiqLeft          = 6;     // Swing: candles to the left (po3-levels default)
 input int    InpLiqRight         = 6;     // Swing: candles to the right (po3-levels default)
-input int    InpLiqLookback      = 100;   // M1 candles of history searched
-input int    InpSweepWindow      = 90;    // Bars after the sweep the chikou breakout may come
+input int    InpLiqLookback      = 100;   // Candles of history searched
 
-input group  "Exits"
-input double InpMinStop          = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
-input double InpTargetR          = 3.0;   // Take profit at this multiple of the stop distance
+input group  "M1 tier"
+input bool   InpM1Tier           = true;  // Trade the M1 tier
+input int    InpM1SweepWindow    = 90;    // M1 bars after the sweep the chikou breakout may come
+input double InpM1MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
+input double InpM1TargetR        = 3.0;   // Take profit at this multiple of the stop distance
+
+input group  "M5 tier"
+input bool   InpM5Tier           = true;  // Trade the M5 tier
+input int    InpM5SweepWindow    = 90;    // M5 bars after the sweep the chikou breakout may come
+input double InpM5MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
+input double InpM5TargetR        = 3.0;   // Take profit at this multiple of the stop distance
 
 input group  "Risk Management (the live VPS build's M5/M15 regime, % of actual equity)"
 input double InpFixedLots       = 0.10;   // Fixed lots fallback (sizing data unavailable)
 input ENUM_SIZE_BASIS InpSizeBasis = SIZE_STOP; // Distance the % is measured against
-input double InpRiskATRMult     = 2.0;    // SIZE_VPS_ATR: reference stop = ATR(M1) x this (the VPS value)
+input double InpRiskATRMult     = 2.0;    // SIZE_VPS_ATR: reference stop = ATR(tier) x this (the VPS value)
 input double InpRiskTier2At     = 7000.0; // Equity where risk drops to tier 2 (half regime)
 input double InpRiskTier3At     = 13000.0;// Equity where risk drops to tier 3 (tiny regime)
-input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At)
+input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At), each of M1 and M5
 input double InpRiskPct_T2      = 0.5;    // Tier 2 (half regime)
 input double InpRiskPct_T3      = 0.1;    // Tier 3 (equity >= Tier3At)
 input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may commit
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
+#define NT       2               // tiers: 0 = M1, 1 = M5
+
+const ENUM_TIMEFRAMES TF[NT]   = {PERIOD_M1, PERIOD_M5};
+const string          TFN[NT]  = {"M1", "M5"};
 
 string   syms[MAX_SYMS];
 int      symsCount = 0;
-int      ichM1[MAX_SYMS];
-int      atrM1[MAX_SYMS];
-datetime lastM1bar[MAX_SYMS];
-string   lastSkip[MAX_SYMS];     // last skip reason printed (logged on change only)
-datetime armLong[MAX_SYMS];      // open time of the oldest live sweep of a low (0 = none)
-datetime armShort[MAX_SYMS];     // open time of the oldest live sweep of a high (0 = none)
-datetime lastLong[MAX_SYMS];     // the newest sweep of a low, taken over when the oldest expires
-datetime lastShort[MAX_SYMS];    // the newest sweep of a high
+int      ich[MAX_SYMS][NT];
+int      atrH[MAX_SYMS][NT];
+datetime lastBar[MAX_SYMS][NT];
+string   lastSkip[MAX_SYMS][NT];   // last skip reason printed (logged on change only)
+datetime armLong[MAX_SYMS][NT];    // open time of the oldest live sweep of a low (0 = none)
+datetime armShort[MAX_SYMS][NT];   // open time of the oldest live sweep of a high (0 = none)
+datetime lastLong[MAX_SYMS][NT];   // the newest sweep of a low, taken over when the oldest expires
+datetime lastShort[MAX_SYMS][NT];  // the newest sweep of a high
 
-int MAGIC = 20260892;   // M1 liquidity sweep, then chikou breakout
+int MAGIC = 20260892;   // M1/M5 liquidity sweep, then chikou breakout
+
+// Per-tier settings, read from the inputs.
+bool   TierOn(int t)     { return (t == 0) ? InpM1Tier        : InpM5Tier;        }
+int    TierWindow(int t) { return (t == 0) ? InpM1SweepWindow : InpM5SweepWindow; }
+double TierMinStop(int t){ return (t == 0) ? InpM1MinStop     : InpM5MinStop;     }
+double TierTargetR(int t){ return (t == 0) ? InpM1TargetR     : InpM5TargetR;     }
+string TierComment(int t){ return TFN[t] + " sweep chikou"; }
 
 CTrade trade;
 
@@ -116,17 +140,18 @@ int OnInit()
    if(symsCount <= 0) return(INIT_FAILED);
 
    for(int s = 0; s < symsCount; s++)
-   {
-      lastM1bar[s] = 0;
-      lastSkip[s]  = "";
-      armLong[s]   = 0;
-      armShort[s]  = 0;
-      lastLong[s]  = 0;
-      lastShort[s] = 0;
-      ichM1[s] = iIchimoku(syms[s], PERIOD_M1, Tenkan, Kijun, SenkouB);
-      atrM1[s] = iATR(syms[s], PERIOD_M1, 14);
-      if(ichM1[s] == INVALID_HANDLE || atrM1[s] == INVALID_HANDLE) return(INIT_FAILED);
-   }
+      for(int t = 0; t < NT; t++)
+      {
+         lastBar[s][t]   = 0;
+         lastSkip[s][t]  = "";
+         armLong[s][t]   = 0;
+         armShort[s][t]  = 0;
+         lastLong[s][t]  = 0;
+         lastShort[s][t] = 0;
+         ich[s][t]  = iIchimoku(syms[s], TF[t], Tenkan, Kijun, SenkouB);
+         atrH[s][t] = iATR(syms[s], TF[t], 14);
+         if(ich[s][t] == INVALID_HANDLE || atrH[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+      }
 
    trade.SetDeviationInPoints(Slippage);
    trade.SetExpertMagicNumber(MAGIC);
@@ -136,10 +161,11 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    for(int s = 0; s < symsCount; s++)
-   {
-      IndicatorRelease(ichM1[s]);
-      IndicatorRelease(atrM1[s]);
-   }
+      for(int t = 0; t < NT; t++)
+      {
+         IndicatorRelease(ich[s][t]);
+         IndicatorRelease(atrH[s][t]);
+      }
 }
 
 //==============================================================
@@ -150,15 +176,15 @@ void OnDeinit(const int reason)
 // 0 otherwise. A breakout is clear on bar 1 and not on bar 2.
 //==============================================================
 
-int ChikouClear(int s, const MqlRates &r[], int sh)
+int ChikouClear(int s, int t, const MqlRates &r[], int sh)
 {
    int c = sh + Kijun;
    if(c >= ArraySize(r)) return 0;
    double tk[1], kj[1], sa[1], sb[1];
-   if(CopyBuffer(ichM1[s], 0, c, 1, tk) <= 0) return 0;
-   if(CopyBuffer(ichM1[s], 1, c, 1, kj) <= 0) return 0;
-   if(CopyBuffer(ichM1[s], 2, c, 1, sa) <= 0) return 0;
-   if(CopyBuffer(ichM1[s], 3, c, 1, sb) <= 0) return 0;
+   if(CopyBuffer(ich[s][t], 0, c, 1, tk) <= 0) return 0;
+   if(CopyBuffer(ich[s][t], 1, c, 1, kj) <= 0) return 0;
+   if(CopyBuffer(ich[s][t], 2, c, 1, sa) <= 0) return 0;
+   if(CopyBuffer(ich[s][t], 3, c, 1, sb) <= 0) return 0;
    double chik = r[sh].close;
    double cHi  = MathMax(sa[0], sb[0]);
    double cLo  = MathMin(sa[0], sb[0]);
@@ -167,11 +193,11 @@ int ChikouClear(int s, const MqlRates &r[], int sh)
    return 0;
 }
 
-int ChikouBreakout(int s, const MqlRates &r[])
+int ChikouBreakout(int s, int t, const MqlRates &r[])
 {
-   int now = ChikouClear(s, r, 1);
+   int now = ChikouClear(s, t, r, 1);
    if(now == 0) return 0;
-   return (ChikouClear(s, r, 2) == now) ? 0 : now;
+   return (ChikouClear(s, t, r, 2) == now) ? 0 : now;
 }
 
 //==============================================================
@@ -233,14 +259,23 @@ bool SpreadOK(string sym)
    return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
 }
 
-bool HasPosition(string sym)
+// The tier's own position, found by its comment. A position of this magic
+// whose comment names neither tier (edited by hand, or by the broker)
+// blocks both tiers rather than letting a second trade stack on it.
+bool HasPosition(string sym, int t)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
-      if(PositionGetString(POSITION_SYMBOL) == sym) return true;
+      if(PositionGetString(POSITION_SYMBOL) != sym) continue;
+      string cm = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cm, TierComment(t)) == 0) return true;
+      bool known = false;
+      for(int u = 0; u < NT; u++)
+         if(StringFind(cm, TierComment(u)) == 0) known = true;
+      if(!known) return true;
    }
    return false;
 }
@@ -251,11 +286,13 @@ bool HasPosition(string sym)
 // de-risking as the account grows (1% below InpRiskTier2At, 0.5%
 // between the tiers, 0.1% at InpRiskTier3At and above). SIZE_STOP
 // measures it against the distance to the stop, so a stopped-out
-// trade loses that %. SIZE_VPS_ATR measures it against ATR(M1) x
+// trade loses that %. SIZE_VPS_ATR measures it against ATR(tier) x
 // InpRiskATRMult as the VPS build does — it has no entry stop, this
 // EA does, and the sweep stop is usually ~3x that reference.
 // Falls back to InpFixedLots when the sizing data is unavailable;
-// every order is capped to the free margin.
+// every order is capped to the free margin. Each tier risks the %
+// on its own, so with an M1 and an M5 trade open together the
+// account carries twice it.
 //==============================================================
 
 double RiskPct()
@@ -266,13 +303,13 @@ double RiskPct()
    return InpRiskPct;
 }
 
-double RiskLots(int s, double stopDist)
+double RiskLots(int s, int t, double stopDist)
 {
    double riskPct = RiskPct();
    if(InpSizeBasis == SIZE_VPS_ATR)
    {
       double a[1];
-      if(CopyBuffer(atrM1[s], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
+      if(CopyBuffer(atrH[s][t], 0, 1, 1, a) <= 0 || a[0] <= 0) return InpFixedLots;
       stopDist = a[0] * InpRiskATRMult;
    }
    if(riskPct <= 0 || stopDist <= 0) return InpFixedLots;
@@ -317,11 +354,11 @@ void CapLotsToMargin(string sym, bool isBuy, double &lots)
 }
 
 // Journal a skipped signal once, not every minute it persists.
-void Skip(int s, string why)
+void Skip(int s, int t, string why)
 {
-   if(why == lastSkip[s]) return;
-   lastSkip[s] = why;
-   Print(syms[s] + " skip: " + why);
+   if(why == lastSkip[s][t]) return;
+   lastSkip[s][t] = why;
+   Print(syms[s] + " " + TFN[t] + " skip: " + why);
 }
 
 //==============================================================
@@ -329,41 +366,47 @@ void Skip(int s, string why)
 // then look for the chikou breakout of an armed side.
 //==============================================================
 
-// Bars from the sweep bar opening at t to closed bar 1 (0 = bar 1 itself).
-int BarsSince(string sym, datetime t)
+// Tier bars from the sweep bar opening at tm to closed bar 1 (0 = bar 1 itself).
+int BarsSince(string sym, int t, datetime tm)
 {
-   int sh = iBarShift(sym, PERIOD_M1, t, false);
+   int sh = iBarShift(sym, TF[t], tm, false);
    return (sh < 0) ? INT_MAX : sh - 1;
 }
 
-void OnBar(int s)
+void ClearArms(int s, int t)
+{
+   armLong[s][t] = 0; armShort[s][t] = 0; lastLong[s][t] = 0; lastShort[s][t] = 0;
+}
+
+void OnBar(int s, int t)
 {
    string sym = syms[s];
-   int bars = (int)MathMax(InpLiqLookback + InpLiqLeft + 2, InpSweepWindow + Kijun + 4);
+   int win  = TierWindow(t);
+   int bars = (int)MathMax(InpLiqLookback + InpLiqLeft + 2, win + Kijun + 4);
    MqlRates r[];
    ArraySetAsSeries(r, true);
-   if(CopyRates(sym, PERIOD_M1, 0, bars, r) < bars) return;
+   if(CopyRates(sym, TF[t], 0, bars, r) < bars) return;
 
    // A swept low arms a long, a swept high a short. The oldest live
    // sweep is kept: its extreme is the furthest wick of the whole run.
    // When it ages out of the window the newest sweep takes over.
-   if(SweptBy1(r, false)) { lastLong[s]  = r[1].time; if(armLong[s]  == 0) armLong[s]  = r[1].time; }
-   if(SweptBy1(r, true))  { lastShort[s] = r[1].time; if(armShort[s] == 0) armShort[s] = r[1].time; }
-   if(armLong[s] != 0 && BarsSince(sym, armLong[s]) > InpSweepWindow)
-      armLong[s] = (lastLong[s] != 0 && BarsSince(sym, lastLong[s]) <= InpSweepWindow) ? lastLong[s] : 0;
-   if(armShort[s] != 0 && BarsSince(sym, armShort[s]) > InpSweepWindow)
-      armShort[s] = (lastShort[s] != 0 && BarsSince(sym, lastShort[s]) <= InpSweepWindow) ? lastShort[s] : 0;
+   if(SweptBy1(r, false)) { lastLong[s][t]  = r[1].time; if(armLong[s][t]  == 0) armLong[s][t]  = r[1].time; }
+   if(SweptBy1(r, true))  { lastShort[s][t] = r[1].time; if(armShort[s][t] == 0) armShort[s][t] = r[1].time; }
+   if(armLong[s][t] != 0 && BarsSince(sym, t, armLong[s][t]) > win)
+      armLong[s][t] = (lastLong[s][t] != 0 && BarsSince(sym, t, lastLong[s][t]) <= win) ? lastLong[s][t] : 0;
+   if(armShort[s][t] != 0 && BarsSince(sym, t, armShort[s][t]) > win)
+      armShort[s][t] = (lastShort[s][t] != 0 && BarsSince(sym, t, lastShort[s][t]) <= win) ? lastShort[s][t] : 0;
 
-   int dir = ChikouBreakout(s, r);
+   int dir = ChikouBreakout(s, t, r);
    if(dir == 0) return;
-   datetime armed = (dir == 1) ? armLong[s] : armShort[s];
+   datetime armed = (dir == 1) ? armLong[s][t] : armShort[s][t];
    if(armed == 0) return;
 
    string side = (dir == 1) ? "buy" : "sell";
-   if(!SpreadOK(sym)) { Skip(s, side + " breakout after sweep, spread"); return; }
+   if(!SpreadOK(sym)) { Skip(s, t, side + " breakout after sweep, spread"); return; }
 
    // The sweep's extreme: the furthest wick from the sweep bar to bar 1.
-   int from = BarsSince(sym, armed) + 1;
+   int from = BarsSince(sym, t, armed) + 1;
    if(from >= ArraySize(r)) return;
    double ext = (dir == 1) ? r[1].low : r[1].high;
    for(int i = 1; i <= from; i++)
@@ -379,48 +422,49 @@ void OnBar(int s)
    // A sell's stop trips on the ask, so it sits a spread above the wick.
    double sl   = NormalizeDouble((dir == 1) ? ext : ext + (ask - bid), digits);
    double risk = (dir == 1) ? (price - sl) : (sl - price);
-   if(risk <= minDist) { Skip(s, side + " breakout after sweep, stop not behind the entry"); return; }
-   if(InpMinStop > 0 && risk < InpMinStop)
+   if(risk <= minDist) { Skip(s, t, side + " breakout after sweep, stop not behind the entry"); return; }
+   double minStop = TierMinStop(t);
+   if(minStop > 0 && risk < minStop)
    {
-      Skip(s, side + " breakout after sweep, stop " + DoubleToString(risk, digits) + " under the minimum");
+      Skip(s, t, side + " breakout after sweep, stop " + DoubleToString(risk, digits) + " under the minimum");
       return;
    }
-   double tp = NormalizeDouble((dir == 1) ? price + InpTargetR * risk : price - InpTargetR * risk, digits);
+   double tgtR = TierTargetR(t);
+   double tp = NormalizeDouble((dir == 1) ? price + tgtR * risk : price - tgtR * risk, digits);
 
-   double lots = RiskLots(s, risk);
+   double lots = RiskLots(s, t, risk);
    CapLotsToMargin(sym, (dir == 1), lots);
    trade.SetTypeFillingBySymbol(sym);
-   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, tp, "M1 sweep chikou")
-                        : trade.Sell(lots, sym, price, sl, tp, "M1 sweep chikou");
-   lastSkip[s] = "";
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, price, sl, tp, TierComment(t))
+                        : trade.Sell(lots, sym, price, sl, tp, TierComment(t));
+   lastSkip[s][t] = "";
    if(ok)
    {
-      armLong[s] = 0; armShort[s] = 0; lastLong[s] = 0; lastShort[s] = 0;
-      Print(sym + " " + side + " @ " + DoubleToString(price, digits) + " lots " +
+      ClearArms(s, t);
+      Print(sym + " " + TFN[t] + " " + side + " @ " + DoubleToString(price, digits) + " lots " +
             DoubleToString(lots, 2) + " | SL " + DoubleToString(sl, digits) +
             " (sweep extreme) | TP " + DoubleToString(tp, digits) +
-            " (" + DoubleToString(InpTargetR, 1) + "R)");
+            " (" + DoubleToString(tgtR, 1) + "R)");
    }
    else
-      Print(sym + " " + side + " failed, retcode " + IntegerToString(trade.ResultRetcode()));
+      Print(sym + " " + TFN[t] + " " + side + " failed, retcode " + IntegerToString(trade.ResultRetcode()));
 }
 
 void OnTick()
 {
    for(int s = 0; s < symsCount; s++)
-   {
-      // Act once per closed M1 bar.
-      datetime t = iTime(syms[s], PERIOD_M1, 1);
-      if(t == 0 || t == lastM1bar[s]) continue;
-      lastM1bar[s] = t;
-
-      // While a position is open nothing arms; the next setup starts flat.
-      if(HasPosition(syms[s]))
+      for(int t = 0; t < NT; t++)
       {
-         armLong[s] = 0; armShort[s] = 0; lastLong[s] = 0; lastShort[s] = 0;
-         continue;
+         if(!TierOn(t)) continue;
+
+         // Act once per closed bar of the tier's timeframe.
+         datetime tm = iTime(syms[s], TF[t], 1);
+         if(tm == 0 || tm == lastBar[s][t]) continue;
+         lastBar[s][t] = tm;
+
+         // While the tier's position is open nothing arms; the next setup starts flat.
+         if(HasPosition(syms[s], t)) { ClearArms(s, t); continue; }
+         OnBar(s, t);
       }
-      OnBar(s);
-   }
 }
 //Fear God and Live
