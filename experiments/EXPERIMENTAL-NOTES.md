@@ -7418,3 +7418,138 @@ Compiled clean in MetaEditor (0 errors, 0 warnings). Not yet backtested in
 MT5. Suggested first run: D1, every symbol the broker offers from the study
 list (gold, silver, the four FX pairs, US500, US100, BTC), 2010 onward, 1%
 risk, once with `EXIT_TARGET` and once with `EXIT_KIJUN`.
+
+## 68. M1/M5 kihon-time kumo scalper — ten intraday kihon scalps, none with an edge
+
+**File:** `experimental-m1m5-kihon-kumo-scalper-ea.mq5`
+**Magic number:** `20260890`
+
+User request (2026-10-06): first, can §67 be tuned for lower timeframes?
+Then: build a kihon EA that watches an **M1 and M5 price + chikou breakout
+of the kumo** happening at **kihon times of the day on M15, M30 and H1**,
+and explore ten high-probability scalps (trend or reversal) to trade at
+those times. A standalone build; it shares no code path with the live EA.
+
+### Part 1 — §67 on lower timeframes
+
+§67's lab, rerun on two years of Yahoo H1 and H4, with a D1 bias filter
+(the close beyond the D1 cloud and Tenkan past Kijun, from the previous
+completed day), an inside-only dwell (closes strictly inside the cloud),
+and tolerance 0. Pctile is against the same 400 placebo number sets.
+
+| TF | Variant | Kihon trades | E @ 2R | Placebo median | Pctile |
+|---|---|---|---|---|---|
+| H4 | as §67 | 113 | −0.06R | +0.12R | 0 |
+| H4 | + D1 bias | 29 | −0.43R | +0.11R | 0 |
+| H4 | inside-only dwell | 41 | +0.10R | −0.06R | 70 |
+| H1 | as §67 | 421 | −0.05R | +0.04R | 1 |
+| H1 | + D1 bias | 169 | +0.02R | +0.03R | 44 |
+| H1 | tol 0 + D1 bias | 58 | +0.30R | −0.00R | 97 |
+
+The only pass (H1, tol 0 + D1 bias) is one of about eight variants tried on
+58 trades, and on H1 the per-count profile is jagged (count 51: 31 trades,
+19% win), so it is not a result. The D1 bias filter lifts **all** H1
+breakouts (+0.09R vs +0.04R) whatever the dwell, so it helps through
+trend, not the count. **The kihon dwell does not carry down from D1.**
+
+### Part 2 — the intraday study
+
+Data: **HistData M1** (bid, 2023-01 to 2026-09, 3.75 years) for XAUUSD,
+XAGUSD, EURUSD, GBPUSD, USDJPY, AUDUSD, SPXUSD and NSXUSD, moved to
+EET/EEST server time so the day opens at 00:00 as on XM. (Dukascopy
+rate-limited the download; Yahoo keeps only 7–30 days of M1.)
+
+**Kihon windows** are §49's day clocks at tolerance 0: M15 candles 9, 17,
+26, 33, 42, 51, 65, 76; M30 candles 9, 17, 26, 33, 42; H1 candles 9 and 17,
+counted from the day open. A signal counts as kihon when its M1 bar sits in
+any of them (about 4½ hours a day).
+
+**Method.** Every scalp is simulated at every hour. The kihon subset is then
+compared with all other hours and with **200 placebo timetables**: each
+number moved 3–5 candles, capped at the day's reach. Signals fire on an M1
+close and enter at the next M1 open. There is one signal per side per M15
+candle. Risk must be 0.25–3 × ATR(M5) and at least 3 spreads. Outcomes are
+at 1R, 1.5R, 2R and an M1-Kijun trail, with a 90-bar time stop and the stop
+checked before the target inside a bar. Costs are a round trip per market
+(gold $0.30, EURUSD 1.2 pips, US500 0.6, US100 2.0, …). "Clear" is the
+family's `CheckAlign`: the close beyond Tenkan, Kijun and the cloud, and
+beyond the high/low, Tenkan, Kijun and cloud 26 bars back.
+
+| # | Strategy | All trades | Kihon trades | Kihon win @1R | Kihon E @1.5R | Other hours | Pctile |
+|---|---|---|---|---|---|---|---|
+| T1 | **M1 price+chikou turn clear of the kumo, M5 clear** (the requested trigger) | 129,875 | 25,938 | 47.8% | −0.150R | −0.152R | 36 |
+| T2 | **M5 price+chikou turn clear, M1 clear** | 18,367 | 3,936 | 48.1% | −0.118R | −0.124R | 51 |
+| T3 | Continuation: M1+M5 clear at the first minute of an M15 candle | 73,591 | 14,694 | 47.8% | −0.145R | −0.152R | 59 |
+| T4 | M1 chikou turns clear while price is already clear, M5 clear | 43,464 | 8,509 | 48.3% | −0.157R | −0.155R | 28 |
+| T5 | Break of the previous M15 candle's range, M1+M5 clear | 91,124 | 18,811 | 48.7% | −0.189R | −0.188R | 68 |
+| T6 | M1 Kijun pullback, close back over Tenkan, M5 clear | 51,034 | 10,366 | 49.9% | −0.184R | −0.199R | 89 |
+| R1 | 60-minute extreme, then a close back through the M1 Kijun | 117,738 | 24,365 | 49.3% | −0.171R | −0.168R | 47 |
+| R2 | Failed M1 kumo break: back through the far edge within 5 bars | 92,490 | 19,056 | 49.3% | −0.177R | −0.181R | 65 |
+| R3 | Stretch fade: > 2.5 ATR(M5) from the M5 Kijun, M1 TK cross back | 12,725 | 2,331 | 45.4% | −0.251R | −0.181R | 0 |
+| R4 | Sweep of the previous M15 candle's extreme, closed back inside | 98,226 | 20,137 | 50.1% | −0.186R | −0.197R | 84 |
+
+**Before costs every scalp is a coin flip:** E @ 1.5R between −0.02R and
++0.01R at kihon times and at other hours alike, with a 49–50% win rate at
+1R (R3 is −0.07R). The cost is **0.13–0.20R a trade**, and that is the whole
+loss. Insisting on stops of 1 ATR(M5) or more changes nothing (T2: −0.115R
+kihon vs −0.123R other).
+
+**Kihon windows add nothing.** No scalp beats 95% of the placebo
+timetables pooled, and none beats them on M15, M30 or H1 windows taken
+alone. The best per-timeframe readings are R4 94.5, R2 92 and R1 91 on H1,
+all still losing. The hour-of-day profile is flat, and the M15 slots two
+either side of each kihon candle look the same as the candle itself. The
+kihon effect also flips sign by year and by market.
+
+**Gold alone looked promising at first, and it was the New York open.**
+On XAUUSD the trend scalps T2, T3, T5 and T6 scored pctile 97–100, almost
+all of it from **H1 candle 17 (16:00–17:00 server)**, the hour of the
+US cash open. The H1 placebos move that candle 3–5 hours, out of New York
+entirely, so the test favours it. This is the same session effect §67
+found for candle 17 in strategy 7. Pooled across eight markets it is gone.
+
+Verdict: **at M1/M5 scale there is no edge to time.** The kumo/chikou
+breakout, the continuation, the pullback and the four reversals all sit at
+50/50 before costs. Kihon times are no better than any other 4½ hours of
+the day. As in §67, kihon timing is real only where the bars are large
+enough for it to beat the spread (D1).
+
+### The EA, as tested
+
+Built because it was asked for, with the three trend triggers that share
+the M1/M5 kumo machinery. The default is the least-bad one (T2). It is for
+an MT5 confirmation of the study, not for the VPS.
+
+- **Read** once per new M1 bar, on the bar that just closed (shift 1).
+- **`InpTrigger`**: `TRIG_M5_BREAK` (T2, default) fires only on the M1 bar
+  that closed an M5 bar: M5 is clear at shift 1 and not at shift 2, and M1
+  is clear in the same direction. `TRIG_M1_BREAK` (T1) is M1 turning clear
+  with M5's last closed bar clear. `TRIG_CANDLE_OPEN` (T3) is the first
+  minute of an M15 candle with M1 and M5 clear.
+- **Kihon gate**: the signal bar's open time is counted on M15, M30 and H1
+  from the D1 open with `Bars()` (inclusive, §49), on the reachable
+  numbers, within `InpKihonTol` (0). `InpKihonM15/M30/H1` switch each clock.
+  **`InpKihonGate = false` trades every hour** — the control run that
+  shows whether the gate does anything.
+- **Stop:** the further of the Kijun and the cloud edge + `InpStopBufferATR`
+  (0.2) × ATR — M5 lines and ATR(M5) for `TRIG_M5_BREAK`, M1 lines and
+  ATR(M1) for the other two.
+- **Entry:** market, first tick of the next M1 bar inside
+  `InpMaxSpreadPoints` (40). The signal expires with that bar. Skipped
+  when the stop is under `InpMinRiskATR` (0.25) × ATR(M5) or 3 spreads, or
+  over `InpMaxRiskATR` (3) × ATR(M5). One trade per side per M15 candle,
+  one position per symbol (the study let trades overlap).
+- **Exit:** `EXIT_TARGET` (default), a TP at `InpTargetR` (1.5) × risk;
+  or `EXIT_KIJUN`, an M1 close back beyond the M1 Kijun, the entry bar
+  excepted. Either way the trade closes after `InpMaxHoldBars` (90) M1 bars.
+- **Risk:** `InpRiskPct` (0.5%) of equity on the stop, or `InpFixedLots`,
+  capped at `InpMaxMarginPct` (80%) of free margin. Order filling from the
+  symbol.
+
+### Status
+
+Not compiled here: there is no MetaEditor on the dev machine. Compile it
+in MetaEditor before testing. Suggested check: GOLDm#, Jan–Sep 2026, real
+ticks, run twice, `InpKihonGate = true` and `false`. The study predicts
+the same loss per trade either way, with the gated run trading about a
+fifth as often.
