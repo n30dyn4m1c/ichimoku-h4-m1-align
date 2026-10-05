@@ -7650,6 +7650,21 @@ tier-3 bands (28%). At the live bands it is ruined in 2023.
   band removed ruin across all 65 starts while keeping most of the upside.
   This is a risk-input change only: the `InpRiskPct*` inputs can be set in
   the EA's properties on the terminal, so no code edit is needed.
+- **From the live balance, $100 (user, 2026-10-06).** Every plan was started
+  from $100 each week from 2023-04 to the end of the data (weekly starts
+  overlap, so they are not independent). Twelve months ahead:
+
+  | Plan | Ruined | Below $100 | Median end | Reached $1k | Median max DD |
+  |---|---|---|---|---|---|
+  | live | 60% | 62% | $0 | 36% | 100% |
+  | live, 2025+ starts only | 23% | 23% | $19,522 | 77% | 96% |
+  | live × 0.5 | 0% | 23% | $303 | 43% | 78% |
+  | live × 0.5, 2025+ starts | 0% | 0% | $9,928 | 100% | 72% |
+  | live × 0.25 | 0% | 2% | $249 | 33% | 53% |
+  | tier-3 bands | 0% | 0% | $188 | 0% | 35% |
+
+  At $100 the 0.1-lot minimum lifts the smaller plans' M15/M30 orders above
+  their nominal %, which the simulation includes.
 - Caveats: one data feed (HistData, not XM's), constant spread, no swaps (they
   would hurt the multi-day H1/H4 trades) and no slippage. A real-tick MT5
   run of 2023 is the check to make before acting on the 2023 finding.
