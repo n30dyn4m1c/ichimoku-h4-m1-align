@@ -30,13 +30,14 @@
 //|   * SIZE: the live VPS build's M5 regime — 1% of equity below     |
 //|     $7000, 0.5% to $13000, 0.1% above — on every tier, measured   |
 //|     on the ACTUAL stop (SIZE_STOP) by default, so a stop-out      |
-//|     loses that %. Any tier can be sized the live VPS way |
+//|     loses that %. Any tier can be sized the live VPS way          |
 //|     (SIZE_VPS_ATR, ATR(tier, 14) x InpRiskATRMult), but the sweep |
 //|     stop is a median ~2.6x that, and so is the real loss.         |
-//|     A trade whose broker MINIMUM lot would lose more than         |
-//|     InpMinLotRiskMult (2) x the % at its stop is skipped. Capped  |
-//|     to 80% of free margin. One position per tier per symbol,      |
-//|     exits at SL or TP only. The M5 tier is OFF by default.        |
+//|     Optional guard (off): a trade whose broker MINIMUM lot would  |
+//|     lose more than InpMinLotRiskMult x the % at its stop is       |
+//|     skipped. Capped to 80% of free margin. One position per tier  |
+//|     per symbol, exits at SL or TP only. Defaults: M1 and M5 on,   |
+//|     M15/M30/H1 off (MT5 2026 tests, notes §71).                   |
 //|     A sweep seen while the tier's position is open does not arm.  |
 //|     Each tier runs once per closed bar of its timeframe.          |
 //+------------------------------------------------------------------+
@@ -72,27 +73,27 @@ input double InpM1MinStop        = 2.0;   // Minimum stop distance in PRICE (gol
 input double InpM1TargetR        = 3.0;   // Take profit at this multiple of the stop distance
 
 input group  "M5 tier"
-input bool   InpM5Tier           = false; // Trade the M5 tier (off: no sweep edge on M5, §71)
+input bool   InpM5Tier           = true;  // Trade the M5 tier
 input int    InpM5SweepWindow    = 90;    // M5 bars after the sweep the chikou breakout may come
 input double InpM5MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM5TargetR        = 3.0;   // Take profit at this multiple of the stop distance
 
 input group  "M15 tier"
-input bool   InpM15Tier          = true;  // Trade the M15 tier
+input bool   InpM15Tier          = false; // Trade the M15 tier (off: 2026 stops of $20-650 cannot be sized on a small account)
 input int    InpM15SweepWindow   = 90;    // M15 bars after the sweep the chikou breakout may come
 input double InpM15MinStop       = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM15TargetR       = 3.0;   // Take profit at this multiple of the stop distance
 input bool   InpM15ShortH4       = true;  // Shorts only while H4 is bearish (CheckAlign)
 
 input group  "M30 tier"
-input bool   InpM30Tier          = true;  // Trade the M30 tier
+input bool   InpM30Tier          = false; // Trade the M30 tier (off: 2026 stops of $20-650 cannot be sized on a small account)
 input int    InpM30SweepWindow   = 90;    // M30 bars after the sweep the chikou breakout may come
 input double InpM30MinStop       = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpM30TargetR       = 3.0;   // Take profit at this multiple of the stop distance
 input bool   InpM30ShortH4       = true;  // Shorts only while H4 is bearish (CheckAlign)
 
 input group  "H1 tier"
-input bool   InpH1Tier           = true;  // Trade the H1 tier
+input bool   InpH1Tier           = false; // Trade the H1 tier (off: 2026 stops of $20-650 cannot be sized on a small account)
 input int    InpH1SweepWindow    = 90;    // H1 bars after the sweep the chikou breakout may come
 input double InpH1MinStop        = 2.0;   // Minimum stop distance in PRICE (gold: $2); 0 = off
 input double InpH1TargetR        = 3.0;   // Take profit at this multiple of the stop distance
@@ -113,7 +114,7 @@ input double InpRiskPct         = 1.0;    // Tier 1 (equity < Tier2At), each tim
 input double InpRiskPct_T2      = 0.5;    // Tier 2 (half regime)
 input double InpRiskPct_T3      = 0.1;    // Tier 3 (equity >= Tier3At)
 input double InpMarginUsePct    = 80.0;   // Max % of FREE margin one order may commit
-input double InpMinLotRiskMult  = 2.0;    // Skip when the MINIMUM lot would lose more than this x the % at the stop (0 = off)
+input double InpMinLotRiskMult  = 0.0;    // Skip when the MINIMUM lot would lose more than this x the % at the stop (0 = off; on, it drops the wide-stop trades that carry M1)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60

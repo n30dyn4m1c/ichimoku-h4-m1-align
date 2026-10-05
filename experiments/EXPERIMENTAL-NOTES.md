@@ -8048,6 +8048,62 @@ time):
 The H4 short filter was picked after seeing the data, from about 100 trades
 per tier per half. Above M1 the profit still rides gold's 2023–26 uptrend.
 
+### MT5 tests (2026-10-06): the simulation did not hold up
+
+The user ran the EA in the MT5 tester: GOLDm#, XMGlobal-MT5 5, "every tick"
+(ticks generated from M1 bars, not real ticks), 2026-01-01 to 2026-10-05,
+$100 at 1:1000.
+
+| Run | Final balance |
+|---|---|
+| M1 only | $126.51 |
+| M1 + M5, both on the stop | $220.79 |
+| M1 + M5, M5 sized the VPS way (2×ATR) | $373.37 |
+| All five tiers, M5 VPS-sized | **−$0.06** (wiped out) |
+| The "profitability" defaults: M1, M15, M30, H1, H4 short filter, min-lot guard 2× | **$21.75** |
+
+Per tier, from the EA's journal (entries matched to their SL/TP fills):
+
+| Tier | Run | Trades | Per trade |
+|---|---|---|---|
+| M1 | M1 only | 764 | −0.02R |
+| M1 | profitability defaults | 942 | −0.09R |
+| M5 | all five | 168 | **+0.29R** |
+| M15 | all five | 49 | −0.10R |
+| M30 | all five | 22 | −0.09R |
+| H1 | all five | 20 | −0.20R |
+
+**What went wrong:**
+
+1. **The minimum-lot guard broke M1.** At $100 a stop over $20 cannot be
+   sized down to 2% even at the 0.1-lot minimum, so the guard skipped
+   almost every wide-stop M1 trade: 4 kept against 127 without it.
+   On XM's feed those are the trades that pay (stops over $40: +0.53R).
+   Losses then shrank the account and the guard skipped more. In the
+   simulation, which started in 2023, the account grew out of that zone
+   within months, so the guard barely bound. The recommendation was
+   wrong for a small account starting now.
+2. **M1 has no edge on XM's feed.** M1 lost −0.02R per trade in MT5 against
+   +0.19R in the simulation for 2026. Only 123 of 942 MT5 M1 trades also
+   appear in the simulation (same minute and side); 97% of those have the
+   same outcome. So the EA follows its rules exactly, but the M1 sweeps
+   themselves differ between HistData and XM. The small M1 edge found on
+   HistData (+0.06R over placebo) does not transfer.
+3. **M15, M30 and H1 cannot be sized on a small account.** At gold above
+   $4,000 their 2026 stops were mostly $22–210, with H1 reaching $645. The
+   matched MT5 and simulated trades have the same stops to the cent, so
+   this is the market, not a bug. Even at the 0.1-lot minimum one H1
+   stop-out can lose $64.
+4. **M5 was the best tier in MT5** (+0.29R over 168 trades), although the
+   simulation's placebo said its sweep timing adds nothing over gold's
+   trend.
+
+**Defaults changed back:** M1 and M5 on, M15/M30/H1 off, guard off
+(`InpMinLotRiskMult = 0`), every tier on its stop. That is the $220.79 run.
+One 9-month window in a strong gold year is not evidence of an edge. The
+next check is the same settings in MT5 over 2024 and 2025, with "every tick
+based on real ticks".
+
 **Status:** compiled clean in MetaEditor (0 errors, 0 warnings). Simulated
 only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R
 drawdown is about 32% of equity (compounded), so test at lower risk before
