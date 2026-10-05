@@ -1498,4 +1498,4 @@ void OnTick()
                IntegerToString(trade.ResultRetcode()));
    }
 }
-//This work is my worship unto GOD
+//Fear God and Live

@@ -1033,5 +1033,5 @@ void OnTick()
       }
    }
 }
-//This work is my worship unto GOD
+//Fear God and Live
 // Office-PC safer runner build — recommendations implemented 2026-08-15

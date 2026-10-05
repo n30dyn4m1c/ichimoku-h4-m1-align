@@ -429,4 +429,4 @@ void OnTick()
       TryEntry(s);
    }
 }
-//This work is my worship unto GOD
+//Fear God and Live

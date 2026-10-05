@@ -1516,4 +1516,4 @@ void OnTick()
          Print(PCTime() + " | " + syms[s] + " setup found but no order filled | " + why);
    }
 }
-//This work is my worship unto GOD
+//Fear God and Live

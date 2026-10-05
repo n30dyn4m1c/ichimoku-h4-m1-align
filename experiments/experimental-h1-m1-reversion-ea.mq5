@@ -773,4 +773,4 @@ void OnTick()
          Print(PCTime() + " | " + syms[s] + " reversion signal but no order filled");
    }
 }
-//This work is my worship unto GOD
+//Fear God and Live
