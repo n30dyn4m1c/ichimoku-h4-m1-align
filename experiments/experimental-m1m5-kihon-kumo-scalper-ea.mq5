@@ -22,7 +22,7 @@
 //|        close on an M1 close back beyond the M1 kijun. Both close  |
 //|        after 90 M1 bars                                           |
 //| Study (HistData M1, 8 markets, 2023 - Sep 2026): NO EDGE. Every   |
-//|        trigger is ~0R before costs and -0.11 to -0.16R after;     |
+//|        trigger is ~0R before costs and -0.10 to -0.16R after;     |
 //|        kihon windows are no better than other hours or than 200   |
 //|        shifted placebo timetables. Built for an MT5 check only    |
 //| Author: Neo Malesa                                               |

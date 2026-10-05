@@ -7457,7 +7457,13 @@ trend, not the count. **The kihon dwell does not carry down from D1.**
 Data: **HistData M1** (bid, 2023-01 to 2026-09, 3.75 years) for XAUUSD,
 XAGUSD, EURUSD, GBPUSD, USDJPY, AUDUSD, SPXUSD and NSXUSD, moved to
 EET/EEST server time so the day opens at 00:00 as on XM. (Dukascopy
-rate-limited the download; Yahoo keeps only 7–30 days of M1.)
+rate-limited the download; Yahoo keeps only 7–30 days of M1.) **HistData
+stamps are New York local time and follow US daylight saving**, despite the
+"EST" label. The first version of this section read them as fixed UTC−5,
+which put every summer month an hour late. That was found while
+calibrating §69 against MT5 (gold's daily break sat at 01:00 server time in
+summer instead of 00:00), and every number below is from the corrected
+rerun.
 
 **Kihon windows** are §49's day clocks at tolerance 0: M15 candles 9, 17,
 26, 33, 42, 51, 65, 76; M30 candles 9, 17, 26, 33, 42; H1 candles 9 and 17,
@@ -7477,36 +7483,34 @@ beyond the high/low, Tenkan, Kijun and cloud 26 bars back.
 
 | # | Strategy | All trades | Kihon trades | Kihon win @1R | Kihon E @1.5R | Other hours | Pctile |
 |---|---|---|---|---|---|---|---|
-| T1 | **M1 price+chikou turn clear of the kumo, M5 clear** (the requested trigger) | 129,875 | 25,938 | 47.8% | −0.150R | −0.152R | 36 |
-| T2 | **M5 price+chikou turn clear, M1 clear** | 18,367 | 3,936 | 48.1% | −0.118R | −0.124R | 51 |
-| T3 | Continuation: M1+M5 clear at the first minute of an M15 candle | 73,591 | 14,694 | 47.8% | −0.145R | −0.152R | 59 |
-| T4 | M1 chikou turns clear while price is already clear, M5 clear | 43,464 | 8,509 | 48.3% | −0.157R | −0.155R | 28 |
-| T5 | Break of the previous M15 candle's range, M1+M5 clear | 91,124 | 18,811 | 48.7% | −0.189R | −0.188R | 68 |
-| T6 | M1 Kijun pullback, close back over Tenkan, M5 clear | 51,034 | 10,366 | 49.9% | −0.184R | −0.199R | 89 |
-| R1 | 60-minute extreme, then a close back through the M1 Kijun | 117,738 | 24,365 | 49.3% | −0.171R | −0.168R | 47 |
-| R2 | Failed M1 kumo break: back through the far edge within 5 bars | 92,490 | 19,056 | 49.3% | −0.177R | −0.181R | 65 |
-| R3 | Stretch fade: > 2.5 ATR(M5) from the M5 Kijun, M1 TK cross back | 12,725 | 2,331 | 45.4% | −0.251R | −0.181R | 0 |
-| R4 | Sweep of the previous M15 candle's extreme, closed back inside | 98,226 | 20,137 | 50.1% | −0.186R | −0.197R | 84 |
+| T1 | **M1 price+chikou turn clear of the kumo, M5 clear** (the requested trigger) | 130,169 | 27,107 | 47.6% | −0.156R | −0.152R | 19 |
+| T2 | **M5 price+chikou turn clear, M1 clear** | 18,443 | 4,175 | 49.1% | −0.102R | −0.127R | 86 |
+| T3 | Continuation: M1+M5 clear at the first minute of an M15 candle | 73,778 | 15,389 | 47.0% | −0.158R | −0.149R | 17 |
+| T4 | M1 chikou turns clear while price is already clear, M5 clear | 43,537 | 8,795 | 47.9% | −0.168R | −0.153R | 8 |
+| T5 | Break of the previous M15 candle's range, M1+M5 clear | 91,279 | 19,695 | 47.9% | −0.210R | −0.182R | 5 |
+| T6 | M1 Kijun pullback, close back over Tenkan, M5 clear | 51,100 | 11,050 | 49.3% | −0.201R | −0.195R | 22 |
+| R1 | 60-minute extreme, then a close back through the M1 Kijun | 117,951 | 25,473 | 49.3% | −0.168R | −0.169R | 70 |
+| R2 | Failed M1 kumo break: back through the far edge within 5 bars | 92,657 | 19,586 | 49.6% | −0.169R | −0.183R | 76 |
+| R3 | Stretch fade: > 2.5 ATR(M5) from the M5 Kijun, M1 TK cross back | 12,748 | 2,295 | 44.4% | −0.281R | −0.174R | 0 |
+| R4 | Sweep of the previous M15 candle's extreme, closed back inside | 98,328 | 21,461 | 50.1% | −0.187R | −0.197R | 93 |
 
-**Before costs every scalp is a coin flip:** E @ 1.5R between −0.02R and
-+0.01R at kihon times and at other hours alike, with a 49–50% win rate at
-1R (R3 is −0.07R). The cost is **0.13–0.20R a trade**, and that is the whole
-loss. Insisting on stops of 1 ATR(M5) or more changes nothing (T2: −0.115R
-kihon vs −0.123R other).
+**Before costs every scalp is close to a coin flip:** E @ 1.5R between
+−0.04R and +0.03R at kihon times and at other hours alike (R3 −0.10R at
+kihon times), with a 47–50% win rate at 1R. The cost is **0.13–0.20R a
+trade**, and that is the whole loss.
 
-**Kihon windows add nothing.** No scalp beats 95% of the placebo
-timetables pooled, and none beats them on M15, M30 or H1 windows taken
-alone. The best per-timeframe readings are R4 94.5, R2 92 and R1 91 on H1,
-all still losing. The hour-of-day profile is flat, and the M15 slots two
-either side of each kihon candle look the same as the candle itself. The
-kihon effect also flips sign by year and by market.
+**Kihon windows add nothing tradable.** No scalp beats 95% of the placebo
+timetables pooled (best R4 93, T2 86). Taking M15, M30 and H1 windows
+separately gives 30 readings, and four pass 95: T2 on M15 (98.5), R4 on
+M15 (97) and H1 (96), R1 on H1 (100). That is about what chance gives in
+30 tries, and every one of them still loses −0.09 to −0.18R a trade after
+costs. The kihon effect also flips sign by year and by market.
 
-**Gold alone looked promising at first, and it was the New York open.**
-On XAUUSD the trend scalps T2, T3, T5 and T6 scored pctile 97–100, almost
-all of it from **H1 candle 17 (16:00–17:00 server)**, the hour of the
-US cash open. The H1 placebos move that candle 3–5 hours, out of New York
-entirely, so the test favours it. This is the same session effect §67
-found for candle 17 in strategy 7. Pooled across eight markets it is gone.
+**Gold on its own shows nothing.** The first, wrong-clock version of this
+section found gold's trend scalps at pctile 97–100, from H1 candle 17. With
+the corrected clock gold sits at pctile 9–84 for every scalp (T2: 42).
+That reading was an artefact of the timestamp error, not a New York-open
+effect.
 
 Verdict: **at M1/M5 scale there is no edge to time.** The kumo/chikou
 breakout, the continuation, the pullback and the four reversals all sit at
@@ -7553,3 +7557,99 @@ in MetaEditor before testing. Suggested check: GOLDm#, Jan–Sep 2026, real
 ticks, run twice, `InpKihonGate = true` and `false`. The study predicts
 the same loss per trade either way, with the gated run trading about a
 fifth as often.
+
+## 69. The live VPS EA simulated on HistData M1, 2023–2026
+
+**File:** none. A Python port of `ichimoku-h4-m1-vps-ea.mq5` as live (M5 tier
+off); the live file was not touched.
+
+User request (2026-10-06): simulate the current live VPS EA on the XM Ultra
+Low Micro account (GOLDm#, 1 lot = 1 oz, 0.1 lot minimum).
+
+### The port
+
+Minute by minute on HistData XAUUSD M1 bid, server time (see the §68
+timestamp note), constant $0.30 spread, 1:1000. At each M1 open the port does
+what `OnTick` does on a new closed M1 bar:
+- kumo-touch exits at that open's bid or ask;
+- break-even (1 ATR, 0.5 on H1/H4, + 15 points);
+- the chandelier (2 ATR spike lock, 0.5 on H1/H4, 1 ATR behind the peak of
+  the forming tier bar, 0.3 ATR minimum step);
+- entries, scanning H4 down to M15. Each needs:
+  - the M1→tier chain aligned;
+  - the future-cloud gate on the tier TF and the TF below;
+  - H4 with the trade, or a flat H4 with H1 and its future cloud with it
+    (M15/M30 only);
+  - D1 with the trade on the H4 tier.
+
+Smaller tiers are closed into a new bigger one (supersede). Sizing is the
+live bands on equity with floating P/L, against 2 × ATR, floored to 0.01 and
+lifted to 0.1. The 8 × ATR disaster stop is a broker stop, checked against
+each bar's range. No swaps and no slippage are modelled.
+
+### Calibration against MT5 real ticks (§50, $100 each year)
+
+| Year | MT5 | Port |
+|---|---|---|
+| 2024 | ruined 2024-08-02 | ruined **2024-08-02** |
+| 2025 | +$14,646, PF 2.03 | **+$14,658, PF 2.05** |
+| 2026 to 09-19 | +$13,295, PF 1.52 | +$1,396, PF 1.04 |
+
+2026 diverges in the account path, not the edge. Run at a fixed 0.1 lot,
+the port's 2026 tier profit factors are H4 2.21, H1 1.57, M30 1.53, M15 1.24
+(MT5 money PFs: 1.61, 1.53, 1.62, 1.25). In every start-date and spread
+variant the port reaches about $11k by June 2026, then a June–August run of
+stacked H4/H1/M30 losses takes it to about $1.5k. On 2026-06-30 H4, H1 and
+M30 opened short within three minutes and lost 34% of equity together. A
+few big trades decide the year, so the compounded figure is fragile in both
+directions.
+
+### Results
+
+**Edge at a fixed 0.1 lot** (profit factor on price points):
+
+| Year | All | M15 | M30 | H1 | H4 |
+|---|---|---|---|---|---|
+| 2023 (Apr–Dec) | **0.95** | 0.89 | 0.84 | 1.00 | 1.92 |
+| 2024 | 1.05 | 0.96 | 1.05 | 1.18 | 1.26 |
+| 2025 | 1.41 | 1.21 | 1.31 | 1.61 | 2.71 |
+| 2026 | 1.46 | 1.24 | 1.53 | 1.57 | 2.21 |
+
+2023 has never been run in MT5. Only H4 made money that year.
+
+**With the live risk bands:**
+- From $100, mid-April 2023: ruined 2023-07-28.
+- One continuous account from 2023-04-15: $100 ruined 2023-07-28; $1,000
+  ruined 2023-09-20; $10,000 down to $245 by the end of 2023 and ruined
+  2024-09-04.
+- A new account every two weeks from 2023-04 to 2025-09 (65 starts), each
+  run for 12 months:
+
+| Risk plan | Start | Ruined | Below start | Median end | Median max DD |
+|---|---|---|---|---|---|
+| **live** (M15 1 / M30 5 / H1 10 / H4 20%) | $100 | **60%** | 62% | $0 | 100% |
+| live | $1,000 | 9% | 52% | $412 | 98% |
+| live | $10,000 | 0% | 12% | $22,355 | 47% |
+| live × 0.5 | $100 / $1,000 | 0% / 0% | 26% / 29% | $317 / $3,234 | 78% / 78% |
+| live × 0.25 | $100 / $1,000 | 0% / 0% | 3% / 3% | $229 / $2,601 | 53% / 49% |
+| tier-3 bands everywhere (0.1/0.2/1/2%) | $100 / $1,000 | 0% / 0% | 0% / 0% | $186 / $1,514 | 35% / 19% |
+
+A continuous $1,000 account from April 2023 to September 2026 ends at
+$16,675 at × 0.5 (92% max DD), $14,168 at × 0.25 (68%) and $4,348 on the
+tier-3 bands (28%). At the live bands it is ruined in 2023.
+
+### Reading
+
+- **The entries have an edge in 2024–2026 but not in 2023.** The losses
+  come from the sizing. Below $7k, H4 risks 20%, H1 10% and M30 5% of
+  equity on a 2 × ATR reference. The kumo-touch exit and the 8 × ATR
+  disaster stop let one trade lose several times that. Several tiers can be
+  open the same way at once (M30 does not supersede a running H1, and so
+  on), so a reversal hits them together.
+- **The live bands ruined 60% of $100 starts within a year.** Halving every
+  band removed ruin across all 65 starts while keeping most of the upside.
+  This is a risk-input change only: the `InpRiskPct*` inputs can be set in
+  the EA's properties on the terminal, so no code edit is needed.
+- Caveats: one data feed (HistData, not XM's), constant spread, no swaps (they
+  would hurt the multi-day H1/H4 trades) and no slippage. A real-tick MT5
+  run of 2023 is the check to make before acting on the 2023 finding.
