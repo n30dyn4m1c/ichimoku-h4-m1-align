@@ -109,7 +109,7 @@ Both builds carry their own magic number, so they can run on the same account
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `ICHIMOKU-THEORIES.md` — the time/wave/price theory research the filters are drawn from
 - `tools/` — `mt5-check.sh`, the weekday VPS health check, and `mt5-run.sh`, the launcher `mt5.service` runs
-- `utilities/` — deployment scripts, the Python monitor and the account-split simulator
+- `utilities/` — deployment scripts, the Python monitor, the account-split simulator and the VPS EA simulator (`vps-sim/`)
 
 > The repository is still named `ichimoku-h4-m1-align` after the original
 > top-down H4→M1 build. The name is kept so existing clones, deploy scripts
@@ -803,6 +803,43 @@ Findings (3 years, 400 paths; medians):
 All of this assumes the 2025–26 edge continues live. The model ignores
 broker limits, slippage across many accounts, fees and taxes.
 
+### VPS EA simulator (`utilities/vps-sim/`)
+
+A minute-by-minute **Python port of the live VPS EA**, run on HistData M1
+gold in XM server time with XM Micro sizing (1 lot = 1 oz, 0.1 lot minimum).
+It is for quick screening: many start dates, risk plans and settings in
+seconds, where MT5 takes one run per setting. MT5 real ticks remain the
+reference. Checked against them ($100 each year), it reproduces the 2024
+ruin date (2024-08-02) and the 2025 result (+$14,658 vs MT5's +$14,646).
+2026 matches tier by tier at a fixed lot but not as a compounded account
+(notes §69). Needs `numpy`, `pandas`, `numba`, `requests`.
+
+```bash
+pip install -r utilities/vps-sim/requirements.txt
+python3 utilities/vps-sim/download.py                         # HistData M1 into utilities/vps-sim/data/ (not committed)
+python3 utilities/vps-sim/vpssim.py calibrate                 # the three MT5 check years
+python3 utilities/vps-sim/vpssim.py run --from 2025-01-01 --to 2026-01-01 --start-eq 100
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100       # a new account every week, 12 months each
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --risk-scale 0.5
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --disaster 2    # §66 quarter disaster stop
+python3 utilities/vps-sim/vpssim.py run --fixed-lot --from 2023-04-15   # the edge without compounding
+python3 utilities/vps-sim/vpssim.py --help
+```
+
+- **Settings it covers without code changes:** the risk bands
+  (`--risk-scale`), the disaster stop (`--disaster`), the M5 tier (`--m5`),
+  the spread, leverage, contract size and minimum lot.
+- **Other EAs need a port.** Their entry and exit rules replace `sim()`;
+  the data loader, the multi-timeframe bar mapping, the indicators and the
+  `run`/`roll` harness are shared. Check each port against one MT5 run
+  first.
+- **Not modelled:** swaps, slippage, a varying spread, and which of a stop
+  and a level is touched first inside one minute.
+- **HistData's timestamps are New York local time with US daylight saving**,
+  despite the "EST" label. `download.py` stores them that way and
+  `vpssim.py` converts them. Reading them as a fixed UTC−5 shifts every
+  summer H4 and D1 bar by an hour.
+
 ### Scaling plan: up to 8 XM Micro accounts
 
 The plan the simulator above was used to design. **It runs the live VPS EA**
@@ -1177,7 +1214,7 @@ unless stated otherwise.
 | `experimental-bottomup-stack-xauusdc-cent-vps-ea.mq5` | `20260884` | The **live VPS build** (M5 tier off, robustness pack on) set up for **`XAUUSDc` on an Exness cent account**, to backtest in the strategy tester first. Trading logic is the same as live. **Uses live's risk regime at half the %** (M15 0.5 / M30 2.5 / H1 5 / H4 10 in tier 1, and every tier-2/3 figure halved too), sized on the cent equity. The regime thresholds are read in cents, treated like live's dollars: the risk steps down at **7000 / 13000 USC**. Lots never go below the 0.01 minimum. A **minimum-lot guard** (`InpMaxTradeRiskPct` 10%) skips a tier whose final lots would lose more than 10% of equity over 2 × ATR. Selection then drops to the next lower aligned tier, so on the 100 USC practice start H1/H4 wait while M15/M30 trade. The point inputs (slippage, spread cap, BE cover) are now in **2-decimal gold points**, and `PtScale()` multiplies them by 10 on Exness's 3-decimal feed | 59 |
 | `experimental-bottomup-stack-chikou-exit-vps-ea.mq5` | `20260885` | The **live VPS build** (M5 tier off) with **one extra exit per tier: chikou back in price**. Besides the kumo touch, a trade also closes when its **own tier TF's chikou** — the last closed close, plotted Kijun bars back — is no longer clear of that candle (long: close <= its high; short: close >= its low), i.e. the chikou half of the entry test has failed. An H1 trade watches the H1 chikou, an M30 trade the M30 chikou, and so on. Checked once per closed M1 bar on closed tier-TF bars; BE, chandelier, disaster stop and the rejection exit are unchanged. `InpChikouExit=false` reproduces the live build. Not yet compiled or backtested | 62 |
 | `experimental-m15-h1-h4-tiers-ea.mq5` | `20260887` | Forks the **live VPS build** (not the row above): only **two tiers on an M15 base**, M1 and M5 take no part. **H1 tier** = M15 + M30 + H1 aligned, **H4 tier** = M15 + M30 + H1 + H4 aligned; **no consolidation**: both tiers may open on the same bar and H4 leaves a running H1 alone. Future-cloud bias on the tier TF and the one below (H1+M30 / H4+H1). The live H1 tier's need for an aligned H4 is **off** (`InpH1H4Gate`; on an M15 base it would only ever repeat the H4 tier's signal), and so is the D1 filter on H4 (`InpD1Filter`). The live wide disaster stop is a **tight stop loss at 1 × ATR(H4) on both tiers**; BE and chandelier at +0.5 ATR of the tier TF, cloud-touch exit on the tier TF, the **live VPS risk** (H1 10/5/1%, H4 20/10/2%; 30% combined when both are open), R2–R5 robustness pack. Built in steps from an H4-only, M1..H4 fork (§65). Compiled clean, not yet backtested | 65 |
-| `experimental-bottomup-stack-quarter-disaster-stop-vps-ea.mq5` | `20260888` | Forks the **live VPS build** (not the row above) with **one change: the R3 disaster stop is a quarter of the size**, `InpDisasterATRMult` 8 → 2 (halved to 4 first), so every tier's hard SL sits ATR(tier TF) × 2 from entry. That is the risk-sizing distance, so a stop-out costs about the tier's risk % itself instead of about 4× it (H4 at 20%: ~20% of equity instead of ~80%), at the price of many more trades stopped out on a dip that would have recovered, most on the M15/M30 tiers. Everything else is the live build's byte for byte. Compiled clean, not yet backtested | 66 |
+| `experimental-bottomup-stack-quarter-disaster-stop-vps-ea.mq5` | `20260888` | Forks the **live VPS build** (not the row above) with **one change: the R3 disaster stop is a quarter of the size**, `InpDisasterATRMult` 8 → 2 (halved to 4 first), so every tier's hard SL sits ATR(tier TF) × 2 from entry. That is the risk-sizing distance, so a stop-out costs about the tier's risk % itself instead of about 4× it (H4 at 20%: ~20% of equity instead of ~80%), at the price of many more trades stopped out on a dip that would have recovered, most on the M15/M30 tiers. Everything else is the live build's byte for byte. Compiled clean, not yet backtested in MT5. **Simulated (`utilities/vps-sim`, $100 weekly starts, 12 months, live bands): ruin 30% vs 60% for the live 8 × ATR stop, median end $698 vs $0** | 66 |
 
 ### Top-down alignment builds
 

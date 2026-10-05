@@ -7327,6 +7327,19 @@ comparison to run is this file against the live build on the same data, as
 in §48/§50 (GOLDm#, real ticks, $100 start, 2024, 2025 and 2026); running it
 at `InpDisasterATRMult = 4` as well covers the half-size step.
 
+**Simulated (2026-10-06, `utilities/vps-sim`, notes §69):** live risk bands,
+$100 started every week from 2023-04 to 2025-09, 12 months each:
+
+| Disaster stop | Ruined | Below $100 | Median end | 75th percentile end |
+|---|---|---|---|---|
+| 8 × ATR (live) | 60% | 62% | $0 | $14,207 |
+| 4 × ATR (half) | 47% | 59% | $13 | $14,509 |
+| **2 × ATR (quarter)** | **30%** | 41% | **$698** | $15,842 |
+
+The quarter stop halves the ruin rate and keeps the upside. It does not
+remove ruin on its own; halving the risk bands does (§69). The two have not
+yet been simulated together. Not yet run in MT5.
+
 ## 67. Kumo-dwell kihon breakout — the one kihon strategy with an edge
 
 **File:** `experimental-kumo-dwell-kihon-ea.mq5`
@@ -7560,8 +7573,9 @@ fifth as often.
 
 ## 69. The live VPS EA simulated on HistData M1, 2023–2026
 
-**File:** none. A Python port of `ichimoku-h4-m1-vps-ea.mq5` as live (M5 tier
-off); the live file was not touched.
+**File:** `utilities/vps-sim/vpssim.py` (data: `utilities/vps-sim/download.py`).
+A Python port of `ichimoku-h4-m1-vps-ea.mq5` as live (M5 tier off); the live
+file was not touched.
 
 User request (2026-10-06): simulate the current live VPS EA on the XM Ultra
 Low Micro account (GOLDm#, 1 lot = 1 oz, 0.1 lot minimum).

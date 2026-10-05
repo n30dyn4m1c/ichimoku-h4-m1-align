@@ -31,3 +31,6 @@ experiments/_OceanofPDF.com_*
 
 # Local OpenCode CLI state (sessions, plugins, node_modules)
 .opencode/
+
+# VPS EA simulator market data (downloaded by utilities/vps-sim/download.py)
+utilities/vps-sim/data/
