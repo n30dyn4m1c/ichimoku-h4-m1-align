@@ -109,7 +109,7 @@ Both builds carry their own magic number, so they can run on the same account
 - `experiments/` — experimental EAs, the MS-W1-D1 build, and [EXPERIMENTAL-NOTES.md](experiments/EXPERIMENTAL-NOTES.md)
 - `ICHIMOKU-THEORIES.md` — the time/wave/price theory research the filters are drawn from
 - `tools/` — `mt5-check.sh`, the weekday VPS health check, and `mt5-run.sh`, the launcher `mt5.service` runs
-- `utilities/` — deployment scripts, the Python monitor, the account-split simulator and the VPS EA simulator (`vps-sim/`) and the M1 chikou-liquidity simulator (`m1-chikou-liquidity-sim.py`, §70)
+- `utilities/` — deployment scripts, the Python monitor, the account-split simulator, the VPS EA simulator (`vps-sim/`) and the M1 chikou-liquidity simulator (`m1-chikou-liquidity-sim.py`, §70)
 
 > The repository is still named `ichimoku-h4-m1-align` after the original
 > top-down H4→M1 build. The name is kept so existing clones, deploy scripts
