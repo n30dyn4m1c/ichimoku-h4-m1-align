@@ -1,0 +1,1312 @@
+//@version=6
+//+------------------------------------------------------------------+
+//|                                                PO3_Levels.pine   |
+//|                                                                  |
+//|  TradingView port of experiments/po3-levels.mq5 (v1.54), the     |
+//|  single-indicator build that carries:                            |
+//|                                                                  |
+//|    * PO3 (power of three) support/resistance levels, every grid  |
+//|      from 1 to 19683. A price is owned by the HIGHEST power of   |
+//|      three that lands on it and is labelled with that number, so |
+//|      the bigger numbers read as the stronger levels;             |
+//|    * Ichimoku kihon suchi candle counts, marked on the chart and |
+//|      carried in a ladder panel (year / month / week / day);      |
+//|    * the kihon segment panel - the finer counts taken inside an  |
+//|      H4 or H1 candle that is itself on a kihon number;           |
+//|    * the kihon schedule panel - when this week's kihon candles   |
+//|      open, and which of today's are still in front;              |
+//|    * unraided liquidity - swing highs and lows price has not yet |
+//|      traded through, drawn from the wick to the right edge;      |
+//|    * unmitigated fair value gaps - three-candle imbalances not   |
+//|      yet filled, shaded from the middle candle to the right;     |
+//|    * the candle countdown and the session timer.                 |
+//|                                                                  |
+//|  The arithmetic, the inclusive counting rule (candle 1 is the    |
+//|  candle at the anchor, so k spans share a turning candle and     |
+//|  17 + 17 - 1 = 33) and the level-ownership rule are ported       |
+//|  unchanged from the MQL5 file. They are the parts the EAs in     |
+//|  this repo also use, so the chart, the EAs and the .mq5 must     |
+//|  agree on what "on a kihon number" means.                        |
+//|                                                                  |
+//|  WHERE PINE FORCES A DIFFERENCE (all of them display only - no   |
+//|  number and no rule is changed):                                 |
+//|                                                                  |
+//|    1. No buttons. The three kihon blocks are switched by the     |
+//|       inputs instead, and the segment block still opens by       |
+//|       itself while an H4 / H1 kihon candle runs (the auto input  |
+//|       in its own group).                                         |
+//|    2. No timer. Pine recomputes on a tick, so the countdown and  |
+//|       the session clock stop between ticks on a quiet market.    |
+//|       The panel refreshes once a minute (it cannot change any    |
+//|       faster) and on every new bar.                              |
+//|    3. No z-order. Lines and labels always sit above the candles; |
+//|       "draw the grid behind the candles" has nothing to act on.  |
+//|    4. No font choice and no pixel offsets. Label sizes are       |
+//|       TradingView's five steps, and the panels are pinned to one |
+//|       of the nine chart corners rather than to an X/Y.           |
+//|    5. The session clock restarts when the script is recompiled   |
+//|       or its inputs change - Pine has no terminal global to park |
+//|       it in across a reload, so the MQL5 "survives a timeframe   |
+//|       change" behaviour cannot be reproduced.                    |
+//|    6. The schedule panel reads a real IANA timezone (default     |
+//|       Pacific/Port_Moresby, +10) rather than a fixed UTC offset, |
+//|       which is strictly better: it survives DST on both sides.   |
+//|    7. The 500-object cap. TradingView keeps the 500 most recent  |
+//|       labels, lines and boxes, so "number every candle" plus all |
+//|       three panels plus the grids can clip the oldest of them.   |
+//|    8. The liquidity and fair-value-gap scans follow the chart     |
+//|       timeframe only. The .mq5 can lock them to another one;     |
+//|       Pine cannot walk another timeframe's bars newest to oldest, |
+//|       and every substitute changes the liquidity tie rule. This  |
+//|       is the .mq5's default (current = follow the chart).        |
+//+------------------------------------------------------------------+
+indicator("PO3 Levels + Kihon Suchi", "PO3", overlay = true,
+     max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500,
+     max_bars_back = 2000)
+
+//+------------------------------------------------------------------+
+//|  KIHON SUCHI - Ichimoku's basic time numbers.                    |
+//|                                                                  |
+//|  The simple numbers are 9, 17 and 26; the compound ones chain    |
+//|  spans that share a candle, so k spans subtract k-1. 26 is the   |
+//|  one given number rather than a result, and the list stops where |
+//|  the classical one stops - above 257 nothing on an intraday      |
+//|  chart can reach the next number.                                |
+//|                                                                  |
+//|  These are candidate turning points in TIME, not in price, and   |
+//|  they say nothing about direction. A kihon candle landing on a   |
+//|  27 or an 81 level is time and price agreeing, which is the only |
+//|  reason the two halves of this script sit in one file.           |
+//+------------------------------------------------------------------+
+KIHON_SIMPLE = 3
+KIHON_COUNT  = 12
+
+var array<int> KIHON = array.from(9, 17, 26, 33, 42, 51, 65, 76, 129, 172, 226, 257)
+
+//--- Is n a kihon suchi number, and which kind. The compound flag is a
+//--- filter, not a separate list: false leaves only 9, 17 and 26.
+f_kihonIs(int n, bool withCompound) =>
+    int last = withCompound ? KIHON_COUNT : KIHON_SIMPLE
+    bool hit = false
+    for i = 0 to last - 1
+        int k = array.get(KIHON, i)
+        if k == n
+            hit := true
+            break
+        if k > n                             // ascending, so no point going on
+            break
+    hit
+
+//--- The last kihon number at or below n, or 0 below the first.
+f_kihonAtOrBelow(int n, bool withCompound) =>
+    int last = withCompound ? KIHON_COUNT : KIHON_SIMPLE
+    int best = 0
+    for i = 0 to last - 1
+        int k = array.get(KIHON, i)
+        if k <= n
+            best := k
+        else
+            break
+    best
+
+//--- The next kihon number strictly above n, or 0 past the end. Strictly
+//--- above, so standing ON 26 tells you 33 is next rather than repeating
+//--- the number you are already on.
+f_kihonNext(int n, bool withCompound) =>
+    int last = withCompound ? KIHON_COUNT : KIHON_SIMPLE
+    int nx = 0
+    for i = 0 to last - 1
+        int k = array.get(KIHON, i)
+        if k > n
+            nx := k
+            break
+    nx
+
+//--- The last number of the ACTIVE list: 257 with the compounds on, 26 with
+//--- them off. "Past 257" has to become "past 26" when 33 and up are hidden.
+f_kihonLast(bool withCompound) =>
+    array.get(KIHON, (withCompound ? KIHON_COUNT : KIHON_SIMPLE) - 1)
+
+//--- Signed distance to the NEAREST kihon number. 0 means n is one,
+//--- negative means the number is still ahead (7 -> -2), positive means it
+//--- has just gone by (11 -> +2). Nearest, not next, because a turn that was
+//--- due at 26 is not cancelled by the candle after it.
+f_kihonOffset(int n, bool withCompound) =>
+    int last = withCompound ? KIHON_COUNT : KIHON_SIMPLE
+    int best = n - array.get(KIHON, 0)
+    for i = 1 to last - 1
+        int d  = n - array.get(KIHON, i)
+        int ad = int(math.abs(d))
+        int ab = int(math.abs(best))
+        if ad < ab
+            best := d
+    best
+
+//+------------------------------------------------------------------+
+//|  INPUTS                                                          |
+//+------------------------------------------------------------------+
+string G_GRID  = "Grid"
+string G_LBL   = "Labels"
+string G_PO3   = "PO3 levels to show"
+string G_CLK   = "Candle countdown"
+string G_SESS  = "Session timer"
+string G_CNT   = "Candle count"
+string G_KIH   = "Kihon suchi"
+string G_PAN   = "Kihon count panel"
+string G_SEG   = "Kihon segment panel"
+string G_SCH   = "Kihon schedule panel"
+string G_LIQ   = "Unraided liquidity"
+string G_FVG   = "Fair value gaps"
+
+//--- Grid -----------------------------------------------------------
+scaleDiv = input.float(1.0, "Scale divisor", minval = 0.0000001, step = 1.0,
+     group = G_GRID,
+     tooltip = "1 gives whole numbers and is the default: gold levels land on 4374, 4455, 4536 and so on, the sheet's raw figures with nothing to divide. 100 gives the workbook's two-decimal gold form (2799.36, 3542.94). The two agree - the scale 1 grid is exactly the whole-number subset of the scale 100 grid.")
+eachSide = input.int(3, "Levels each side of price", minval = 1, maxval = 100,
+     group = G_GRID)
+
+//--- Labels ---------------------------------------------------------
+showLabels  = input.bool(true, "Write the PO3 number on each line", group = G_LBL)
+labelMinPO3 = input.int(3, "Label only levels of PO3 >= this", minval = 1, maxval = 19683,
+     group = G_LBL,
+     tooltip = "3 by default, which leaves the optional 1 grid unlabelled: its levels are a dollar apart and a column of 1s on top of each other says nothing the line spacing does not.")
+labelSizeIn = input.string("Tiny", "Label text size",
+     options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = G_LBL)
+labelShift  = input.int(5, "Label shift right, in bars", minval = 0, maxval = 100,
+     group = G_LBL,
+     tooltip = "Five bars out by default, so the numbers sit in the chart margin clear of the developing candle rather than on top of it.")
+labelSameColor = input.bool(false, "Label in the level's own colour", group = G_LBL,
+     tooltip = "Off: every label is one colour, so the numbers read at a glance whatever grid they name, and the line keeps the grid's colour. On: each label takes its level's colour, as before v1.52.")
+labelColor     = input.color(color.yellow, "Label colour", group = G_LBL)
+
+//--- PO3 grids. The fine grids - 1, 3, 9 and 27 - are off by default, for
+//--- a quieter chart that opens on 81 and up. 1 is finer than the rest and
+//--- is M1 only: at scale 1 it is every whole number, and above M1 a dollar
+//--- grid is a rounding error rather than a subdivision you can see.
+use_1     = input.bool(false, "1      - show (M1 only)", group = G_PO3)
+col_1     = input.color(color.new(#303030, 0), "1      - colour", group = G_PO3)
+use_3     = input.bool(false, "3      - show", group = G_PO3)
+col_3     = input.color(color.gray, "3      - colour", group = G_PO3)
+use_9     = input.bool(false, "9      - show", group = G_PO3)
+col_9     = input.color(color.new(#404040, 0), "9      - colour", group = G_PO3)
+use_27    = input.bool(false, "27     - show", group = G_PO3)
+col_27    = input.color(color.new(#5F9EA0, 0), "27     - colour", group = G_PO3)
+use_81    = input.bool(true, "81     - show", group = G_PO3)
+col_81    = input.color(color.new(#4682B4, 0), "81     - colour", group = G_PO3)
+use_243   = input.bool(true, "243    - show", group = G_PO3)
+col_243   = input.color(color.new(#3CB371, 0), "243    - colour", group = G_PO3)
+use_729   = input.bool(true, "729    - show", group = G_PO3)
+col_729   = input.color(color.new(#FF8C00, 0), "729    - colour", group = G_PO3)
+use_2187  = input.bool(true, "2187   - show", group = G_PO3)
+col_2187  = input.color(color.new(#DAA520, 0), "2187   - colour", group = G_PO3)
+use_6561  = input.bool(true, "6561   - show", group = G_PO3)
+col_6561  = input.color(color.new(#FF4500, 0), "6561   - colour", group = G_PO3)
+use_19683 = input.bool(true, "19683  - show", group = G_PO3)
+col_19683 = input.color(color.new(#DC143C, 0), "19683  - colour", group = G_PO3)
+
+//--- Candle countdown -----------------------------------------------
+showClock    = input.bool(true, "Show time left on the current candle", group = G_CLK)
+clockShift   = input.int(1, "Bars right of the developing candle", minval = 0, maxval = 50, group = G_CLK)
+clockGapPts  = input.int(0, "Vertical offset from price, in points (+ up)", group = G_CLK)
+clockSizeIn  = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal", "Large"], group = G_CLK)
+clockColor   = input.color(color.lime, "Text colour", group = G_CLK)
+
+//--- Session timer --------------------------------------------------
+showSession    = input.bool(true, "Show time spent on this chart", group = G_SESS)
+sessionPosIn   = input.string("Top right", "Corner",
+     options = ["Top left", "Top centre", "Top right", "Middle left", "Middle centre",
+                "Middle right", "Bottom left", "Bottom centre", "Bottom right"], group = G_SESS)
+sessionSizeIn  = input.string("Normal", "Text size",
+     options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = G_SESS)
+sessionColor   = input.color(color.silver, "Text colour", group = G_SESS)
+sessionLimit   = input.int(0, "Minutes on chart before it turns red (0 = off)", minval = 0, group = G_SESS)
+sessionOverCol = input.color(color.red, "Text colour once over the limit", group = G_SESS)
+
+//--- Candle count ---------------------------------------------------
+//--- The count is inclusive at both ends: the candle the count starts on is
+//--- candle 1, so a 26 count spans 26 candles. That is what makes the
+//--- compound numbers overlap by one.
+showCount    = input.bool(true, "Draw the count on the chart", group = G_CNT)
+countAnchor  = input.string("Day open", "Count from",
+     options = ["Day open", "Week open", "Month open", "Year open", "Custom time of day"], group = G_CNT)
+anchorHour   = input.int(8, "Custom anchor, hour", minval = 0, maxval = 23, group = G_CNT)
+anchorMin    = input.int(0, "Custom anchor, minute", minval = 0, maxval = 59, group = G_CNT)
+markOpen     = input.bool(true, "Line on the candle the count starts at", group = G_CNT)
+openColor    = input.color(color.gray, "Open line colour", group = G_CNT)
+
+//--- Kihon suchi ----------------------------------------------------
+markKihon     = input.bool(true, "Mark the kihon suchi candles", group = G_KIH)
+kihonCompound = input.bool(true, "Include the compound numbers (33 and up)", group = G_KIH)
+kihonLines    = input.bool(true, "Vertical line on each marked candle", group = G_KIH)
+kihonSimpleCol = input.color(color.new(#00BFFF, 0), "9, 17, 26      - colour", group = G_KIH)
+kihonCompCol   = input.color(color.new(#BA55D3, 0), "33             - colour", group = G_KIH)
+kihonFarCol    = input.color(color.new(#006400, 0), "42 and up      - colour", group = G_KIH)
+kihonSizeIn    = input.string("Tiny", "Marker text size",
+     options = ["Tiny", "Small", "Normal", "Large"], group = G_KIH)
+kihonGapPts    = input.int(0, "Marker offset from the candle low, in points", group = G_KIH)
+numberAll      = input.bool(false, "Number every candle, not just the kihon ones", group = G_KIH)
+
+//--- Count panel ----------------------------------------------------
+panelShow   = input.bool(true, "Show the count panel", group = G_PAN)
+panelYear   = input.bool(true, "Year block    - MN1, W1, D1", group = G_PAN)
+panelMonth  = input.bool(true, "Month block   - D1, H4, H1", group = G_PAN)
+panelWeek   = input.bool(true, "Week block    - H4, H1, M30", group = G_PAN)
+panelDay    = input.bool(true, "Day block     - H1, M30, M15, M5 + nested M1", group = G_PAN)
+panelPosIn  = input.string("Middle left", "Panel corner",
+     options = ["Top left", "Top centre", "Top right", "Middle left", "Middle centre",
+                "Middle right", "Bottom left", "Bottom centre", "Bottom right"], group = G_PAN)
+panelSizeIn = input.string("Small", "Text size",
+     options = ["Tiny", "Small", "Normal", "Large"], group = G_PAN)
+panelBox    = input.bool(true, "Solid block behind the panel", group = G_PAN)
+panelBg     = input.color(color.new(#121218, 0), "Block colour", group = G_PAN)
+panelBorder = input.color(color.new(#696969, 0), "Block border colour", group = G_PAN)
+panelColor  = input.color(color.silver, "Text colour", group = G_PAN)
+panelHit    = input.color(color.lime, "Colour of a row standing ON a kihon number", group = G_PAN)
+panelNear   = input.color(color.orange, "Colour of a row within reach of one", group = G_PAN)
+panelNearTol = input.int(2, "How many candles either side counts as near", minval = 0, maxval = 8, group = G_PAN)
+
+//--- Segment panel --------------------------------------------------
+segShow = input.bool(false, "Show the kihon segment panel", group = G_SEG)
+segAuto = input.bool(true, "... but show it while an H4 / H1 kihon candle runs", group = G_SEG,
+     tooltip = "With the block hidden it still opens by itself for as long as an H4 or H1 is standing on a kihon number - the only time it has anything to say - and closes again when that candle ends.")
+segH4   = input.bool(true, "Segments inside a kihon H4 candle", group = G_SEG)
+segH1   = input.bool(true, "Segments inside a kihon H1 candle", group = G_SEG)
+
+//--- Schedule panel -------------------------------------------------
+schedShow = input.bool(false, "Show the kihon schedule panel", group = G_SCH)
+schedWeek = input.bool(true, "This week's kihon candles, D1 down to M15", group = G_SCH)
+schedDay  = input.bool(true, "Still ahead today, H1 down to M15", group = G_SCH)
+schedDayAll = input.bool(false, "... and past 33, as far as the day reaches", group = G_SCH,
+     tooltip = "The today list is held to 9-33 like the week list, and on the finer timeframes that window is spent early. Tick this to let it run to whatever number each timeframe can still reach before the day is out - M15 to 76, M30 to 42, H1 to 17.")
+schedTzIn = input.string("Pacific/Port_Moresby", "Display timezone", group = G_SCH,
+     tooltip = "An IANA timezone name. The count and segment blocks are unaffected - they print period opens, not appointments.")
+schedTzBoth = input.bool(false, "... and keep the server time beside it", group = G_SCH)
+schedAmPm   = input.bool(true, "Write the times as AM / PM, not 24-hour", group = G_SCH)
+
+//--- Unraided liquidity ---------------------------------------------
+showLiq   = input.bool(true, "Show unraided liquidity", group = G_LIQ,
+     tooltip = "Scanned on the chart's own timeframe, as the .mq5's default does. A locked timeframe is not available: Pine cannot run a newest-to-oldest walk over another timeframe's bars.")
+liqLeft   = input.int(6, "Candles to the left of a swing", minval = 1, maxval = 50, group = G_LIQ)
+liqRight  = input.int(6, "Candles to the right of a swing", minval = 1, maxval = 50, group = G_LIQ)
+liqLookback = input.int(100, "Candles of history to search", minval = 10, maxval = 400, group = G_LIQ)
+liqRaidClose = input.bool(false, "A raid needs a candle CLOSE through the level", group = G_LIQ,
+     tooltip = "Off: any later wick beyond the level raids it, read off the live candle, so a line goes the moment price trades through. On: only a closed candle raids it.")
+liqHighs  = input.bool(true, "Show unraided highs", group = G_LIQ)
+liqLows   = input.bool(true, "Show unraided lows", group = G_LIQ)
+liqHighCol = input.color(color.new(#87CEFA, 0), "Unraided highs - colour", group = G_LIQ)
+liqLowCol  = input.color(color.new(#9370DB, 0), "Unraided lows  - colour", group = G_LIQ)
+liqWidth  = input.int(2, "Line width", minval = 1, maxval = 4, group = G_LIQ)
+liqLastRaid = input.bool(true, "Show the last raided high and low (dashed)", group = G_LIQ)
+liqValues = input.bool(true, "Write the price beside each unraided / last raided swing", group = G_LIQ)
+
+//--- Fair value gaps ------------------------------------------------
+showFvg    = input.bool(true, "Show unmitigated fair value gaps", group = G_FVG,
+     tooltip = "Scanned on the chart's own timeframe, as the .mq5's default does. A locked timeframe is not available for the same reason as the liquidity scan.")
+fvgLookback = input.int(200, "Candles of history to search", minval = 10, maxval = 400, group = G_FVG)
+fvgMitIn   = input.string("A candle closes beyond the gap", "What counts as mitigated",
+     options = ["Price trades through the whole gap", "Price reaches the middle of the gap",
+                "Price trades into the gap at all", "A candle closes beyond the gap"], group = G_FVG)
+fvgMinPts  = input.int(0, "Smallest gap drawn, in points (0 = all)", minval = 0, group = G_FVG)
+fvgBull    = input.bool(true, "Show bullish gaps", group = G_FVG)
+fvgBear    = input.bool(true, "Show bearish gaps", group = G_FVG)
+fvgBullCol = input.color(color.new(#004030, 0), "Bullish gaps - fill colour", group = G_FVG)
+fvgBearCol = input.color(color.new(#501820, 0), "Bearish gaps - fill colour", group = G_FVG)
+
+//+------------------------------------------------------------------+
+//|  SMALL FORMATTERS                                                |
+//+------------------------------------------------------------------+
+f_size(string s) =>
+    s == "Tiny" ? size.tiny : s == "Small" ? size.small : s == "Normal" ? size.normal : s == "Large" ? size.large : size.huge
+
+f_pos(string s) =>
+    s == "Top left" ? position.top_left : s == "Top centre" ? position.top_center : s == "Top right" ? position.top_right : s == "Middle left" ? position.middle_left : s == "Middle centre" ? position.middle_center : s == "Middle right" ? position.middle_right : s == "Bottom left" ? position.bottom_left : s == "Bottom centre" ? position.bottom_center : position.bottom_right
+
+f_tfName() =>
+    string p = timeframe.period
+    p == "1" ? "M1" : p == "5" ? "M5" : p == "15" ? "M15" : p == "30" ? "M30" : p == "60" ? "H1" : p == "240" ? "H4" : p == "D" ? "D1" : p == "W" ? "W1" : p == "M" ? "MN1" : p
+
+//--- Pad a string to a fixed width. StringFormat's "%-5s" has no Pine
+//--- equivalent, and the panel columns rely on it.
+f_padR(string s, int w) =>
+    int n = w - str.length(s)
+    n > 0 ? s + array.join(array.new_string(n, " "), "") : s
+
+f_padL(string s, int w) =>
+    int n = w - str.length(s)
+    n > 0 ? array.join(array.new_string(n, " "), "") + s : s
+
+f_two(int v) =>
+    v < 10 ? "0" + str.tostring(v) : str.tostring(v)
+
+//--- A span of milliseconds in units that suit its size: mm:ss under an
+//--- hour, hh:mm:ss above it, and days once past one. The countdown and the
+//--- session timer both format through here.
+f_hms(int ms) =>
+    int s = ms > 0 ? int(ms / 1000) : 0
+    int d = int(s / 86400)
+    s := s - d * 86400
+    int h = int(s / 3600)
+    s := s - h * 3600
+    int m = int(s / 60)
+    s := s - m * 60
+    d > 0 ? str.tostring(d) + "d " + f_two(h) + ":" + f_two(m) + ":" + f_two(s) : h > 0 ? f_two(h) + ":" + f_two(m) + ":" + f_two(s) : f_two(m) + ":" + f_two(s)
+
+//--- One draft of a rule that owns a price. 6561 and 19683 read as the
+//--- heavy levels, 729 and 2187 as the medium ones, and 27 and below as the
+//--- thin dotted floor of the nest.
+f_levelWidth(int po3) =>
+    po3 >= 6561 ? 3 : po3 >= 729 ? 2 : 1
+
+f_levelStyle(int po3) =>
+    po3 <= 27 ? line.style_dotted : line.style_solid
+
+//--- The calendar opens the panels print in their headers, read once per
+//--- bar at global scope. time("...") is security-like underneath, so it is
+//--- taken here rather than inside the panel gate, which only runs on the
+//--- last bar; the days since a load are the days since the first bar.
+int yOpenG = time("12M")
+int mOpenG = time("M")
+int wOpenG = time("W")
+int dOpenG = time("D")
+
+//+------------------------------------------------------------------+
+//|  WHERE A COUNT STARTS, AND HOW MANY CANDLES HAVE PRINTED SINCE   |
+//|                                                                  |
+//|  Pine has no iBarShift, so the anchor is detected as a change of |
+//|  the calendar field instead: the first bar of a new day, week,   |
+//|  month or year. The count is ta.barssince() + 1 - inclusive at   |
+//|  both ends, the candle at the anchor being candle 1, which is    |
+//|  the same convention as the .mq5 and as the EAs that port it.    |
+//|                                                                  |
+//|  The calendar fields are used rather than time("D") / time("W")  |
+//|  on purpose: this block is also evaluated inside request.security|
+//|  for the panel's other timeframes, and nesting one request in    |
+//|  another is not allowed. dayofmonth, month, year and weekofyear  |
+//|  exist in every context, so one helper serves them all.          |
+//+------------------------------------------------------------------+
+f_anchorCond(simple string kind) =>
+    //--- Every field is read on every call, before `kind` is looked at.
+    //--- ta.change() keeps state, so all four calls must run on every bar;
+    //--- one parked inside an if branch would skip bars and lose the state.
+    bool nY = nz(ta.change(year)) != 0
+    bool nM = nz(ta.change(month)) != 0
+    bool nW = nz(ta.change(weekofyear)) != 0
+    bool nD = nz(ta.change(dayofmonth)) != 0
+    //--- The calendar nests: a new month is always in a new year, a new
+    //--- week can fall in the old month only at the turn of the year, and
+    //--- a new day is always in a new month. Same tests as the if chain
+    //--- these replace, just on flags already computed.
+    bool cY = nY
+    bool cM = nY or nM
+    bool cW = cY or nW
+    bool cD = cM or nD
+    kind == "Y" ? cY : kind == "M" ? cM : kind == "W" ? cW : cD
+
+f_count(simple string kind) =>
+    int b = ta.barssince(f_anchorCond(kind))
+    na(b) ? 0 : b + 1
+
+//--- A count from an arbitrary timestamp - the custom session anchor. The
+//--- condition is "at or past the anchor", so ta.barssince() is 0 on the
+//--- first candle at or after it (the candle the count calls 1, whether the
+//--- anchor landed exactly on a candle or inside a gap) and 1 on the next.
+f_countSince(int ts) =>
+    int b = ta.barssince(time >= ts)
+    na(b) ? 0 : b + 1
+
+//--- Today at the custom time of day, rolled back a day if it has not come
+//--- round yet, then CLAMPED to the day open. Without the clamp an 08:00
+//--- London anchor read at 03:00 on Monday would roll back to 08:00 on
+//--- FRIDAY and count the whole weekend gap.
+f_customAnchor() =>
+    int at = timestamp(year, month, dayofmonth, anchorHour, anchorMin)
+    at := at > time ? at - 86400000 : at
+    at < dOpenG ? dOpenG : at
+
+//--- The chart's own count, one per anchor, taken here at global scope so
+//--- that every ta.* in them runs on every bar. A count built behind
+//--- barstate.islast or behind an input test would only step on some bars
+//--- and would keep ta.barssince()'s state from a stale run. All five are
+//--- counted on every bar; the input picks which one is drawn.
+int cDayG   = f_count("D")
+int cWeekG  = f_count("W")
+int cMonthG = f_count("M")
+int cYearG  = f_count("Y")
+int cCustG  = f_countSince(f_customAnchor())
+
+int gChartCount = countAnchor == "Day open" ? cDayG : countAnchor == "Week open" ? cWeekG : countAnchor == "Month open" ? cMonthG : countAnchor == "Year open" ? cYearG : cCustG
+
+//+------------------------------------------------------------------+
+//|  THE PANEL'S COUNTS, ONE REQUEST PER TIMEFRAME                   |
+//|                                                                  |
+//|  A tuple per request, because each timeframe's count from several |
+//|  anchors is needed at once and TradingView limits a script to 40  |
+//|  request.* calls: D1 alone serves the year, month and week        |
+//|  blocks. The bar's own open time rides along, and is what the     |
+//|  schedule panel reads its candle times off.                       |
+//|                                                                  |
+//|  lookahead is ON deliberately. It is the only way to read the     |
+//|  DEVELOPING higher-timeframe bar, which is where the current      |
+//|  candle's count lives - a count from the day open is 1 on the     |
+//|  first M15 of the day, not 0. Nothing here forecasts: a bar count |
+//|  is known as soon as the bar opens.                               |
+//+------------------------------------------------------------------+
+[mn1_cY, mn1_t]              = request.security(syminfo.tickerid, "1M",  [f_count("Y"), time], lookahead = barmerge.lookahead_on)
+[w1_cY,  w1_t]               = request.security(syminfo.tickerid, "1W",  [f_count("Y"), time], lookahead = barmerge.lookahead_on)
+[d1_cY, d1_cM, d1_cW, d1_t]  = request.security(syminfo.tickerid, "1D",  [f_count("Y"), f_count("M"), f_count("W"), time], lookahead = barmerge.lookahead_on)
+[h4_cM, h4_cW, h4_t]         = request.security(syminfo.tickerid, "240", [f_count("M"), f_count("W"), time], lookahead = barmerge.lookahead_on)
+[h1_cM, h1_cW, h1_cD, h1_t]  = request.security(syminfo.tickerid, "60",  [f_count("M"), f_count("W"), f_count("D"), time], lookahead = barmerge.lookahead_on)
+[m30_cW, m30_cD, m30_t]      = request.security(syminfo.tickerid, "30",  [f_count("W"), f_count("D"), time], lookahead = barmerge.lookahead_on)
+[m15_cW, m15_cD, m15_t]      = request.security(syminfo.tickerid, "15",  [f_count("W"), f_count("D"), time], lookahead = barmerge.lookahead_on)
+m5_cD                        = request.security(syminfo.tickerid, "5",   f_count("D"), lookahead = barmerge.lookahead_on)
+
+//+------------------------------------------------------------------+
+//|  A ROLLING RECORD OF EACH TIMEFRAME'S BAR OPENS                  |
+//|                                                                  |
+//|  The schedule panel has to name the time of the candle carrying   |
+//|  number k, which is (c - k) bars back on that timeframe. Pine     |
+//|  cannot index a request through a second request, but it can keep |
+//|  the last few hundred opens in an array as they go by: the        |
+//|  script runs on every chart bar, so the record fills from the     |
+//|  left edge of the chart the moment it is loaded, and the newest   |
+//|  entry is always the developing candle of that timeframe.         |
+//+------------------------------------------------------------------+
+var array<int> recD1  = array.new<int>()
+var array<int> recH4  = array.new<int>()
+var array<int> recH1  = array.new<int>()
+var array<int> recM30 = array.new<int>()
+var array<int> recM15 = array.new<int>()
+
+f_record(array<int> a, int t) =>
+    if not na(t)
+        int n = array.size(a)
+        if n == 0 or array.get(a, n - 1) != t
+            array.push(a, t)
+            if array.size(a) > 1000
+                array.remove(a, 0)
+    true
+
+//--- The open of the candle `off` bars back on that timeframe, or na when
+//--- the chart does not hold that much of its history.
+f_recTime(array<int> a, int off) =>
+    int n = array.size(a)
+    off >= 0 and off < n ? array.get(a, n - 1 - off) : na
+
+f_record(recD1,  d1_t)
+f_record(recH4,  h4_t)
+f_record(recH1,  h1_t)
+f_record(recM30, m30_t)
+f_record(recM15, m15_t)
+
+//+------------------------------------------------------------------+
+//|  PO3 LEVELS                                                      |
+//|                                                                  |
+//|  Every ticked grid's window around price is collected, levels    |
+//|  landing on the same price are merged under the HIGHEST ticked   |
+//|  number (powers of three nest: 27 is a multiple of 9, so every 27|
+//|  level sits exactly on a 9 level and drawing both would stack    |
+//|  duplicate lines), and the result is drawn.                      |
+//|                                                                  |
+//|  The epsilon in the floor matters. A price sitting exactly on a  |
+//|  level, 2952.45 with PO3 2187, divides to 134.99999999999997      |
+//|  rather than 135, so a bare floor() would anchor the window one  |
+//|  level low.                                                      |
+//+------------------------------------------------------------------+
+var array<int>   gPo3 = array.new<int>()
+var array<color> gCol = array.new<color>()
+
+if barstate.isfirst
+    bool onM1 = timeframe.period == "1"
+    if use_1 and onM1
+        array.push(gPo3, 1)
+        array.push(gCol, col_1)
+    if use_3
+        array.push(gPo3, 3)
+        array.push(gCol, col_3)
+    if use_9
+        array.push(gPo3, 9)
+        array.push(gCol, col_9)
+    if use_27
+        array.push(gPo3, 27)
+        array.push(gCol, col_27)
+    if use_81
+        array.push(gPo3, 81)
+        array.push(gCol, col_81)
+    if use_243
+        array.push(gPo3, 243)
+        array.push(gCol, col_243)
+    if use_729
+        array.push(gPo3, 729)
+        array.push(gCol, col_729)
+    if use_2187
+        array.push(gPo3, 2187)
+        array.push(gCol, col_2187)
+    if use_6561
+        array.push(gPo3, 6561)
+        array.push(gCol, col_6561)
+    if use_19683
+        array.push(gPo3, 19683)
+        array.push(gCol, col_19683)
+
+f_clearLines(array<line> a) =>
+    while array.size(a) > 0
+        line.delete(array.pop(a))
+    true
+
+f_clearLabels(array<label> a) =>
+    while array.size(a) > 0
+        label.delete(array.pop(a))
+    true
+
+f_clearBoxes(array<box> a) =>
+    while array.size(a) > 0
+        box.delete(array.pop(a))
+    true
+
+//--- How many levels each side this grid draws. Every grid gets the input's
+//--- own count but one: the 1 grid is the subdivision of the 3 grid - the
+//--- two interior lines that split a 3 cell into thirds - so it has to span
+//--- what the 3 grid spans or the subdivision is partial.
+f_eachFor(int po3) =>
+    po3 == 1 ? eachSide * 3 : eachSide
+
+var array<line>  lvLine = array.new<line>()
+var array<label> lvLab  = array.new<label>()
+var array<int>   sRaw   = array.new<int>()
+var array<int>   sOwn   = array.new<int>()
+var float gM0 = na
+var int   gBar = na
+
+//--- Not on every tick: only when price has crossed into a new cell of the
+//--- finest ticked grid (the powers nest, so that cell settles every coarser
+//--- one too) or a new bar has opened. The new-bar check keeps the labels
+//--- pinned five bars right of the developing candle.
+if barstate.islast and array.size(gPo3) > 0
+    int finest = array.get(gPo3, 0)
+    int m0f = int(math.floor(close * scaleDiv / finest + 1e-9))
+    bool dirty = na(gM0) or m0f != gM0 or gBar != time
+    if dirty
+        gM0 := m0f
+        gBar := time
+        f_clearLines(lvLine)
+        f_clearLabels(lvLab)
+        array.clear(sRaw)
+        array.clear(sOwn)
+        for s = 0 to array.size(gPo3) - 1
+            int p    = array.get(gPo3, s)
+            int each = f_eachFor(p)
+            int m0   = int(math.floor(close * scaleDiv / p + 1e-9))
+            for m = m0 - each + 1 to m0 + each
+                if m > 0
+                    int raw = m * p
+                    int idx = array.indexof(sRaw, raw)
+                    if idx < 0
+                        array.push(sRaw, raw)
+                        array.push(sOwn, s)
+                    else if p > array.get(gPo3, array.get(sOwn, idx))
+                        array.set(sOwn, idx, s)
+        int snRaw = array.size(sRaw)
+        if snRaw > 0
+            for i = 0 to snRaw - 1
+                int raw = array.get(sRaw, i)
+                int own = array.get(sOwn, i)
+                int p   = array.get(gPo3, own)
+                float px = raw / scaleDiv
+                array.push(lvLine, line.new(x1 = bar_index, y1 = px, x2 = bar_index + 1, y2 = px,
+                     extend = extend.both, color = array.get(gCol, own),
+                     style = f_levelStyle(p), width = f_levelWidth(p)))
+                if showLabels and p >= labelMinPO3
+                    array.push(lvLab, label.new(x = bar_index + labelShift, y = px,
+                         text = str.tostring(p), xloc = xloc.bar_index, yloc = yloc.price,
+                         color = color.new(color.black, 100), style = label.style_label_right,
+                         textcolor = labelSameColor ? array.get(gCol, own) : labelColor,
+                         size = f_size(labelSizeIn)))
+
+//+------------------------------------------------------------------+
+//|  CANDLE COUNTDOWN                                                |
+//|                                                                  |
+//|  Anchored to the developing candle and to the current price, so  |
+//|  the time left is read in the same glance as the candle it       |
+//|  belongs to. Pine has no timer, so on a market that is not       |
+//|  ticking this freezes between ticks - the .mq5 ran off a         |
+//|  one-second timer, which a TradingView script cannot have.       |
+//+------------------------------------------------------------------+
+var label clockLab = na
+
+if barstate.islast and showClock
+    int leftMs = time_close - timenow
+    string txt = timeframe.period + "  " + f_hms(leftMs)
+    float y = close + clockGapPts * syminfo.mintick
+    int x = bar_index + clockShift
+    if na(clockLab)
+        clockLab := label.new(x = x, y = y, text = txt, xloc = xloc.bar_index, yloc = yloc.price,
+             color = color.new(color.black, 100), style = label.style_label_left,
+             textcolor = clockColor, size = f_size(clockSizeIn))
+    else
+        label.set_xy(clockLab, x, y)
+        label.set_text(clockLab, txt)
+        label.set_textcolor(clockLab, clockColor)
+else if not showClock and not na(clockLab)
+    label.delete(clockLab)
+    clockLab := na
+
+//+------------------------------------------------------------------+
+//|  SESSION TIMER                                                   |
+//|                                                                  |
+//|  Wall-clock time this chart has been open, for capping screen    |
+//|  time. It counts through closed markets and weekends, since the  |
+//|  point is screen time and not session time, and turns red once a |
+//|  set number of minutes is up.                                    |
+//|                                                                  |
+//|  timenow on the script's first bar IS the moment it was loaded,  |
+//|  so a var captures the start. Pine cannot carry it across a      |
+//|  reload the way the .mq5 carries it in a terminal global, so a   |
+//|  timeframe or input change restarts it.                          |
+//+------------------------------------------------------------------+
+var int  sessionStart = timenow
+var bool sessAlerted  = false
+var table sessTab = table.new(position.top_right, 1, 1,
+     bgcolor = color.new(color.black, 100), frame_width = 0, border_width = 0)
+
+if showSession
+    int elapsed = timenow - sessionStart
+    bool over = sessionLimit > 0 and elapsed >= sessionLimit * 60000
+    table.set_position(sessTab, f_pos(sessionPosIn))
+    table.cell(sessTab, 0, 0, "On chart  " + f_hms(elapsed),
+         text_color = over ? sessionOverCol : sessionColor,
+         text_size = f_size(sessionSizeIn), text_halign = text.align_left,
+         bgcolor = color.new(color.black, 100))
+    if over and not sessAlerted
+        sessAlerted := true
+        alert("PO3 Levels: " + str.tostring(sessionLimit) + " minutes on the chart.", alert.freq_once_per_bar)
+else
+    table.cell(sessTab, 0, 0, "", bgcolor = color.new(color.black, 100))
+
+//+------------------------------------------------------------------+
+//|  THE MARKS ON THE CHART                                          |
+//|                                                                  |
+//|  One vertical line and one number under the low for the candle   |
+//|  the count starts at and for every kihon number the count has    |
+//|  reached. Rebuilt only when the count moves, which is when a     |
+//|  candle closes or the anchor rolls over.                         |
+//|                                                                  |
+//|  Three colour bands, not two: 9, 17 and 26 are the numbers that  |
+//|  carry the reading, 33 is the one past them a week of these      |
+//|  timeframes can still reach, and 42 and up are a recessive       |
+//|  background series because a marker's colour is read as how much |
+//|  weight to give it.                                              |
+//+------------------------------------------------------------------+
+var array<line>  kmLine = array.new<line>()
+var array<label> kmLab  = array.new<label>()
+
+f_kihonColor(int k) =>
+    f_kihonIs(k, false) ? kihonSimpleCol : k <= 33 ? kihonCompCol : kihonFarCol
+
+//--- 1900 is the hard floor of the mark search: max_bars_back is 2000, and a
+//--- reference past it is a runtime error rather than na. A day of M1 is
+//--- 1440, so every kihon mark of a day fits; only the count's own "1" can
+//--- fall out of reach on a chart held open for more than a day.
+MARK_MAX = 1900
+
+f_drawMark(int off, string txt, color col, bool withLine, string sz) =>
+    if off >= 0 and off < bar_index + 1 and off <= MARK_MAX
+        float lo = low[off]
+        if withLine
+            array.push(kmLine, line.new(x1 = bar_index - off, y1 = lo, x2 = bar_index - off, y2 = high[off],
+                 extend = extend.both, style = line.style_dotted, width = 1, color = col))
+        array.push(kmLab, label.new(x = bar_index - off, y = lo - kihonGapPts * syminfo.mintick,
+             text = txt, xloc = xloc.bar_index, yloc = yloc.price,
+             color = color.new(color.black, 100), style = label.style_label_up,
+             textcolor = col, size = sz))
+    true
+
+var int gKc = na
+var int gKb = na
+
+if barstate.islast
+    int cc = showCount ? gChartCount : 0
+    if na(gKc) or gKc != cc or gKb != time
+        gKc := cc
+        gKb := time
+        f_clearLines(kmLine)
+        f_clearLabels(kmLab)
+        if cc > 0
+            //--- candle 1 sits (cc - 1) bars back from the developing candle
+            if markOpen
+                f_drawMark(cc - 1, "1", openColor, true, f_size(kihonSizeIn))
+            if markKihon
+                for i = 0 to (kihonCompound ? KIHON_COUNT : KIHON_SIMPLE) - 1
+                    int k = array.get(KIHON, i)
+                    if k <= cc
+                        f_drawMark(cc - k, str.tostring(k), f_kihonColor(k), kihonLines, f_size(kihonSizeIn))
+            //--- Plain numbers on the rest, skipping the kihon marks so a
+            //--- kihon candle keeps its own colour instead of being overwritten
+            //--- by a neutral label of the same number. Capped, because a whole
+            //--- day of M1 is 1440 labels and only the recent run is readable.
+            if numberAll
+                int first = cc > 300 ? cc - 300 + 1 : 1
+                for k = first to cc
+                    bool skip = (k == 1 and markOpen) or (markKihon and f_kihonIs(k, kihonCompound))
+                    if not skip
+                        f_drawMark(cc - k, str.tostring(k), panelColor, false, f_size(kihonSizeIn))
+
+//+------------------------------------------------------------------+
+//|  THE PANELS                                                      |
+//|                                                                  |
+//|  One table in three columns, which is the .mq5's three blocks     |
+//|  standing side by side on one top edge: the count ladder, the     |
+//|  kihon segments taken inside a kihon candle, and the timetable.   |
+//|                                                                  |
+//|  Count panel: a ladder of calendar periods, each counted in the   |
+//|  candles that divide it. Year in months, weeks and days; month in |
+//|  days, H4s and H1s; week in H4s, H1s and M30s; day from H1 down   |
+//|  to M5 plus one nested M1 row. Every block carries its OWN anchor |
+//|  - a week counted from the day open would read 1 forever. What    |
+//|  you are reading for is agreement: one row on a kihon number is   |
+//|  a small turn due, several blocks landing together a bigger one.  |
+//|                                                                  |
+//|  Segment panel: when an H4 or an H1 stands on a kihon number, the |
+//|  minutes inside that candle are counted in their own right, from  |
+//|  the candle's open. Only the rows that can reach a number appear, |
+//|  which is why an H4 gets M15 and an H1 does not.                   |
+//|                                                                  |
+//|  Schedule panel: when this week's kihon candles open, on D1 down  |
+//|  to M15 counted from the week open, and which of today's are      |
+//|  still in front. Times read off real bars where the bars exist;   |
+//|  a ~ marks the ones ahead, which are projected and skip the       |
+//|  weekend but not a broker's daily break.                          |
+//+------------------------------------------------------------------+
+string SEG_TITLE = "Kihon Suchi segments"
+var array<string> SEG_NAME = array.from("M15", "M5", "M1")
+var array<int>    SEG_MS   = array.from(900000, 300000, 60000)
+
+//--- One panel row: a timeframe's count against its block's anchor, and
+//--- what it owes the next kihon suchi number. "no data" is history still
+//--- arriving; "past 257" is a count with nothing left to count to.
+f_row(string nm, bool isChart, int cnt, bool withCompound) =>
+    string tail = ""
+    color col = panelColor
+    if cnt <= 0
+        tail := "no data"
+    else
+        int off = f_kihonOffset(cnt, withCompound)
+        int mag = int(math.abs(off))
+        if off == 0
+            tail := "KS"
+            col := panelHit
+        else if mag <= panelNearTol
+            tail := "KS " + (off > 0 ? "+" : "-") + str.tostring(mag)
+            col := panelNear
+        else
+            int nx = f_kihonNext(cnt, withCompound)
+            tail := nx == 0 ? "past " + str.tostring(f_kihonLast(withCompound)) : str.tostring(nx) + " in " + str.tostring(nx - cnt)
+    string row = (isChart ? ">" : " ") + " " + f_padR(nm, 5) + " " + f_padL(cnt > 0 ? str.tostring(cnt) : "-", 5) + "  " + f_padR(tail, 10)
+    [row, col]
+
+//--- One block - a blank line, a title with its anchor, then its rows. Two
+//--- shapes of block, three rows or four, hence the empty fourth.
+f_block(array<string> t, array<color> cl, string title, int anchorTs, simple bool withTime, string n1, int v1, string n2, int v2, string n3, int v3, string n4, int v4) =>
+    if array.size(t) > 0
+        array.push(t, "")
+        array.push(cl, panelColor)
+    array.push(t, f_padR(title, 6) + " from " + (na(anchorTs) ? "-" : str.format_time(anchorTs, withTime ? "yyyy.MM.dd HH:mm" : "yyyy.MM.dd", syminfo.timezone)))
+    array.push(cl, panelColor)
+    [r1, k1] = f_row(n1, n1 == f_tfName(), v1, kihonCompound)
+    array.push(t, r1)
+    array.push(cl, k1)
+    [r2, k2] = f_row(n2, n2 == f_tfName(), v2, kihonCompound)
+    array.push(t, r2)
+    array.push(cl, k2)
+    [r3, k3] = f_row(n3, n3 == f_tfName(), v3, kihonCompound)
+    array.push(t, r3)
+    array.push(cl, k3)
+    if n4 != ""
+        [r4, k4] = f_row(n4, n4 == f_tfName(), v4, kihonCompound)
+        array.push(t, r4)
+        array.push(cl, k4)
+    true
+
+//--- One segment block: the kihon candle's own header, then the finer counts
+//--- taken from inside it. A row appears only when at least one kihon number
+//--- fits inside the candle - sixteen M15 candles fit in an H4, so 9 is in
+//--- reach; the four that fit in an H1 could only ever read "9 in 5".
+f_segBlock(array<string> t, array<color> cl, string name, int spanMs, int start, bool gap) =>
+    if gap
+        array.push(t, "")
+        array.push(cl, panelColor)
+    array.push(t, f_padR(name, 6) + " from " + (na(start) ? "-" : str.format_time(start, "HH:mm", syminfo.timezone)))
+    array.push(cl, panelHit)
+    for i = 0 to 2
+        int fms = array.get(SEG_MS, i)
+        if spanMs >= 9 * fms
+            int cnt = na(start) ? 0 : int(math.max(1, int(math.floor((timenow - start) / (fms * 1.0))) + 1))
+            [r, kc] = f_row(array.get(SEG_NAME, i), false, cnt, kihonCompound)
+            array.push(t, r)
+            array.push(cl, kc)
+    true
+
+//--- A time of day, on whichever clock the block is set to.
+f_when(int t) =>
+    na(t) ? "-" : str.format_time(t, schedAmPm ? "EEE dd/MM hh:mm a" : "EEE dd/MM HH:mm", schedTzIn)
+
+//--- Where a candle that has not opened yet will open. Stepped one period at
+//--- a time and pushed a whole day past a weekend, so the time of day
+//--- survives the skip. ESTIMATE: a broker's daily maintenance break is not
+//--- modelled, which is why times are read off real bars wherever they exist.
+f_project(int start, int steps, int ms) =>
+    int t = start
+    for i = 1 to steps
+        t := t + ms
+        for s = 0 to 2
+            if dayofweek(t) == dayofweek.saturday or dayofweek(t) == dayofweek.sunday
+                t := t + 86400000
+    t
+
+//--- One schedule row. state is written back for the caller to colour on:
+//--- 0 gone by, 1 running now, 2 still ahead.
+f_schedRow(string name, bool head, int k, int cnt, array<int> rec, int tfMs, int openTs) =>
+    int state = 2
+    string stamp = ""
+    if cnt <= 0
+        stamp := "no data"
+    else
+        int when = na
+        if k <= cnt
+            int off = cnt - k
+            when := f_recTime(rec, off)
+            if na(when)
+                when := openTs - off * tfMs
+            state := k == cnt ? 1 : 0
+        else
+            when := f_project(openTs, k - cnt, tfMs)
+            state := 2
+        stamp := (state == 2 ? "~" : " ") + f_when(when)
+        if schedTzBoth and not na(when)
+            stamp := stamp + " (" + str.format_time(when, "HH:mm", syminfo.timezone) + ")"
+    string tail = cnt <= 0 ? "" : state == 0 ? "done" : state == 1 ? "NOW" : "due"
+    string row = (name == f_tfName() ? ">" : " ") + " " + f_padR(head ? name : "", 3) + " " + f_padL(str.tostring(k), 3) + " " + f_padR(stamp, 19) + " " + f_padR(tail, 4)
+    [row, state]
+
+//--- One timeframe's group in the week list: its numbers in order, every one
+//--- of them, whether it has passed or not. Lime for the number the count is
+//--- standing on, orange for the next one due, and nothing else - a column in
+//--- which every future row shouted would have no next in it.
+f_schedWeekGroup(array<string> t, array<color> cl, string name, array<int> rec, int tfMs, int openTs, int cnt, bool gap) =>
+    int last = kihonCompound ? KIHON_COUNT : KIHON_SIMPLE
+    int rows = 0
+    for i = 0 to last - 1
+        int k = array.get(KIHON, i)
+        if k >= 9 and k <= 33
+            rows := rows + 1
+    if rows > 0
+        if gap
+            array.push(t, "")
+            array.push(cl, panelColor)
+        bool head = true
+        bool lit = false
+        for i = 0 to last - 1
+            int k = array.get(KIHON, i)
+            if k >= 9 and k <= 33
+                [row, state] = f_schedRow(name, head, k, cnt, rec, tfMs, openTs)
+                color col = panelColor
+                if state == 1
+                    col := panelHit
+                else if state == 2 and not lit
+                    col := panelNear
+                    lit := true
+                array.push(t, row)
+                array.push(cl, col)
+                head := false
+    rows > 0
+
+//--- One timeframe's group in the today list: the numbers it has not reached
+//--- yet whose candle still opens before the day is out. Strictly ahead - a
+//--- number the count is standing on belongs to the segment block, which has
+//--- far more to say about it than a line in a timetable.
+//--- The scratch array is global, not var-in-function: a var local to a
+//--- function is not legal Pine, and one scratch is enough because the
+//--- groups are built one after another.
+var array<int> dayKeep = array.new<int>()
+
+f_schedDayGroup(array<string> t, array<color> cl, string name, array<int> rec, int tfMs, int openTs, int cnt, int dayEnd, bool gap) =>
+    int last = kihonCompound ? KIHON_COUNT : KIHON_SIMPLE
+    array.clear(dayKeep)
+    if cnt > 0
+        for i = 0 to last - 1
+            int k = array.get(KIHON, i)
+            if k >= 9 and k > cnt
+                if not schedDayAll and k > 33
+                    break
+                int when = f_project(openTs, k - cnt, tfMs)
+                if not na(when) and when < dayEnd
+                    array.push(dayKeep, k)
+    if array.size(dayKeep) > 0
+        if gap
+            array.push(t, "")
+            array.push(cl, panelColor)
+        for i = 0 to array.size(dayKeep) - 1
+            [row, state] = f_schedRow(name, i == 0, array.get(dayKeep, i), cnt, rec, tfMs, openTs)
+            array.push(t, row)
+            array.push(cl, i == 0 ? panelNear : panelColor)
+    array.size(dayKeep) > 0
+
+var array<string> pTxt = array.new<string>()
+var array<color>  pClr = array.new<color>()
+var array<string> sTxt = array.new<string>()
+var array<color>  sClr = array.new<color>()
+var array<string> kTxt = array.new<string>()
+var array<color>  kClr = array.new<color>()
+
+var table panelTab = na
+var int pMin = na
+var int pBar = na
+var bool pFirst = true
+
+//--- The gate: nothing the panel prints can change except on a minute
+//--- boundary - M1 is the finest thing counted - so it is rebuilt once a
+//--- minute and on every new bar rather than on every tick.
+if barstate.islast and (pFirst or pBar != time or pMin != minute(timenow))
+    pFirst := false
+    pBar   := time
+    pMin   := minute(timenow)
+
+    array.clear(pTxt)
+    array.clear(pClr)
+    array.clear(sTxt)
+    array.clear(sClr)
+    array.clear(kTxt)
+    array.clear(kClr)
+
+    bool sessDay = countAnchor == "Custom time of day"
+    int  dOpen   = sessDay ? f_customAnchor() : dOpenG
+
+    if panelShow
+        if panelYear
+            f_block(pTxt, pClr, "Year", yOpenG, false, "MN1", mn1_cY, "W1", w1_cY, "D1", d1_cY, "", 0)
+        if panelMonth
+            f_block(pTxt, pClr, "Month", mOpenG, false, "D1", d1_cM, "H4", h4_cM, "H1", h1_cM, "", 0)
+        if panelWeek
+            f_block(pTxt, pClr, "Week", wOpenG, false, "H4", h4_cW, "H1", h1_cW, "M30", m30_cW, "", 0)
+        if panelDay
+            f_block(pTxt, pClr, sessDay ? "Sess" : "Day", dOpen, true, "H1", h1_cD, "M30", m30_cD, "M15", m15_cD, "M5", m5_cD)
+            //--- The nested M1 count. Running M1 across a whole day is past
+            //--- 257 by breakfast and says nothing after that, so it restarts
+            //--- at every kihon suchi H1 candle instead - hour 1, then 9, then
+            //--- 17. The label carries the hour it restarted at, because the
+            //--- count alone cannot tell you which phase of the day it measures.
+            int segNo = f_kihonAtOrBelow(h1_cD, kihonCompound)
+            segNo := segNo < 1 ? 1 : segNo
+            int segFrom = f_recTime(recH1, h1_cD - segNo)
+            int m1c = na(segFrom) ? 0 : int(math.max(1, int(math.floor((time - segFrom) / 60000.0)) + 1))
+            [mr, mk] = f_row("M1@" + str.tostring(segNo), timeframe.period == "1", m1c, kihonCompound)
+            array.push(pTxt, mr)
+            array.push(pClr, mk)
+
+    //--- The segment panel. H4 is read against the month and the week only: a
+    //--- trading day holds six H4 candles, so a day-anchored H4 count stops at
+    //--- 6 and could never be on a number. H1 gets the day as well, where it
+    //--- runs to 24 and the first three numbers are all in reach.
+    bool h4Kihon = f_kihonIs(h4_cM, kihonCompound) or f_kihonIs(h4_cW, kihonCompound)
+    bool h1Kihon = f_kihonIs(h1_cM, kihonCompound) or f_kihonIs(h1_cW, kihonCompound) or f_kihonIs(h1_cD, kihonCompound)
+    bool segAutoNow = not segShow and segAuto and ((segH4 and h4Kihon) or (segH1 and h1Kihon))
+
+    if segShow or segAutoNow
+        array.push(sTxt, SEG_TITLE)
+        array.push(sClr, panelColor)
+        bool any = false
+        if segH4 and h4Kihon
+            any := f_segBlock(sTxt, sClr, "H4", 14400000, h4_t, any)
+        if segH1 and h1Kihon
+            any := f_segBlock(sTxt, sClr, "H1", 3600000, h1_t, any)
+        if not any
+            array.push(sTxt, " none")
+            array.push(sClr, panelColor)
+
+    //--- The schedule panel. Both lists are held to the numbers 9 to 33: past
+    //--- 33 a week of any of these timeframes cannot reach the next number, so
+    //--- every further row would be a date in a later week under this week's
+    //--- heading. The today list can be opened past 33 if asked.
+    if schedShow
+        if schedWeek
+            array.push(kTxt, f_padR("Week", 6) + " " + str.tostring(9) + "-" + str.tostring(f_kihonAtOrBelow(33, kihonCompound)) + " from " + (na(w1_t) ? "-" : str.format_time(w1_t, "yyyy.MM.dd", schedTzIn)) + "  " + schedTzIn)
+            array.push(kClr, panelColor)
+            bool any = false
+            if f_schedWeekGroup(kTxt, kClr, "D1",  recD1,  86400000, d1_t,  d1_cW,  any)
+                any := true
+            if f_schedWeekGroup(kTxt, kClr, "H4",  recH4,   14400000, h4_t,  h4_cW,  any)
+                any := true
+            if f_schedWeekGroup(kTxt, kClr, "H1",  recH1,    3600000, h1_t,  h1_cW,  any)
+                any := true
+            if f_schedWeekGroup(kTxt, kClr, "M30", recM30,   1800000, m30_t, m30_cW, any)
+                any := true
+            if f_schedWeekGroup(kTxt, kClr, "M15", recM15,    900000, m15_t, m15_cW, any)
+                any := true
+            if not any
+                array.push(kTxt, " none")
+                array.push(kClr, panelColor)
+
+        if schedDay
+            if array.size(kTxt) > 0
+                array.push(kTxt, "")
+                array.push(kClr, panelColor)
+            array.push(kTxt, f_padR(sessDay ? "Sess" : "Day", 6) + " ahead from " + (na(dOpen) ? "-" : str.format_time(dOpen, "HH:mm", schedTzIn)) + "  " + schedTzIn)
+            array.push(kClr, panelColor)
+            int dayEnd = dOpen + 86400000
+            bool any = false
+            if f_schedDayGroup(kTxt, kClr, "H1",  recH1,   3600000, h1_t,  h1_cD,  dayEnd, any)
+                any := true
+            if f_schedDayGroup(kTxt, kClr, "M30", recM30, 1800000, m30_t, m30_cD, dayEnd, any)
+                any := true
+            if f_schedDayGroup(kTxt, kClr, "M15", recM15,  900000, m15_t, m15_cD, dayEnd, any)
+                any := true
+            if not any
+                array.push(kTxt, " none")
+                array.push(kClr, panelColor)
+
+    //--- All three blocks, same text size, same top edge: one instrument in
+    //--- three blocks. The table is rebuilt to the tallest of them, so a block
+    //--- switched off hands its place to the next rather than leaving a hole.
+    int rows = int(math.max(1, math.max(array.size(pTxt), math.max(array.size(sTxt), array.size(kTxt)))))
+    if not na(panelTab)
+        table.delete(panelTab)
+    panelTab := table.new(f_pos(panelPosIn), 3, rows,
+         bgcolor = color.new(color.black, 100),
+         frame_color = panelBox ? panelBorder : na, frame_width = panelBox ? 1 : 0,
+         border_width = 0)
+    //--- The size is taken once and tested before the loop: `for r = 0 to
+    //--- n - 1` counts DOWN when n is 0, so an empty block (a panel switched
+    //--- off) would run once with r = 0 and index past the end.
+    int pn = array.size(pTxt)
+    int sn = array.size(sTxt)
+    int kn = array.size(kTxt)
+    if pn > 0
+        for r = 0 to pn - 1
+            table.cell(panelTab, 0, r, array.get(pTxt, r), text_color = array.get(pClr, r),
+                 bgcolor = panelBox ? panelBg : color.new(color.black, 100),
+                 text_halign = text.align_left, text_valign = text.align_top,
+                 text_size = f_size(panelSizeIn), text_font_family = font.family_monospace)
+    if sn > 0
+        for r = 0 to sn - 1
+            table.cell(panelTab, 1, r, array.get(sTxt, r), text_color = array.get(sClr, r),
+                 bgcolor = panelBox ? panelBg : color.new(color.black, 100),
+                 text_halign = text.align_left, text_valign = text.align_top,
+                 text_size = f_size(panelSizeIn), text_font_family = font.family_monospace)
+    if kn > 0
+        for r = 0 to kn - 1
+            table.cell(panelTab, 2, r, array.get(kTxt, r), text_color = array.get(kClr, r),
+                 bgcolor = panelBox ? panelBg : color.new(color.black, 100),
+                 text_halign = text.align_left, text_valign = text.align_top,
+                 text_size = f_size(panelSizeIn), text_font_family = font.family_monospace)
+
+//+------------------------------------------------------------------+
+//|  UNRAIDED LIQUIDITY                                              |
+//|                                                                  |
+//|  Swing highs and lows price has not yet traded back through, the |
+//|  resting orders a sweep is expected to take. Each is a line from |
+//|  the tip of its wick to the right edge; when price takes the      |
+//|  level out, the line goes.                                       |
+//|                                                                  |
+//|  A swing is found the way a fractal is: a high is a swing high   |
+//|  when it stands above the liqLeft candles before it and the      |
+//|  liqRight candles after it (6 and 6 by default; a Williams       |
+//|  fractal is 2 and 2). Lows mirror it.                            |
+//|                                                                  |
+//|  Equal highs are liquidity too, so ties are settled one way: the |
+//|  swing must be strictly above the candles on its left but only   |
+//|  as high as those on its right. Of a run of equal highs the      |
+//|  OLDEST is the swing, and a later candle that only matches it    |
+//|  has not raided it - to raid, price must trade beyond.           |
+//|                                                                  |
+//|  A swing is only confirmed once all its right-hand candles have  |
+//|  closed, so a line never appears and then vanishes because the   |
+//|  swing failed. A wick raid is read off the live candle, so a     |
+//|  line goes the moment price trades through; a close raid waits   |
+//|  for the candle to close.                                        |
+//|                                                                  |
+//|  The LAST RAIDED high and low - of the raided swings, the one    |
+//|  whose raid is newest on each side - stay on the chart, dashed,  |
+//|  from the wick to the candle that raided them.                   |
+//|                                                                  |
+//|  The locked-timeframe option of the .mq5 is not here: Pine cannot |
+//|  run a newest-to-oldest walk over another timeframe's bars, and   |
+//|  every substitute changes the tie rule above. The scan follows   |
+//|  the chart's timeframe, which is the .mq5's default.             |
+//+------------------------------------------------------------------+
+var array<line>  lqLine = array.new<line>()
+var array<label> lqLab  = array.new<label>()
+var int   gLiqBar    = na
+var float gLiqHiNear = na
+var float gLiqLoNear = na
+
+f_isSwingHigh(int i) =>
+    float v  = high[i]
+    bool  ok = true
+    for j = 1 to liqLeft
+        if v <= high[i + j]                  // older: strictly beyond
+            ok := false
+            break
+    if ok
+        for j = 1 to liqRight
+            if v < high[i - j]               // newer: at least as far
+                ok := false
+                break
+    ok
+
+f_isSwingLow(int i) =>
+    float v  = low[i]
+    bool  ok = true
+    for j = 1 to liqLeft
+        if v >= low[i + j]
+            ok := false
+            break
+    if ok
+        for j = 1 to liqRight
+            if v > low[i - j]
+                ok := false
+                break
+    ok
+
+f_liqLabel(int x, float lvl, bool isHigh, color col) =>
+    if liqValues
+        array.push(lqLab, label.new(x = x, y = lvl, text = str.tostring(lvl, format.mintick),
+             xloc = xloc.bar_index, yloc = yloc.price, color = color.new(color.black, 100),
+             style = isHigh ? label.style_label_down : label.style_label_up,
+             textcolor = col, size = size.tiny))
+    true
+
+//--- The gate: a line can only change when a candle opens (a swing is
+//--- confirmed, or a close raid lands) or price trades beyond the nearest
+//--- unraided level. Anything else and a tick would re-run the whole scan.
+bool liqDue = barstate.islast and showLiq and (na(gLiqBar) or gLiqBar != time
+     or (not liqRaidClose and ((not na(gLiqHiNear) and high > gLiqHiNear)
+     or (not na(gLiqLoNear) and low < gLiqLoNear))))
+
+if liqDue
+    gLiqBar := time
+    int n = int(math.min(bar_index + 1, math.max(liqLookback, liqLeft + liqRight + 2)))
+    if n >= liqLeft + liqRight + 2
+        f_clearLines(lqLine)
+        f_clearLabels(lqLab)
+        gLiqHiNear := 1e100
+        gLiqLoNear := -1e100
+        for side = 0 to 1
+            bool isHigh = side == 0
+            if (isHigh and liqHighs) or (not isHigh and liqLows)
+                color col = isHigh ? liqHighCol : liqLowCol
+                float reach   = isHigh ? -1e100 : 1e100
+                int   bestJ   = 100000000
+                float bestLvl = na
+                int   bestX   = na
+                int   bestRaidX = na
+                for i = 0 to n - 1
+                    if i > liqRight and i + liqLeft < n
+                        bool sw = isHigh ? f_isSwingHigh(i) : f_isSwingLow(i)
+                        if sw
+                            float lvl = isHigh ? high[i] : low[i]
+                            bool raided = isHigh ? reach > lvl : reach < lvl
+                            if not raided
+                                if isHigh
+                                    gLiqHiNear := math.min(gLiqHiNear, lvl)
+                                else
+                                    gLiqLoNear := math.max(gLiqLoNear, lvl)
+                                int x = bar_index - i
+                                array.push(lqLine, line.new(x1 = x, y1 = lvl, x2 = bar_index, y2 = lvl,
+                                     extend = extend.right, color = col, width = liqWidth))
+                                f_liqLabel(x, lvl, isHigh, col)
+                            else if liqLastRaid
+                                //--- the candle that first went beyond it. It can
+                                //--- be the one right after the swing, so the walk
+                                //--- starts at i-1 and only the live candle is
+                                //--- skipped, and only for a close raid.
+                                int k0 = i - 1
+                                int j  = -1
+                                if k0 >= 0
+                                    for kb = 0 to k0
+                                        int k = k0 - kb        // i-1 first, 0 last
+                                        if not (liqRaidClose and k == 0)
+                                            float probe = liqRaidClose ? close[k] : (isHigh ? high[k] : low[k])
+                                            if (isHigh ? probe > lvl : probe < lvl)
+                                                j := k
+                                                break
+                                if j >= 0
+                                    bool better = j < bestJ or (j == bestJ and (isHigh ? lvl > bestLvl : lvl < bestLvl))
+                                    if better
+                                        bestJ := j
+                                        bestLvl := lvl
+                                        bestX := bar_index - i
+                                        bestRaidX := bar_index - j
+                    if not (liqRaidClose and i == 0)
+                        float probe2 = liqRaidClose ? close[i] : (isHigh ? high[i] : low[i])
+                        reach := isHigh ? math.max(reach, probe2) : math.min(reach, probe2)
+                if not na(bestLvl)
+                    array.push(lqLine, line.new(x1 = bestX, y1 = bestLvl, x2 = bestRaidX, y2 = bestLvl,
+                         color = col, width = liqWidth, style = liqWidth <= 1 ? line.style_dashed : line.style_solid))
+                    f_liqLabel(bestX, bestLvl, isHigh, col)
+
+//+------------------------------------------------------------------+
+//|  FAIR VALUE GAPS                                                 |
+//|                                                                  |
+//|  Three-candle imbalances price has not yet traded back through,  |
+//|  shaded from the middle candle to the right edge. Of three       |
+//|  candles in a row, a bullish gap is the space between the first  |
+//|  candle's high and the third's low, when the third's low is      |
+//|  above the first's high - the middle candle moved so fast that   |
+//|  no candle traded that range both ways. A bearish gap mirrors it.|
+//|                                                                  |
+//|  A gap is only confirmed once its third candle has closed. By    |
+//|  default a gap ends only when a CLOSED candle after the third    |
+//|  closes beyond its far edge, so a wick through it that closes    |
+//|  back does not end it. The other three modes read wicks, the     |
+//|  live one included, so a box goes the moment price reaches.      |
+//+------------------------------------------------------------------+
+var array<box> fvgBox = array.new<box>()
+var int   gFvgBar      = na
+var float gFvgBullNear = na
+var float gFvgBearNear = na
+
+bool fvgByClose = fvgMitIn == "A candle closes beyond the gap"
+
+f_trigger(float bot, float top, bool bull) =>
+    fvgMitIn == "Price reaches the middle of the gap" ? (bot + top) / 2 : fvgMitIn == "Price trades into the gap at all" ? (bull ? top : bot) : (bull ? bot : top)
+
+f_fvgBox(int m, float bot, float top, bool bull) =>
+    array.push(fvgBox, box.new(left = bar_index - m, top = top, right = bar_index + 1, bottom = bot,
+         border_color = na, bgcolor = bull ? fvgBullCol : fvgBearCol))
+    true
+
+bool fvgDue = barstate.islast and showFvg and (na(gFvgBar) or gFvgBar != time
+     or (not fvgByClose and (low <= gFvgBullNear or high >= gFvgBearNear)))
+
+if fvgDue
+    gFvgBar := time
+    int n = int(math.min(bar_index + 1, fvgLookback))
+    if n >= 4
+        f_clearBoxes(fvgBox)
+        gFvgBullNear := -1e100
+        gFvgBearNear := 1e100
+        float minGap = fvgMinPts * syminfo.mintick
+        float lo = 1e100
+        float hi = -1e100
+        //--- m is the middle candle: m-1 the third (closed, so m >= 2),
+        //--- m+1 the first, and 0 .. m-2 the candles that can mitigate it
+        for m = 2 to n - 2
+            if not fvgByClose
+                lo := math.min(lo, low[m - 2])
+                hi := math.max(hi, high[m - 2])
+            else if m - 2 >= 1
+                lo := math.min(lo, close[m - 2])
+                hi := math.max(hi, close[m - 2])
+            if fvgBull and low[m - 1] > high[m + 1]
+                float bot = high[m + 1]
+                float top = low[m - 1]
+                bool  openGap = fvgByClose ? lo >= bot : lo > f_trigger(bot, top, true)
+                if top - bot >= minGap and openGap
+                    gFvgBullNear := math.max(gFvgBullNear, f_trigger(bot, top, true))
+                    f_fvgBox(m, bot, top, true)
+            if fvgBear and high[m - 1] < low[m + 1]
+                float botS = high[m - 1]
+                float topS = low[m + 1]
+                bool  openS = fvgByClose ? hi <= topS : hi < f_trigger(botS, topS, false)
+                if topS - botS >= minGap and openS
+                    gFvgBearNear := math.min(gFvgBearNear, f_trigger(botS, topS, false))
+                    f_fvgBox(m, botS, topS, false)

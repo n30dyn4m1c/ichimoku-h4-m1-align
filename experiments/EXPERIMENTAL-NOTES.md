@@ -8069,3 +8069,134 @@ based on real ticks".
 only. Next step: an MT5 real-tick backtest on XM's feed. At 1% risk a 38R
 drawdown is about 32% of equity (compounded), so test at lower risk before
 any live use.
+
+## 72. PO3 levels and kihon suchi ported to TradingView
+
+**File:** `experiments/po3-levels.pine`
+**Source:** `experiments/po3-levels.mq5` v1.54 (§38, §52, §60, §61, §63)
+**Magic number:** none — an indicator, it places no orders.
+
+The chart tool of §38 re-cut as one Pine v6 indicator, so the levels, the
+counts and the two liquidity tools can be looked at on TradingView as well as
+in MT5. Everything the .mq5 draws is in the one script: the PO3 grid and its
+labels, the kihon marks on the chart, the count ladder, the segment block, the
+schedule timetable, the unraided liquidity, the unmitigated fair value gaps,
+the candle countdown and the session clock.
+
+The point of the port is that the numbers had to stay the same. The EAs in
+this repo use the same level arithmetic and the same counting convention, so a
+port that counted one bar differently would make the chart and the EAs
+disagree about what "on a kihon number" means.
+
+### Ported unchanged
+
+- **The grid.** Every ticked power of three from 1 to 19683, a window of
+  `eachSide` levels each side of price, and a level that lands on two grids is
+  kept once, owned by the **highest** number. The 1 grid draws `eachSide * 3`
+  levels each side because it subdivides the 3 grid, and it is skipped unless
+  the chart is M1. The epsilon in the floor is kept: a price sitting exactly
+  on 2952.45 with PO3 2187 divides to 134.99999999999997, and a bare floor
+  would anchor the window one level low.
+- **The labels** carry the owning PO3 number (not the price), start
+  `labelShift` bars right of the developing candle, and only grids at or above
+  `labelMinPO3` are labelled.
+- **The kihon list** is 9, 17, 26, 33, 42, 51, 65, 76, 129, 172, 226, 257,
+  with the first three as the simple numbers. The compound toggle removes
+  entries four and up, so "past 257" becomes "past 26" when they are off.
+- **The counting convention** is the .mq5's: inclusive at both ends, the
+  candle at the anchor is candle 1, so 17 + 17 - 1 = 33 and the compound spans
+  share a turning candle. The nearest-number rule, the strictly-above "next"
+  rule and the "KS / KS ±n / n in m" tail states are the .mq5's.
+- **The panels.** The count ladder keeps each block's own anchor — week in
+  days/H4/H1, month in H4/H1/M30, day from H1 down to M5 plus the nested
+  M1@N row that restarts at every kihon H1 candle. The segment block opens by
+  itself while an H4 or H1 is standing on a kihon number and closes when that
+  candle ends. The schedule panel keeps the 9–33 window, the "done / NOW /
+  due" states, the `~` on projected times and the lime/orange colouring.
+- **The liquidity tie rule**: strictly beyond the candles on the left, at
+  least as far as those on the right, so the oldest of a run of equal highs
+  is the swing; a later candle that only matches it has not raided it. The
+  raid must trade beyond. A wick raid is read off the live candle; a close
+  raid waits for the candle to close. The last raided high and low stay as a
+  dashed line from the wick to the raid candle (solid at width 2 and up,
+  where MT5 cannot draw a dash either).
+- **The gaps.** Three-candle imbalances, four mitigation modes, the trigger
+  being the far edge, the middle or the near edge, boxes from the middle
+  candle to the right edge, and the close-beyond mode reading closed candles
+  only while the wick modes include the live one.
+
+### What Pine forced to change
+
+1. **No buttons.** The three kihon blocks are switched by inputs. The segment
+   block still opens by itself while an H4 / H1 kihon candle runs, which is
+   the one automatic behaviour the .mq5 had.
+2. **No timer.** Pine recomputes on a tick, so the countdown and the session
+   clock freeze between ticks on a quiet market. The panel is rebuilt once a
+   minute and on every new bar — M1 is the finest thing it counts, so nothing
+   in it can change faster.
+3. **No locked timeframe** for the liquidity and FVG scans. A newest-to-oldest
+   walk over another timeframe's bars cannot be written inside
+   `request.security`, and every substitute changes the tie rule. Both scans
+   follow the chart timeframe, which is the .mq5's default.
+4. **No z-order.** Lines and labels always sit above the candles, so "draw the
+   grid behind them" has nothing to act on.
+5. **No font or pixel control.** Label sizes are TradingView's five steps and
+   the panels are pinned to one of the nine chart corners rather than to an
+   X/Y. The panel text is monospaced, which is what makes its column padding
+   line up.
+6. **The session clock restarts** when the script is recompiled or its inputs
+   change. The .mq5 parked the start in a terminal global so it survived a
+   timeframe change; Pine has no such storage.
+7. **The schedule panel reads a real IANA timezone** (default
+   `Pacific/Port_Moresby`) instead of a fixed UTC offset, so it survives DST.
+8. **The 500-object cap.** TradingView keeps the 500 most recent labels,
+   lines and boxes, so "number every candle" plus all three panels plus the
+   grids can clip the oldest drawings. `max_bars_back` is 2000 so a day of M1
+   marks (1440 bars) survives.
+9. **The label colour** is an "own colour" checkbox rather than a colour
+   input whose "none" value means the same thing.
+10. **Series state runs on every bar.** `ta.change()` and `ta.barssince()`
+    carry state from bar to bar, so neither can sit inside an `if` branch or
+    behind `barstate.islast` — the bars it skipped would leave the count
+    reading from a stale run. The four calendar-change flags are therefore
+    computed unconditionally at the top of the anchor helper, before the
+    requested kind is chosen, and the chart's own count is taken once per bar
+    at global scope for every anchor, the input only picking which result is
+    drawn. This is also why the counts can be requested from other timeframes
+    while the drawn one cannot: inside `request.security` the same helper is
+    re-evaluated in that timeframe's context, which is exactly what a
+    higher-timeframe count needs.
+11. **`for 0 to size - 1` counts DOWN on an empty array.** Pine's `for`
+    walks towards the end bound, so a zero-length block makes `size - 1` equal
+    to -1 and the loop runs with index 0 anyway — a runtime "index out of
+    bounds". Every column of the panel, and the merged level list behind it,
+    therefore takes its array size into a local, tests it, and only then
+    loops. This is the one difference a panel with a block switched off shows
+    immediately: the schedule panel is off by default, so its column is
+    empty, and an unguarded loop would fault on the last bar.
+
+### Counts that are not bar counts
+
+The MQL5 asks the terminal for the bars between two times on any timeframe.
+Pine cannot; the panel therefore counts *elapsed periods* for the segment rows
+(M15, M5, M1) and for the nested M1@ row. In a continuous session that is
+exactly the number of finer candles that have opened; a broker's daily
+maintenance break inside the candle makes the count read a few high. The
+schedule panel is not affected — it reads real bar opens from a rolling record
+of each timeframe's opens.
+
+### Using it
+
+Paste the file into the Pine Editor, save it, and add it to a chart. The
+script requests 1M, 1W, 1D, 240, 60, 30, 15 and 5 minute data, so a chart with
+only a few hundred bars shows "no data" in the panel rows until the history
+arrives. Everything is under the indicator's Settings dialog, in the same
+groups the .mq5 used.
+
+**Status:** hand-reviewed against v1.54 line by line, then compiled and run
+on TradingView (2026-10-24, clean compile, panels and marks drawing). Three
+things the first runs caught, all fixed and documented above: a parameter named
+`text` (a reserved namespace), `ta.*` state read behind conditionals (item 10),
+and the empty-array `for 0 to size - 1` count-down in the panel columns
+(item 11). The arithmetic and the counting rules are the ported parts; the
+drawing conveniences are TradingView's.
