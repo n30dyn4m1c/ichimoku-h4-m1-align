@@ -8200,3 +8200,82 @@ things the first runs caught, all fixed and documented above: a parameter named
 and the empty-array `for 0 to size - 1` count-down in the panel columns
 (item 11). The arithmetic and the counting rules are the ported parts; the
 drawing conveniences are TradingView's.
+
+## 73. Review fixes — every finding of the 2026-11-04 review behind a switch
+
+**File:** `experimental-bottomup-stack-review-fixes-vps-ea.mq5`
+**Magic number:** `20260893`
+**Simulator:** `utilities/vps-sim/vpssim.py`, new flags (see below)
+
+User request (2026-11-04): a full review of the live VPS EA for defects and
+for changes that could make it more profitable, then this experimental copy
+with a switch for each finding. A copy of `ichimoku-h4-m1-vps-ea.mq5` as of
+`ce90786`. The live file was not touched. **With every switch off it runs the
+live logic exactly.** The defaults turn the defect fixes on and leave the
+strategy changes off.
+
+| # | Input | Default | What it changes |
+|---|---|---|---|
+| 1 | `InpOnePosition` | **on** | A running tier blocks itself **and every smaller tier**. Live: the scan `continue`s past a running tier, so M30/M15 open on top of a running H1/H4. The header's "one position per symbol" was never enforced (flagged in §30 and §37, never decided). §69 found the 2026-06-30 loss of 34% came from H4, H1 and M30 shorts opening within three minutes. A bigger tier can still supersede a smaller one. |
+| 2 | `InpSizeOnCloudDist` | off | Lots are sized on `max(ATR × InpRiskATRMult, distance from the entry side to the tier's cloud edge)`, capped at the disaster-stop distance. Live sizes on 2 × ATR, but the real exit is the cloud touch or the 8 × ATR stop. A trade far from its cloud is sized smaller. |
+| 3 | `InpPeakSinceEntry` | **on** | The chandelier peak comes from M1 bars since entry. Live uses the high/low of the **forming tier bar**, which on H4 can include up to four hours of prices from before the entry. The trail starts tighter than designed, worst on a re-entry inside the same bar, which inherits the stopped trade's peak. The R4 restart rebuild also scanned the whole open bar; it now folds M1 bars from the entry minute. |
+| 4 | `InpArmOnPeak` | **on** | The chandelier arms once the **peak** has reached the threshold. Live checks the bid once a minute, so a spike to +2 ATR that comes and goes inside the minute is recorded as the peak but never arms the M15/M30 spike lock. |
+| 5 | `InpRealignAfterStop` | off | After a broker-side stop (BE, trail, disaster), that tier must first fall out of alignment in that direction before it can re-enter. Live re-enters on the next minute if the chain is still aligned, often near the top of the move it was just stopped out of. ExitLevel and supersede closes do not set it. |
+| 6 | `InpExitMaxSpread` | 0 (off) | The kumo-touch exit waits while the spread is above this many points. A short exits on the ask, so a rollover spread spike can close it at the cloud with no real touch. The broker-side stops still run. |
+| 8 | `InpDisasterBreachClose` | **on** | If no disaster SL could be attached and the price is already past where it would sit, the trade is closed at market. Live leaves it with no stop at all. |
+| 9 | `InpSkipOnNoSizing` | **on** | Missing ATR or tick data skips that tier and the scan walks down. Live opens `InpFixedLots` (0.10). That is harmless on GOLDm#, where 0.10 is the minimum lot, but not on other symbols. |
+| 10 | `InpMaxMinLotRiskPct` | 0 (off) | If the minimum lot would have to be rounded **up** past this % of equity, the tier is skipped and the scan walks down (the §30 honesty gate, without its veto bug). |
+| 11 | `InpUseFillPrice` | **on** | BE and the trail measure from `trade.ResultPrice()`, the fill, not the requested price. |
+| 12 | `InpDailyLossPct` | 0 (off) | No new entries for the rest of the server day once equity is this % below the day's start. The start equity lives in a terminal global variable (`ICHI_20260893_DAY_<day>`), so a restart keeps it. Exits and protection keep running. |
+| 14 | `InpQuietRetries` | **on** | An exit that fails and retries sends one push notification, not one a minute. The journal still logs every attempt. |
+
+Not switched:
+- **#7.** Supersede closes a same-direction trade that is already protected. §55 showed keeping lower tiers alongside is worse.
+- **#13.** Weekend and swap handling.
+- **#15.** The live header's wording. This file's banner is correct, and the live header was left as it is.
+
+The risk bands and the disaster stop are the live inputs. §66 and §69 cover them, and they can be changed in the properties.
+
+The entry scan sizes inside tier selection now, so a tier that #9 or #10
+refuses is skipped, not a veto on the symbol. With #9/#10 off, the sizing is
+the same number live computes after the scan.
+
+### Simulator flags
+
+`vpssim.py` gained the switches that can be simulated on M1 bars:
+- `--one-pos` (#1)
+- `--cloud-size` (#2)
+- `--peak-entry` (#3)
+- `--arm-peak` (#4)
+- `--realign` (#5)
+- `--minlot-gate PCT` (#10)
+- `--daily-loss PCT` (#12)
+- `--fixes`, which turns on the EA's default-on set that the sim models: #1, #3 and #4
+
+#6, #8, #9, #11 and #14 have no meaning with a constant spread and perfect
+data, so they are not ported. With no flag the sim is unchanged.
+This was checked on a synthetic series: the trade list and equity curve
+matched the previous `vpssim.py` exactly at $100 and $10,000.
+On the same series, `--one-pos` left zero overlapping positions (live: 325).
+The sim also now labels a broker stop as "disaster stop" only when the stop
+never moved. Before, a trail that armed before BE was mislabelled. Profit
+figures are unchanged.
+
+Suggested runs (HistData via `download.py` first):
+
+```bash
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100                 # baseline
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --one-pos       # each fix alone ...
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --fixes         # the EA defaults
+python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --fixes --risk-scale 0.5 --disaster 2
+```
+
+### Status
+
+**Not compiled and not backtested.** This session had no MetaEditor, and its
+network could not reach HistData, so the copy was hand-checked only (the
+braces, parentheses and brackets balance, and the `diff` against the live
+file holds only the switches). Compile it in MetaEditor first. Then run the
+simulator flags one at a time against the baseline, and in MT5 run each
+default-on switch alone against the live build on GOLDm# real ticks for 2024,
+2025 and 2026 (as in §50).

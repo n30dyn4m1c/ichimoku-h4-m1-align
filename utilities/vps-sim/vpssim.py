@@ -43,6 +43,8 @@ Usage:
     python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --risk-scale 0.5
     python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --disaster 2      # §66 quarter stop
     python3 utilities/vps-sim/vpssim.py run --fixed-lot --from 2023-04-15     # edge without compounding
+    python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --fixes           # §73: the EA's default-on fixes
+    python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --one-pos         # §73: one review fix alone
 
 Porting another EA: keep load(), ichi(), build() and the run/roll harness,
 and write that EA's entry and exit rules in place of sim(). Check the port
@@ -128,8 +130,17 @@ def build(df):
 
 # ------------------------------------------------------------------ the EA
 @njit(cache=True)
-def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, risk, lev,
-        disaster_mult, m5tier, contract, lotmin, lotstep):
+def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread, risk, lev,
+        disaster_mult, m5tier, contract, lotmin, lotstep,
+        one_pos, cloud_size, peak_entry, arm_peak, realign, minlot_gate, daily_loss):
+    # Review-fix switches (notes §73), all False / 0 = the live build:
+    #   one_pos     #1  a running tier blocks itself and every smaller tier
+    #   cloud_size  #2  size on max(2 ATR, distance to the tier cloud), capped at the disaster stop
+    #   peak_entry  #3  chandelier peak from M1 bars since entry, not the forming tier bar
+    #   arm_peak    #4  the chandelier arms on the peak reached, not the bid at the minute open
+    #   realign     #5  after a broker-side stop the tier must lose alignment before re-entering
+    #   minlot_gate #10 skip (walk down) a tier whose minimum lot would risk more than this % (0 = off)
+    #   daily_loss  #12 no entries for the rest of the day once equity is this % below its start (0 = off)
     NL = 5
     st = np.zeros(NL, np.int64); lots = np.zeros(NL); ent = np.zeros(NL); sl = np.zeros(NL)
     pkH = np.zeros(NL); pkL = np.zeros(NL); be = np.zeros(NL, np.bool_); topen = np.zeros(NL, np.int64)
@@ -139,6 +150,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
     runH = np.zeros((6,)); runL = np.zeros((6,)); lastbid = -np.ones(6, np.int64)
     ruined = -1
     pt = 0.01
+    needR = np.zeros(NL, np.int64); dsl = np.zeros(NL)
+    day = -1; day_eq = start_eq
     for k in range(k0, k1):
         bid = o[k]; ask = o[k] + spread
         for j in range(6):                              # forming-bar extremes up to k-1
@@ -162,7 +175,11 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
             a = ATR[tf, k]
             if not (a > 0):
                 continue
-            if d == 1:
+            if peak_entry:
+                if k - 1 >= topen[lv]:                  # bar k-1 lies wholly after the entry
+                    pkH[lv] = max(pkH[lv], h[k - 1]); pkL[lv] = min(pkL[lv], l[k - 1])
+                pkH[lv] = max(pkH[lv], bid); pkL[lv] = min(pkL[lv], bid)
+            elif d == 1:
                 pkH[lv] = max(pkH[lv], runH[tf])
             else:
                 pkL[lv] = min(pkL[lv], runL[tf])
@@ -173,7 +190,11 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
                     if (d == 1 and nsl > sl[lv] + pt and nsl < bid) or (d == -1 and nsl < sl[lv] - pt and nsl > ask):
                         sl[lv] = nsl; be[lv] = True
             armA = 0.5 if lv >= 3 else 2.0
-            if (d == 1 and bid >= ent[lv] + armA * a) or (d == -1 and ask <= ent[lv] - armA * a):
+            if arm_peak:
+                armed = (d == 1 and pkH[lv] >= ent[lv] + armA * a) or (d == -1 and pkL[lv] <= ent[lv] - armA * a)
+            else:
+                armed = (d == 1 and bid >= ent[lv] + armA * a) or (d == -1 and ask <= ent[lv] - armA * a)
+            if armed:
                 nsl = pkH[lv] - a if d == 1 else pkL[lv] + a
                 if d == 1 and nsl > sl[lv] + pt and nsl < bid and nsl - sl[lv] >= 0.3 * a:
                     sl[lv] = nsl
@@ -199,20 +220,30 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
             eqc[k - k0:] = bal
             break
         # ---- entries: largest aligned tier, H4 down
-        top = -1; tdir = 0
+        top = -1; tdir = 0; tlots = 0.0
+        if DAY[k] != day:
+            day = DAY[k]; day_eq = eq
+        blocked = daily_loss > 0 and eq <= day_eq * (1.0 - daily_loss / 100.0)
         for lv in range(NL - 1, -1, -1):
+            if blocked:
+                break
             if st[lv] != 0:
+                if one_pos:
+                    break
                 continue
             if lv == 0 and not m5tier:
                 continue
             tf = lv + 1
             d = np.int64(A[0, k])
-            if d == 0:
-                continue
-            okc = True
-            for j in range(1, tf + 1):
-                if A[j, k] != d:
-                    okc = False; break
+            okc = d != 0
+            if okc:
+                for j in range(1, tf + 1):
+                    if A[j, k] != d:
+                        okc = False; break
+            if needR[lv] != 0:
+                if okc and d == needR[lv]:
+                    continue
+                needR[lv] = 0
             if not okc:
                 continue
             if FAR[tf, k] != d:
@@ -230,7 +261,22 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
                     continue
             if lv == 4 and A[6, k] != d:
                 continue
-            top = lv; tdir = d
+            a = ATR[tf, k]
+            if not (a > 0 and eq > 0):
+                top = lv; tdir = d; tlots = -1.0      # as before: picked, supersedes, opens nothing
+                break
+            dist = a * 2.0
+            if cloud_size:
+                cdist = (ask - CT[tf, k]) if d == 1 else (CB[tf, k] - bid)
+                if cdist > dist:
+                    dist = cdist
+                dist = max(a * 2.0, min(dist, a * disaster_mult))
+            rt = 2 if eq >= 13000 else (1 if eq >= 7000 else 0)
+            lt = eq * risk[rt, lv] / 100.0 / (dist * contract)
+            lt = np.floor(lt / lotstep + 1e-9) * lotstep
+            if minlot_gate > 0 and risk[rt, lv] > 0 and lt < lotmin and lotmin * dist * contract / eq * 100.0 > minlot_gate:
+                continue
+            top = lv; tdir = d; tlots = max(lotmin, lt)
             break
         if top >= 0:
             for lv in range(top):
@@ -248,11 +294,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
                     used += lots[lv] * contract * bid / lev
             eq = bal + fl
             a = ATR[top + 1, k]
-            if a > 0 and eq > 0:
-                rt = 2 if eq >= 13000 else (1 if eq >= 7000 else 0)
-                lt = eq * risk[rt, top] / 100.0 / (a * 2.0 * contract)
-                lt = np.floor(lt / lotstep + 1e-9) * lotstep
-                lt = max(lotmin, lt)
+            if a > 0 and eq > 0 and tlots > 0:
+                lt = tlots
                 price = ask if tdir == 1 else bid
                 m1lot = contract * price / lev
                 maxl = np.floor(((eq - used) * 0.8 / m1lot) / lotstep + 1e-9) * lotstep
@@ -260,7 +303,7 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
                 if lt > maxl:
                     lt = maxl
                 st[top] = tdir; lots[top] = lt; ent[top] = price; topen[top] = k
-                sl[top] = price - tdir * disaster_mult * a
+                sl[top] = price - tdir * disaster_mult * a; dsl[top] = sl[top]
                 pkH[top] = price; pkL[top] = price; be[top] = False
                 trades.append((top, tdir, k, -1, lt, 0.0, 9, eq))
         # ---- broker stops inside bar k
@@ -284,8 +327,10 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
                     continue
             pnl = (px - ent[lv]) * d * lots[lv] * contract
             bal += pnl
-            trades.append((lv, d, topen[lv], k, lots[lv], pnl, 1 if be[lv] else 4, 0.0))
+            trades.append((lv, d, topen[lv], k, lots[lv], pnl, 1 if (be[lv] or sl[lv] != dsl[lv]) else 4, 0.0))
             st[lv] = 0
+            if realign:
+                needR[lv] = d
         fl = 0.0
         for lv in range(NL):
             if st[lv] != 0:
@@ -298,21 +343,26 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, k0, k1, start_eq, spread, ris
 # ------------------------------------------------------------------ harness
 class Sim:
     def __init__(self, pair="XAUUSD", spread=0.30, risk=RISK_LIVE, lev=1000.0, disaster=8.0, m5=False,
-                 contract=1.0, lotmin=0.1, lotstep=0.01):
+                 contract=1.0, lotmin=0.1, lotstep=0.01, one_pos=False, cloud_size=False, peak_entry=False,
+                 arm_peak=False, realign=False, minlot_gate=0.0, daily_loss=0.0):
         self.df = load(pair)
         self.P = build(self.df)
+        self.day = (self.df.index.values.astype("datetime64[D]").astype(np.int64))
         self.o, self.h, self.l, self.c = (self.df[x].values for x in "ohlc")
         self.cfg = dict(spread=spread, risk=np.asarray(risk, float), lev=lev, disaster=disaster, m5=m5,
-                        contract=contract, lotmin=lotmin, lotstep=lotstep)
+                        contract=contract, lotmin=lotmin, lotstep=lotstep, one_pos=one_pos, cloud_size=cloud_size,
+                        peak_entry=peak_entry, arm_peak=arm_peak, realign=realign, minlot_gate=minlot_gate,
+                        daily_loss=daily_loss)
 
     def run(self, start, end, start_eq=100.0, **over):
         cf = {**self.cfg, **over}
         t = self.df.index
         k0 = max(1, int(np.searchsorted(t, pd.Timestamp(start))))
         k1 = int(np.searchsorted(t, pd.Timestamp(end)))
-        tr, eqc, ruined, bal = sim(self.o, self.h, self.l, self.c, *self.P, k0, k1, float(start_eq), cf["spread"],
-                                   cf["risk"], cf["lev"], cf["disaster"], cf["m5"], cf["contract"], cf["lotmin"],
-                                   cf["lotstep"])
+        tr, eqc, ruined, bal = sim(self.o, self.h, self.l, self.c, *self.P, self.day, k0, k1, float(start_eq),
+                                   cf["spread"], cf["risk"], cf["lev"], cf["disaster"], cf["m5"], cf["contract"],
+                                   cf["lotmin"], cf["lotstep"], cf["one_pos"], cf["cloud_size"], cf["peak_entry"],
+                                   cf["arm_peak"], cf["realign"], float(cf["minlot_gate"]), float(cf["daily_loss"]))
         ent_eq = {(r[0], r[2]): r[7] for r in tr if r[6] == 9}
         T = pd.DataFrame([r[:7] for r in tr if r[6] != 9], columns=["lvl", "d", "ko", "kc", "lots", "pnl", "why"])
         T["tier"] = T.lvl.map(lambda v: TIER[v]); T["reason"] = T.why.map(REASON)
@@ -355,10 +405,23 @@ def main():
     ap.add_argument("--leverage", type=float, default=1000.0)
     ap.add_argument("--contract", type=float, default=1.0, help="oz per lot (XM Micro GOLDm# = 1)")
     ap.add_argument("--lot-min", type=float, default=0.1)
+    g = ap.add_argument_group("review fixes (notes §73; all off = the live build)")
+    g.add_argument("--one-pos", action="store_true", help="#1 a running tier blocks itself and every smaller tier")
+    g.add_argument("--cloud-size", action="store_true", help="#2 size on max(2 ATR, distance to the tier cloud)")
+    g.add_argument("--peak-entry", action="store_true", help="#3 chandelier peak from bars since entry only")
+    g.add_argument("--arm-peak", action="store_true", help="#4 chandelier arms on the peak reached")
+    g.add_argument("--realign", action="store_true", help="#5 re-align before re-entering after a broker-side stop")
+    g.add_argument("--minlot-gate", type=float, default=0.0, help="#10 skip a tier whose min lot risks more than this %%")
+    g.add_argument("--daily-loss", type=float, default=0.0, help="#12 no entries for the day after this %% loss")
+    g.add_argument("--fixes", action="store_true", help="the EA's default-on fixes together: #1 #3 #4")
     a = ap.parse_args()
+    if a.fixes:
+        a.one_pos = a.peak_entry = a.arm_peak = True
+    fx = dict(one_pos=a.one_pos, cloud_size=a.cloud_size, peak_entry=a.peak_entry, arm_peak=a.arm_peak,
+              realign=a.realign, minlot_gate=a.minlot_gate, daily_loss=a.daily_loss)
 
     risk = np.zeros_like(RISK_LIVE) if a.fixed_lot else RISK_LIVE * a.risk_scale
-    s = Sim(a.pair, a.spread, risk, a.leverage, a.disaster, a.m5, a.contract, a.lot_min)
+    s = Sim(a.pair, a.spread, risk, a.leverage, a.disaster, a.m5, a.contract, a.lot_min, **fx)
     last = s.df.index[-1]
     end = pd.Timestamp(a.end) if a.end else last
 
