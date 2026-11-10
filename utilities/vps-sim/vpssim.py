@@ -45,6 +45,8 @@ Usage:
     python3 utilities/vps-sim/vpssim.py run --fixed-lot --from 2023-04-15     # edge without compounding
     python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --fixes           # §73: the EA's default-on fixes
     python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --one-pos         # §73: one review fix alone
+    python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --recommended --risk-scale 0.5   # §74
+    python3 utilities/vps-sim/validate.py matrix                              # §74: the whole validation
 
 Porting another EA: keep load(), ichi(), build() and the run/roll harness,
 and write that EA's entry and exit rules in place of sim(). Check the port
@@ -63,7 +65,14 @@ TIER = ["M5", "M15", "M30", "H1", "H4"]
 RISK_LIVE = np.array([[1.0, 1.0, 5.0, 10.0, 20.0],     # band 1 (< $7,000):  M5 M15 M30 H1 H4
                       [0.5, 0.5, 2.5, 5.0, 10.0],      # band 2 (< $13,000)
                       [0.1, 0.1, 0.2, 1.0, 2.0]])      # band 3
-REASON = {0: "kumo touch", 1: "BE/trail stop", 2: "superseded", 3: "stop-out", 4: "disaster stop"}
+# Notes §74. DEFECTS: the defect fixes the simulator can see (#1 one position, #3 peak since entry).
+# RECOMMENDED: those plus #2 stop-aware sizing, the open-risk cap, the drawdown risk cut, Friday flat
+# and the daily/weekly loss limits (the EA inputs are listed in PROMOTION.md).
+DEFECTS = dict(one_pos=True, peak_entry=True)
+RECOMMENDED = dict(DEFECTS, cloud_size=True, max_open_risk=30.0, dd_at=25.0, dd_factor=0.5, fri_flat=22,
+                   daily_loss=5.0, weekly_loss=10.0)
+REASON = {0: "kumo touch", 1: "BE/trail stop", 2: "superseded", 3: "stop-out", 4: "disaster stop",
+          5: "weekend flat"}
 
 
 # ------------------------------------------------------------------ data and indicators
@@ -130,9 +139,11 @@ def build(df):
 
 # ------------------------------------------------------------------ the EA
 @njit(cache=True)
-def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread, risk, lev,
+def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0, k1, start_eq, risk, lev,
         disaster_mult, m5tier, contract, lotmin, lotstep,
-        one_pos, cloud_size, peak_entry, arm_peak, realign, minlot_gate, daily_loss):
+        one_pos, cloud_size, peak_entry, arm_peak, realign, minlot_gate, daily_loss,
+        weekly_loss, max_open_risk, fri_stop, fri_flat, q_from, q_to, streak_n, pause_min,
+        dd_at, dd_factor, exit_max_spread, max_spread):
     # Review-fix switches (notes §73), all False / 0 = the live build:
     #   one_pos     #1  a running tier blocks itself and every smaller tier
     #   cloud_size  #2  size on max(2 ATR, distance to the tier cloud), capped at the disaster stop
@@ -141,6 +152,17 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
     #   realign     #5  after a broker-side stop the tier must lose alignment before re-entering
     #   minlot_gate #10 skip (walk down) a tier whose minimum lot would risk more than this % (0 = off)
     #   daily_loss  #12 no entries for the rest of the day once equity is this % below its start (0 = off)
+    # Revamp safety switches (notes §74), all 0 / -1 = the live build:
+    #   weekly_loss      no entries for the rest of the week (Monday start) after this % loss
+    #   max_open_risk    cap the lots so the loss at every hard stop on the symbol, the new trade's
+    #                    disaster stop included, stays within this % of equity; skip a tier that cannot fit
+    #   fri_stop         no new entries on Friday from this server hour
+    #   fri_flat         close everything on Friday at this server hour, and no entries after it
+    #   q_from, q_to     quiet window in minutes of the server day (may wrap midnight): no entries inside
+    #   streak_n, pause_min   every loss that makes the run of losing trades >= streak_n pauses entries
+    #   dd_at, dd_factor      risk x dd_factor while equity is dd_at % or more below its high-water mark
+    #   exit_max_spread  the kumo-touch exit waits while the spread is above this (§73 #6)
+    #   max_spread       the live entry gate InpMaxSpreadPoints (0.60); inert at the default 0.30 spread
     NL = 5
     st = np.zeros(NL, np.int64); lots = np.zeros(NL); ent = np.zeros(NL); sl = np.zeros(NL)
     pkH = np.zeros(NL); pkL = np.zeros(NL); be = np.zeros(NL, np.bool_); topen = np.zeros(NL, np.int64)
@@ -152,7 +174,9 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
     pt = 0.01
     needR = np.zeros(NL, np.int64); dsl = np.zeros(NL)
     day = -1; day_eq = start_eq
+    week = -1; week_eq = start_eq; hwm = start_eq; streak = 0; pause_until = -1
     for k in range(k0, k1):
+        spread = SPR[k]
         bid = o[k]; ask = o[k] + spread
         for j in range(6):                              # forming-bar extremes up to k-1
             if BID[j, k] != lastbid[j]:
@@ -165,12 +189,32 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
                 continue
             tf = lv + 1
             d = st[lv]
-            if (d == 1 and bid <= CT[tf, k]) or (d == -1 and ask >= CB[tf, k]):
+            if fri_flat >= 0 and DOW[k] == 4 and TOD[k] >= fri_flat * 60:
+                px = bid if d == 1 else ask
+                pnl = (px - ent[lv]) * d * lots[lv] * contract
+                bal += pnl
+                trades.append((lv, d, topen[lv], k, lots[lv], pnl, 5, 0.0))
+                st[lv] = 0
+                if pnl < 0:
+                    streak += 1
+                    if streak_n > 0 and streak >= streak_n:
+                        pause_until = TMIN[k] + pause_min
+                else:
+                    streak = 0
+                continue
+            touch = (d == 1 and bid <= CT[tf, k]) or (d == -1 and ask >= CB[tf, k])
+            if touch and not (exit_max_spread > 0 and spread > exit_max_spread):
                 px = bid if d == 1 else ask
                 pnl = (px - ent[lv]) * d * lots[lv] * contract
                 bal += pnl
                 trades.append((lv, d, topen[lv], k, lots[lv], pnl, 0, 0.0))
                 st[lv] = 0
+                if pnl < 0:
+                    streak += 1
+                    if streak_n > 0 and streak >= streak_n:
+                        pause_until = TMIN[k] + pause_min
+                else:
+                    streak = 0
                 continue
             a = ATR[tf, k]
             if not (a > 0):
@@ -223,7 +267,27 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
         top = -1; tdir = 0; tlots = 0.0
         if DAY[k] != day:
             day = DAY[k]; day_eq = eq
+        wk = (DAY[k] + 3) // 7                         # weeks starting on Monday
+        if wk != week:
+            week = wk; week_eq = eq
+        if eq > hwm:
+            hwm = eq
         blocked = daily_loss > 0 and eq <= day_eq * (1.0 - daily_loss / 100.0)
+        if weekly_loss > 0 and eq <= week_eq * (1.0 - weekly_loss / 100.0):
+            blocked = True
+        if DOW[k] == 4 and ((fri_stop >= 0 and TOD[k] >= fri_stop * 60) or (fri_flat >= 0 and TOD[k] >= fri_flat * 60)):
+            blocked = True
+        if q_from != q_to:
+            if q_from < q_to:
+                if TOD[k] >= q_from and TOD[k] < q_to:
+                    blocked = True
+            elif TOD[k] >= q_from or TOD[k] < q_to:
+                blocked = True
+        if streak_n > 0 and TMIN[k] < pause_until:
+            blocked = True
+        if max_spread > 0 and spread > max_spread:
+            blocked = True
+        rscale = dd_factor if (dd_at > 0 and eq <= hwm * (1.0 - dd_at / 100.0)) else 1.0
         for lv in range(NL - 1, -1, -1):
             if blocked:
                 break
@@ -272,11 +336,24 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
                     dist = cdist
                 dist = max(a * 2.0, min(dist, a * disaster_mult))
             rt = 2 if eq >= 13000 else (1 if eq >= 7000 else 0)
-            lt = eq * risk[rt, lv] / 100.0 / (dist * contract)
+            lt = eq * risk[rt, lv] * rscale / 100.0 / (dist * contract)
             lt = np.floor(lt / lotstep + 1e-9) * lotstep
             if minlot_gate > 0 and risk[rt, lv] > 0 and lt < lotmin and lotmin * dist * contract / eq * 100.0 > minlot_gate:
                 continue
-            top = lv; tdir = d; tlots = max(lotmin, lt)
+            lt = max(lotmin, lt)
+            if max_open_risk > 0:
+                held = 0.0                              # loss at the stops of the tiers that stay open
+                for j in range(lv + 1, NL):
+                    if st[j] != 0:
+                        pxj = bid if st[j] == 1 else ask
+                        held += max(0.0, (pxj - sl[j]) * st[j]) * lots[j] * contract
+                room = eq * max_open_risk / 100.0 - held
+                maxl = np.floor(room / (a * disaster_mult * contract) / lotstep + 1e-9) * lotstep
+                if maxl < lotmin:
+                    continue
+                if lt > maxl:
+                    lt = maxl
+            top = lv; tdir = d; tlots = lt
             break
         if top >= 0:
             for lv in range(top):
@@ -286,6 +363,12 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
                     bal += pnl
                     trades.append((lv, st[lv], topen[lv], k, lots[lv], pnl, 2, 0.0))
                     st[lv] = 0
+                    if pnl < 0:
+                        streak += 1
+                        if streak_n > 0 and streak >= streak_n:
+                            pause_until = TMIN[k] + pause_min
+                    else:
+                        streak = 0
             fl = 0.0; used = 0.0
             for lv in range(NL):
                 if st[lv] != 0:
@@ -329,6 +412,12 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
             bal += pnl
             trades.append((lv, d, topen[lv], k, lots[lv], pnl, 1 if (be[lv] or sl[lv] != dsl[lv]) else 4, 0.0))
             st[lv] = 0
+            if pnl < 0:
+                streak += 1
+                if streak_n > 0 and streak >= streak_n:
+                    pause_until = TMIN[k] + pause_min
+            else:
+                streak = 0
             if realign:
                 needR[lv] = d
         fl = 0.0
@@ -342,27 +431,50 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, k0, k1, start_eq, spread
 
 # ------------------------------------------------------------------ harness
 class Sim:
+    # Every switch and its "off" value. hhmm() turns 2330 into minutes of the day.
+    OFF = dict(one_pos=False, cloud_size=False, peak_entry=False, arm_peak=False, realign=False, minlot_gate=0.0,
+               daily_loss=0.0, weekly_loss=0.0, max_open_risk=0.0, fri_stop=-1, fri_flat=-1, q_from=0, q_to=0,
+               streak_n=0, pause_min=0, dd_at=0.0, dd_factor=1.0, exit_max_spread=0.0, max_spread=0.60,
+               roll_spread=0.0)
+
     def __init__(self, pair="XAUUSD", spread=0.30, risk=RISK_LIVE, lev=1000.0, disaster=8.0, m5=False,
-                 contract=1.0, lotmin=0.1, lotstep=0.01, one_pos=False, cloud_size=False, peak_entry=False,
-                 arm_peak=False, realign=False, minlot_gate=0.0, daily_loss=0.0):
+                 contract=1.0, lotmin=0.1, lotstep=0.01, **switches):
         self.df = load(pair)
         self.P = build(self.df)
-        self.day = (self.df.index.values.astype("datetime64[D]").astype(np.int64))
+        ix = self.df.index
+        self.day = (ix.values.astype("datetime64[D]").astype(np.int64))
+        self.tod = (ix.hour * 60 + ix.minute).values.astype(np.int64)
+        self.dow = ix.dayofweek.values.astype(np.int64)
+        self.tmin = ix.values.astype("datetime64[m]").astype(np.int64)
         self.o, self.h, self.l, self.c = (self.df[x].values for x in "ohlc")
+        bad = set(switches) - set(self.OFF)
+        if bad:
+            raise TypeError(f"unknown switch: {sorted(bad)}")
         self.cfg = dict(spread=spread, risk=np.asarray(risk, float), lev=lev, disaster=disaster, m5=m5,
-                        contract=contract, lotmin=lotmin, lotstep=lotstep, one_pos=one_pos, cloud_size=cloud_size,
-                        peak_entry=peak_entry, arm_peak=arm_peak, realign=realign, minlot_gate=minlot_gate,
-                        daily_loss=daily_loss)
+                        contract=contract, lotmin=lotmin, lotstep=lotstep, **{**self.OFF, **switches})
+
+    def spread_series(self, spread, roll_spread):
+        """Constant spread, or (--roll-spread) a stress model: that spread from 23:55 to 01:15 server
+        time, the daily break and the minutes either side of it. Made up, not XM's history."""
+        spr = np.full(len(self.o), float(spread))
+        if roll_spread > 0:
+            spr[(self.tod >= 23 * 60 + 55) | (self.tod < 75)] = roll_spread
+        return spr
 
     def run(self, start, end, start_eq=100.0, **over):
         cf = {**self.cfg, **over}
         t = self.df.index
         k0 = max(1, int(np.searchsorted(t, pd.Timestamp(start))))
         k1 = int(np.searchsorted(t, pd.Timestamp(end)))
-        tr, eqc, ruined, bal = sim(self.o, self.h, self.l, self.c, *self.P, self.day, k0, k1, float(start_eq),
-                                   cf["spread"], cf["risk"], cf["lev"], cf["disaster"], cf["m5"], cf["contract"],
+        tr, eqc, ruined, bal = sim(self.o, self.h, self.l, self.c, *self.P, self.day, self.tod, self.dow, self.tmin,
+                                   self.spread_series(cf["spread"], cf["roll_spread"]), k0, k1, float(start_eq),
+                                   np.asarray(cf["risk"], float), cf["lev"], cf["disaster"], cf["m5"], cf["contract"],
                                    cf["lotmin"], cf["lotstep"], cf["one_pos"], cf["cloud_size"], cf["peak_entry"],
-                                   cf["arm_peak"], cf["realign"], float(cf["minlot_gate"]), float(cf["daily_loss"]))
+                                   cf["arm_peak"], cf["realign"], float(cf["minlot_gate"]), float(cf["daily_loss"]),
+                                   float(cf["weekly_loss"]), float(cf["max_open_risk"]), int(cf["fri_stop"]),
+                                   int(cf["fri_flat"]), int(cf["q_from"]), int(cf["q_to"]), int(cf["streak_n"]),
+                                   int(cf["pause_min"]), float(cf["dd_at"]), float(cf["dd_factor"]),
+                                   float(cf["exit_max_spread"]), float(cf["max_spread"]))
         ent_eq = {(r[0], r[2]): r[7] for r in tr if r[6] == 9}
         T = pd.DataFrame([r[:7] for r in tr if r[6] != 9], columns=["lvl", "d", "ko", "kc", "lots", "pnl", "why"])
         T["tier"] = T.lvl.map(lambda v: TIER[v]); T["reason"] = T.why.map(REASON)
@@ -414,11 +526,33 @@ def main():
     g.add_argument("--minlot-gate", type=float, default=0.0, help="#10 skip a tier whose min lot risks more than this %%")
     g.add_argument("--daily-loss", type=float, default=0.0, help="#12 no entries for the day after this %% loss")
     g.add_argument("--fixes", action="store_true", help="the EA's default-on fixes together: #1 #3 #4")
+    g = ap.add_argument_group("revamp safety switches (notes §74; all off = the live build)")
+    g.add_argument("--weekly-loss", type=float, default=0.0, help="no entries for the week after this %% loss")
+    g.add_argument("--max-open-risk", type=float, default=0.0,
+                   help="cap lots so the loss at every hard stop on the symbol stays within this %% of equity")
+    g.add_argument("--fri-stop", type=int, default=-1, help="no new entries on Friday from this server hour")
+    g.add_argument("--fri-flat", type=int, default=-1, help="close everything on Friday at this server hour")
+    g.add_argument("--quiet", default="", help="no entries inside this server-time window, e.g. 2330-0130")
+    g.add_argument("--loss-streak", type=int, default=0, help="pause entries once this many trades in a row lost")
+    g.add_argument("--pause-hours", type=float, default=24.0, help="length of the loss-streak pause")
+    g.add_argument("--dd-at", type=float, default=0.0, help="cut risk while equity is this %% below its high")
+    g.add_argument("--dd-factor", type=float, default=0.5, help="risk multiplier while in that drawdown")
+    g.add_argument("--exit-max-spread", type=float, default=0.0, help="§73 #6: kumo exit waits above this spread")
+    g.add_argument("--roll-spread", type=float, default=0.0,
+                   help="stress model: this spread from 23:55 to 01:15 server time")
+    g.add_argument("--recommended", action="store_true", help="the §74 recommended set (see RECOMMENDED)")
     a = ap.parse_args()
     if a.fixes:
         a.one_pos = a.peak_entry = a.arm_peak = True
+    hhmm = lambda v: int(v) // 100 * 60 + int(v) % 100
+    qf, qt = (hhmm(x) for x in a.quiet.split("-")) if a.quiet else (0, 0)
     fx = dict(one_pos=a.one_pos, cloud_size=a.cloud_size, peak_entry=a.peak_entry, arm_peak=a.arm_peak,
-              realign=a.realign, minlot_gate=a.minlot_gate, daily_loss=a.daily_loss)
+              realign=a.realign, minlot_gate=a.minlot_gate, daily_loss=a.daily_loss, weekly_loss=a.weekly_loss,
+              max_open_risk=a.max_open_risk, fri_stop=a.fri_stop, fri_flat=a.fri_flat, q_from=qf, q_to=qt,
+              streak_n=a.loss_streak, pause_min=int(a.pause_hours * 60) if a.loss_streak else 0, dd_at=a.dd_at,
+              dd_factor=a.dd_factor, exit_max_spread=a.exit_max_spread, roll_spread=a.roll_spread)
+    if a.recommended:
+        fx.update(RECOMMENDED)
 
     risk = np.zeros_like(RISK_LIVE) if a.fixed_lot else RISK_LIVE * a.risk_scale
     s = Sim(a.pair, a.spread, risk, a.leverage, a.disaster, a.m5, a.contract, a.lot_min, **fx)

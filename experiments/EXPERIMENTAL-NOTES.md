@@ -8279,3 +8279,287 @@ file holds only the switches). Compile it in MetaEditor first. Then run the
 simulator flags one at a time against the baseline, and in MT5 run each
 default-on switch alone against the live build on GOLDm# real ticks for 2024,
 2025 and 2026 (as in §50).
+
+## 74. VPS revamp — audit, safety switches and a validated input set
+
+**File:** `experimental-vps-revamp-ea.mq5`
+**Magic number:** `20260894`
+**Simulator:** `utilities/vps-sim/vpssim.py` (new switches) and `utilities/vps-sim/validate.py` (the validation below)
+**Raw output:** `utilities/vps-sim/results/2026-11-10-revamp/`
+**Hand-over:** `PROMOTION.md`
+
+User request (2026-11-10): revamp the live VPS build for robustness and capital
+safety, survival first. Audit it, build the revamp on the §73 fork with every
+change behind a switch, validate without curve-fitting, and prepare a promotion
+proposal. The live file `ichimoku-h4-m1-vps-ea.mq5` was not touched.
+
+### Status
+
+- **Not compiled in MetaEditor and not run in the MT5 tester.** This session
+  had no MetaEditor.
+- The file was parsed and type-checked with g++ against a stub of the MQL5
+  API (`utilities/mq5-check/mq5check.py`). The live VPS file, the §73 fork
+  and the revamp all pass. This catches typos, undeclared names, wrong
+  argument counts and assignments to inputs. It is not a compile.
+- Every figure below is a simulation on HistData XAUUSD M1 bars
+  (2023-01-02 to 2026-11-06), constant $0.30 spread, no swaps, no slippage.
+- The simulator still reproduces its MT5 calibration (§69): ruined
+  2024-08-02; 2025 +$14,658 against MT5's +$14,646.
+
+### Audit of the live build
+
+Line numbers are those of `ichimoku-h4-m1-vps-ea.mq5` at `de8eff1`.
+"Defect" means the code does not do what the header or its own comments say.
+"Strategy" means a change that alters results and needs evidence.
+
+| # | Finding | Class | Evidence | In the revamp |
+|---|---|---|---|---|
+| 1 | Tiers stack. The header (L74–78) says at most one position per symbol. The scan `continue`s past a running tier (L1230), so each following minute opens the next smaller tier. | Defect | 2,970 of 4,091 simulated entries opened under a running bigger tier. 2024-08-02: H4, H1, M30 and M15 longs opened at 17:04, 17:05, 17:06 and 17:07 and lost the account. | `InpOnePosition`, **on** |
+| 2 | The risk % is measured against 2 × ATR (L807), but the exits are the cloud touch and the 8 × ATR stop. | Strategy (risk model) | Losing H4 trades cost a median 34% of equity and up to 63% against a nominal 20% (table below). | `InpSizeOnCloudDist` and `InpMaxOpenRiskPct`, off, **recommended** |
+| 3 | The chandelier peak is the forming tier bar (L987–999), which holds prices from before the entry. The comment at L239 says "since entry". | Defect | Neutral in simulation. | `InpPeakSinceEntry`, **on** |
+| 3b | The R4 restart rebuild (L421–424) asks for bars from the entry time on. By the documented `CopyRates` date-range rule that leaves out the bar the entry sits in, while the running EA counts that whole bar. The peak before and after a restart differ. | Defect | By reading; not run. §73 described this the other way round. | Fixed by #3: M1 bars from the entry minute |
+| 4 | The trail arms on the bid at the minute, not on the peak. | Strategy (§73 had it as a defect, on) | Worse: ruin 12% → 34% on top of #1 from $100; no gain on the base. | `InpArmOnPeak`, **off, rejected** |
+| 5 | A stopped tier re-enters on the next minute. | Strategy | Neutral in every test. | `InpRealignAfterStop`, off, rejected |
+| 6 | A short exits on the ask, so a rollover spread spike can touch the cloud. | Strategy | Cannot be measured on a constant spread. A made-up spike of $1.50 around the daily break showed almost no benefit from the guard (`validate.py stress`). | `InpExitMaxSpread`, off |
+| 7 | Supersede closes a trade that is already protected. | Strategy | §55: keeping the smaller tiers is worse. | Not switched |
+| 8 | If the disaster stop cannot be attached and price is already past it, the trade is left with no stop (L1017–1032). | Defect | By reading. | `InpDisasterBreachClose`, **on** |
+| 9 | Missing ATR or tick data opens `InpFixedLots` (L806–825). So does a risk % of 0 (L803), so a tier cannot be switched off by its risk input. | Defect | By reading. | `InpSkipOnNoSizing`, **on**; a tier with risk 0 is now skipped |
+| 10 | Lots are rounded **up** to the minimum lot (L823). | Defect (risk above the stated %) | On a small account 0.1 lot at the H4 disaster stop is more than the account. One base run from $100 was ruined this way. | `InpMaxMinLotRiskPct` (off, neutral alone); the open-risk cap skips a tier whose minimum lot does not fit |
+| 11 | Break-even and the trail measure from the requested price, not the fill (L899). | Defect | By reading. | `InpUseFillPrice`, **on** |
+| 12 | No account-level loss limit. | Missing feature | — | Daily and weekly limits |
+| 13 | Positions are held over the weekend behind only the 8 × ATR stop. | Strategy | Friday flat helped in both halves of the data at every hour tried. | `InpFriFlatHour`, off, **recommended** |
+| 14 | A failing exit pushes a notification every minute (L1157; supersede L1262). | Defect | By reading. | `InpQuietRetries`, **on**, now covers supersede |
+| 15 | The live header contradicts itself: "No entry stop loss" (L64) against R3; two "Magic" paragraphs; the M1-strict rule applies to no tier since M5 was dropped. | Documentation | — | Live header untouched; the revamp banner is accurate |
+| 16 | **New.** A short with no stop can never get break-even or the trail: `slNew < slCur - point` (L1047, L1080) is false when `slCur` is 0. | Defect (latent) | By reading. Hidden while the disaster stop is on and attached. | `InpShortStopFix`, **on** |
+| 17 | **New.** Supersede closes the smaller tier before the new order is known to work, and a failed close does not stop the new order (L1256–1277). This is review R1, declined on 2026-08-23. | Defect | By reading. | `InpSupersedeGuard`, **off** (AGENTS.md: not without being asked) |
+| 18 | **New.** Crossing back under $7,000 doubles the risk % while the account is falling (L786–795). | Strategy | — | The drawdown risk cut |
+| 19 | **New.** A tier can exit on a cloud touch and re-enter in the same minute. | Minor | 16 simulated trades of one bar or less, about −1% in total. | Not changed |
+| 20 | **New.** The margin cap lifts to the minimum lot even when the budget is smaller (L845). The order is then refused each minute. | Minor (journal noise) | By reading. | Not changed |
+
+Checked and found sound:
+- **Restart and disconnect.** The stops are broker-side and survive. State is
+  rebuilt from the positions each minute. The cloud-touch exit does not run
+  while the VPS is offline, by design.
+- **Rollover spread on entries.** `InpMaxSpreadPoints` already gates them
+  (L763–767, L1226). A short's broker-side stop triggers on the ask; no EA
+  setting can prevent that.
+
+### The risk model, measured
+
+Result per trade as % of equity at entry, tier-1 bands, 2023-04 to 2026-11, at
+an equity where the minimum lot does not bind:
+
+| Tier | Nominal | Live: median loss | Live: worst | Live: lost more than nominal | Recommended: median loss | Recommended: worst |
+|---|---|---|---|---|---|---|
+| M15 | 1% | −0.9% | −4.0% | 16% of trades | −0.3% | −3.2% |
+| M30 | 5% | −5.9% | −20.0% | 16% | −2.3% | −8.0% |
+| H1 | 10% | −14.0% | −40.0% | 11% | −4.6% | −10.6% |
+| H4 | 20% | −34.2% | −62.6% | 11% | −6.1% | −15.7% |
+
+- The cap on a single loss is 4 × the nominal % (8 ATR over 2 ATR): 80% on H4.
+- With four tiers open together the nominal total is 36% and the cap 144%.
+- Worst simulated day, live logic: −75% (2025-10-21). Recommended: −16%.
+- The defect fixes alone do not fix this. With #1 and #3 on, an H4 loser still
+  costs a median 30% and up to 70%.
+
+### What the revamp is
+
+A single `.mq5`, built on the §73 fork, in eleven sections: inputs, state,
+utilities, signal, bias, sizing, account guards, orders, trade protection,
+state sync, lifecycle.
+
+- **All switches off = the live logic.** 18 functions are byte-identical to
+  the live file, and the live input block is carried verbatim.
+  `CheckAlign` and `DailyAlign` were two copies of one test and now share
+  `AlignOn`. `OnTick` is split into `ProcessExits`, `SelectTier` and
+  `ProcessEntry`.
+- **Group A, defect fixes, on by default:** #1, #3, #8, #9, #11, #14, #16.
+- **Group B, strategy switches, off:** #2, #4, #5, #6, #10, #17 and
+  `InpRiskScale` (multiplies every band).
+- **Group C, capital protection, off:**
+  - `InpMaxOpenRiskPct`: lots are cut so the loss at every hard stop on the
+    symbol, the new trade's 8 × ATR stop included, fits in this % of equity.
+    A tier whose minimum lot does not fit is skipped and the scan walks down.
+  - `InpDailyLossPct`, `InpWeeklyLossPct`: no new entries for the rest of the
+    server day or week (Monday start). The start equity is kept in a terminal
+    global variable, so a restart keeps it.
+  - `InpDDRiskAtPct`, `InpDDRiskFactor`: risk is multiplied while equity is
+    that far below its high-water mark (also a global variable;
+    `InpDDResetHWM` resets it after a deposit or withdrawal).
+  - `InpMaxConsecLosses`, `InpLossPauseHours`: a pause after a run of losing
+    closes, rebuilt from the deal history after a restart.
+  - `InpFriNoEntryHour`, `InpFriFlatHour`: the weekend guard.
+  - `InpQuietFromHHMM`, `InpQuietToHHMM`: a no-entry window for the rollover.
+- **Logging.** A blocked or skipped entry is written to the journal when its
+  reason changes and at most once per tier bar. Only a loss limit or the
+  loss-streak pause engaging sends a push, once.
+- **VPS behaviour kept.** Closed M1 bars only, no `Alert()`, no new indicator
+  handles. The guards read nothing while their switch is off.
+
+One difference with every switch off: if sizing data is missing **and**
+`InpFixedLots` is set to 0 or less, the live build sends a zero-lot order that
+fails; the revamp skips the tier.
+
+### Validation method
+
+`validate.py` runs everything. No parameter was tuned on the year it is
+reported for.
+
+- **`matrix`**: the baseline, each switch alone, then the combined sets, for
+  2023 (from 04-15), 2024, 2025, 2026 (to 11-06) and the whole span, from $100
+  and from $10,000.
+- **`roll`**: a new account every two weeks from 2023-04-15 to 2025-10-25,
+  each run for 12 months: 67 accounts per plan. Single calendar years from
+  $100 are decided by a handful of trades, so this is the test the
+  conclusions rest on. The runs overlap and are not independent.
+- **`onbase`**: at the live sizing one H4 trade can lose 80% of a small
+  account, which drowns every smaller effect. So each safety switch was also
+  added alone to a base of the fixes plus #2.
+- **`walk`**: each tunable value chosen on one half of the data and reported
+  on the other.
+- **`montecarlo`**: 5,000 re-orderings of the per-trade returns, by single
+  trades and by whole weeks (which keeps losses clustered).
+- **No-flag check.** With no switch the new `vpssim.py` gives the same trade
+  list and equity curve as the previous version on real data: every year and
+  the whole span, from $100 and from $10,000.
+
+### Results
+
+**Per year, net $ / max drawdown / worst day** (PF and trade counts are in
+`results/2026-11-10-revamp/matrix.md`):
+
+| Run, from $100 | 2023 | 2024 | 2025 | 2026 | 2023–26 |
+|---|---|---|---|---|---|
+| baseline (live) | ruined | ruined | +14,658 / 96% / −48% | +355 / 97% / −53% | ruined |
+| defect fixes (#1 #3) | −32 / 95% / −37% | ruined | +1,306 / 82% / −70% | +412 / 76% / −32% | ruined |
+| recommended | −13 / 53% / −9% | −22 / 53% / −10% | +342 / 36% / −15% | +67 / 43% / −12% | +405 / 53% / −15% |
+| recommended, bands × 0.5 | +2 / 37% / −7% | −16 / 36% / −10% | +236 / 20% / −9% | +99 / 41% / −12% | +383 / 37% / −10% |
+| recommended without #1, bands × 0.5 | −14 / 67% / −10% | +33 / 39% / −11% | +695 / 29% / −14% | +243 / 43% / −10% | +1,429 / 67% / −14% |
+
+| Run, from $10,000 | 2023 | 2024 | 2025 | 2026 | 2023–26 |
+|---|---|---|---|---|---|
+| baseline (live) | −9,755 / 100% / −71% | +5,198 / 81% / −33% | +20,922 / 43% / −13% | +11,705 / 38% / −11% | ruined |
+| defect fixes (#1 #3) | +328 / 91% / −35% | +1,213 / 61% / −20% | +11,755 / 28% / −9% | +6,208 / 19% / −6% | +17,021 / 91% / −35% |
+| recommended | −263 / 39% / −7% | −2,086 / 43% / −10% | +6,293 / 10% / −5% | +3,783 / 12% / −5% | +6,627 / 42% / −10% |
+| recommended, bands × 0.5 | +318 / 22% / −4% | −351 / 25% / −5% | +4,142 / 6% / −5% | +3,144 / 6% / −3% | +4,768 / 25% / −5% |
+| recommended without #1, bands × 0.5 | −1,272 / 33% / −5% | +4,144 / 19% / −7% | +6,265 / 9% / −3% | +3,640 / 11% / −3% | +7,295 / 33% / −8% |
+
+**67 accounts, 12 months each:**
+
+| Plan | Start | Ruined | Below start | Below half | End 10% / 50% / 90% | Median max DD | 90th pct max DD |
+|---|---|---|---|---|---|---|---|
+| baseline (live) | $100 | 60% | 61% | 61% | $0 / $0 / $20,747 | 100% | 100% |
+| defect fixes (#1 #3) | $100 | 12% | 42% | 33% | $0 / $129 / $3,457 | 82% | 100% |
+| base (fixes + #2) | $100 | 0% | 39% | 13% | $47 / $172 / $671 | 54% | 79% |
+| recommended | $100 | 0% | 12% | 0% | $89 / $218 / $442 | 39% | 55% |
+| **recommended, bands × 0.5** | $100 | **0%** | 12% | 0% | $98 / $156 / $340 | **28%** | **37%** |
+| recommended without #1, bands × 0.5 | $100 | 0% | 3% | 0% | $131 / $296 / $791 | 37% | 41% |
+| baseline (live) | $1,000 | 10% | 52% | 51% | $5 / $415 / $27,451 | 98% | 100% |
+| recommended | $1,000 | 0% | 13% | 0% | $893 / $2,140 / $4,475 | 40% | 56% |
+| **recommended, bands × 0.5** | $1,000 | **0%** | 16% | 0% | $886 / $1,543 / $2,941 | **28%** | **41%** |
+| recommended without #1, bands × 0.5 | $1,000 | 0% | 4% | 0% | $1,149 / $2,666 / $7,681 | 37% | 46% |
+| baseline (live) | $10,000 | 0% | 12% | 12% | $2,528 / $22,450 / $38,746 | 46% | 96% |
+| recommended, bands × 0.5 | $10,000 | 0% | 4% | 0% | $10,275 / $13,301 / $14,156 | 13% | 25% |
+
+**Each switch alone on the base** (rolling accounts, $100 / $1,000;
+`results/2026-11-10-revamp/roll.md` has every row):
+
+| Switch | Below start | Below half | Median max DD | Verdict |
+|---|---|---|---|---|
+| base (fixes + #2) | 39% / 39% | 13% / 12% | 54% / 55% | — |
+| #4 arm on peak | 40% / 40% | 13% / 13% | 56% / 56% | Rejected: no gain, and worse without #2 |
+| #5 re-align after stop | 40% / 40% | 13% / 13% | 54% / 55% | Rejected: no effect |
+| #10 min-lot gate 5% | 37% / 39% | 12% / 12% | 54% / 55% | Off: no effect; the cap covers it |
+| quiet window 23:30–01:30 | 43% / 43% | 30% / 28% | 57% / 56% | Rejected: worse |
+| loss streak 3 or 4 → 24 h | 43% / 43% | 13% / 13% | 55–58% | Rejected: worse |
+| Friday no entries 16:00 / 20:00 | 25–28% | 1–3% | 52% | Helps; Friday flat helps more |
+| Friday flat 16:00 / 20:00 / 22:00 | 16–22% | 0% | 42–53% | **Kept**: every hour helps |
+| max open risk 20 / 30 / 40% | 39–43% | 7–9% | 42–51% | **Kept** at 30: a risk dial |
+| drawdown 15 / 25 / 35% → × 0.5 | 30–40% | 0–4% | 40–49% | **Kept** at 25: a risk dial |
+| daily loss 5% | 31% / 31% | 6% / 4% | 53–54% | **Kept** at 5 |
+| daily loss 10%, weekly loss 20% | 37–39% | 12–13% | 54–55% | No effect at these values |
+| weekly loss 10% | 31% / 31% | 10% / 10% | 50–51% | **Kept** at 10 |
+
+**Walk-forward** (on the base; score = the worse of end/start from $100 and
+$1,000):
+
+| Parameter | Tuned on | Best | In sample: off → best | Out of sample: off → best |
+|---|---|---|---|---|
+| Friday flat hour | 2023–24 | 16 | 0.32× → 0.64× | 10.99× → 13.29× |
+| Friday flat hour | 2025–26 | 23 | 10.99× → 14.98× | 0.32× → 0.55× |
+| daily loss % | 2023–24 | 5 | 0.32× → 0.42× | 10.99× → 14.07× |
+| daily loss % | 2025–26 | 5 | 10.99× → 14.07× | 0.32× → 0.42× |
+| weekly loss % | 2023–24 | 10 | 0.32× → 0.38× | 10.99× → 12.24× |
+| weekly loss % | 2025–26 | 20 | 10.99× → 13.38× | 0.32× → 0.32× |
+| max open risk % | 2023–24 | 15 | 0.32× → 0.38× | 10.99× → 3.67× |
+| max open risk % | 2025–26 | 60 | 10.99× → 10.21× | 0.32× → 0.31× |
+| drawdown cut at % | 2023–24 | 15 | 0.32× → 0.59× | 10.99× → 5.37× |
+| drawdown cut at % | 2025–26 | 50 | 10.99× → 10.99× | 0.32× → 0.33× |
+
+- Friday flat and the daily limit help on the half they were not chosen on.
+- The open-risk cap and the drawdown cut do **not** have a best value. The
+  losing half wants them tight and the winning half wants them loose. They are
+  risk dials, not edge. Their values (30% and 25%) were set beforehand as
+  middle values, not fitted, and the neighbours (20/40 and 15/35) give the
+  same picture.
+
+**Monte Carlo** (tier-1 bands, 5,000 orders each):
+
+| Plan | Method | Median max DD | 95th pct | P(DD ≥ 50%) | P(DD ≥ 90%) |
+|---|---|---|---|---|---|
+| live | weekly blocks | 99% | 100% | 100% | 99% |
+| live, bands × 0.5 | weekly blocks | 87% | 98% | 100% | 37% |
+| defect fixes (#1 #3) | weekly blocks | 98% | 100% | 100% | 91% |
+| recommended | trade shuffle / weekly blocks | 52% / 53% | 70% / 76% | 61% / 58% | 0% / 0% |
+| **recommended, bands × 0.5** | trade shuffle / weekly blocks | 36% / 36% | 50% / 54% | 5% / 10% | 0% / 0% |
+| recommended without #1, bands × 0.5 | trade shuffle / weekly blocks | 31% / 45% | 45% / 65% | 1% / 33% | 0% / 0% |
+
+### Reading
+
+- **The sizing ruined the accounts, not the entries.** One H4 loser costs a
+  median third of the account, and four tiers open inside four minutes.
+- **The defect fixes alone are not enough.** #1 cuts ruin from 60% to 12% of
+  $100 starts, but 2024 from $100 is still ruined and the Monte Carlo
+  drawdown is unchanged.
+- **Sizing on the real exit removes ruin.** #2 with the open-risk cap brings
+  the worst H4 loss from 63% to 16% of equity. No recommended run was ruined
+  or ended below half its start, in any year or any of the 67 accounts.
+- **No switch adds an edge.** 2023 and 2024 still lose with the recommended
+  set at full bands (−13% and −22% from $100). §69 already found the entries
+  had no edge in 2023. The revamp makes those years survivable, not
+  profitable.
+- **It costs upside.** The live build's best outcomes ($20k from $100) are
+  gone. That is the trade the request asked for.
+- **#1 is a real choice.** Stacked tiers earn more under the cap (median
+  $296 against $156 from $100 at × 0.5), with deeper drawdowns (37% against
+  28%) and more clustered losses (weekly-block P(DD ≥ 50%) 33% against 10%).
+  The recommendation keeps #1 on: it is the documented design and the lower
+  drawdown. The user decides at promotion.
+
+### Recommended inputs
+
+Group A as shipped (all on), plus:
+
+| Input | Value |
+|---|---|
+| `InpSizeOnCloudDist` | `true` |
+| `InpRiskScale` | `0.5` on a small live account (`1.0` keeps the live bands) |
+| `InpMaxOpenRiskPct` | `30` |
+| `InpDDRiskAtPct` / `InpDDRiskFactor` | `25` / `0.5` |
+| `InpFriFlatHour` | `22` |
+| `InpDailyLossPct` / `InpWeeklyLossPct` | `5` / `10` |
+
+Everything else stays off.
+
+### Not verified
+
+- **MetaEditor compile and every MT5 tester run.** `PROMOTION.md` has the
+  checklist.
+- **Switches the simulator cannot see:** #6, #8, #9, #11, #14, #16, #17, the
+  journal de-duplication, the push on a guard, the global-variable
+  persistence and the deal-history loss streak. They were read, not run.
+- **XM's own data.** One feed (HistData), a constant spread, no swaps, no
+  slippage. Swaps would cost the multi-day H1/H4 trades.
+- **Finding 3b** rests on the documented `CopyRates` behaviour.
+- **2026 as a compounded account.** The simulator does not reproduce MT5's
+  2026 figure at the live bands (§69), so the 2026 columns are the weakest.
