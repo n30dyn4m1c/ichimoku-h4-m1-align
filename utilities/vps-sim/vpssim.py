@@ -47,6 +47,7 @@ Usage:
     python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --one-pos         # §73: one review fix alone
     python3 utilities/vps-sim/vpssim.py roll --start-eq 100 --recommended --risk-scale 0.5   # §74
     python3 utilities/vps-sim/validate.py matrix                              # §74: the whole validation
+    python3 utilities/vps-sim/keylevel_study.py all                           # §75: HTF key-level TP study
 
 Porting another EA: keep load(), ichi(), build() and the run/roll harness,
 and write that EA's entry and exit rules in place of sim(). Check the port
@@ -61,7 +62,9 @@ from numba import njit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TFMIN = [1, 5, 15, 30, 60, 240]        # stack index 0..5: M1 M5 M15 M30 H1 H4 (D1 is index 6)
-TIER = ["M5", "M15", "M30", "H1", "H4"]
+TIER = ["M5", "M15", "M30", "H1", "H4", "rM5", "rM15", "rM30", "rH1", "rH4"]   # r = reversal trade (§75)
+KLTF = [15, 30, 60, 240, 1440, "W", "M"]   # key-level TFs (§75): index 0..6 = M15 M30 H1 H4 D1 W1 MN1
+KLNAME = ["M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
 RISK_LIVE = np.array([[1.0, 1.0, 5.0, 10.0, 20.0],     # band 1 (< $7,000):  M5 M15 M30 H1 H4
                       [0.5, 0.5, 2.5, 5.0, 10.0],      # band 2 (< $13,000)
                       [0.1, 0.1, 0.2, 1.0, 2.0]])      # band 3
@@ -72,7 +75,8 @@ DEFECTS = dict(one_pos=True, peak_entry=True)
 RECOMMENDED = dict(DEFECTS, cloud_size=True, max_open_risk=30.0, dd_at=25.0, dd_factor=0.5, fri_flat=22,
                    daily_loss=5.0, weekly_loss=10.0)
 REASON = {0: "kumo touch", 1: "BE/trail stop", 2: "superseded", 3: "stop-out", 4: "disaster stop",
-          5: "weekend flat"}
+          5: "weekend flat", 6: "key-level TP", 7: "key-level TP, H4+D1 hold", 8: "reversal TP", 10: "reversal stop",
+          11: "reversal kijun cross", 12: "key level, held to HTF close"}
 
 
 # ------------------------------------------------------------------ data and indicators
@@ -137,13 +141,102 @@ def build(df):
     return A, FAR, NOW, CT, CB, ATR, BID
 
 
+def keylevels(main_index, pair="XAUUSD"):
+    """Notes §75. The tenkan, kijun, Span A and Span B of each key-level TF's last closed bar (MT5 shift 1;
+    the spans are the cloud drawn under that bar), plus its close, ATR(14) and the id of the bar holding each
+    M1 bar. Computed on data/<PAIR>-long.pkl when present (the monthly cloud needs 78 months of history),
+    else on the main file, and mapped onto the simulator's M1 index. W1 bars start on Sunday, MN1 on the 1st."""
+    path = os.path.join(HERE, "data", f"{pair}-long.pkl")
+    src = load(pair + "-long") if os.path.exists(path) else load(pair)
+    t = main_index.values
+    n = len(t)
+    KL = np.full((7, 4, n), np.nan); KLC = np.full((7, n), np.nan); KLA = np.full((7, n), np.nan)
+    KLB = np.zeros((7, n), np.int64); KLE = np.zeros((7, n), np.int64)
+    agg = {"o": "first", "h": "max", "l": "min", "c": "last"}
+    for i, m in enumerate(KLTF):
+        if m == "W":
+            key = src.index.normalize() - pd.to_timedelta((src.index.dayofweek + 1) % 7, unit="D")
+            r = src.groupby(key).agg(agg); close_t = (r.index + pd.Timedelta(days=7)).values
+        elif m == "M":
+            key = src.index.to_period("M").to_timestamp()
+            r = src.groupby(key).agg(agg); close_t = (r.index + pd.offsets.MonthBegin(1)).values
+        else:
+            r = src.resample(f"{m}min", label="left", closed="left", origin="start_day").agg(agg).dropna()
+            close_t = (r.index + pd.Timedelta(minutes=m)).values
+        hh, ll, cc = r.h, r.l, r.c
+        mid = lambda w: (hh.rolling(w).max() + ll.rolling(w).min()) / 2
+        tk, kj = mid(9), mid(26)
+        sa, sb = ((tk + kj) / 2).shift(26), mid(52).shift(26)
+        tr = pd.concat([hh - ll, (hh - cc.shift()).abs(), (ll - cc.shift()).abs()], axis=1).max(axis=1)
+        at = tr.rolling(14).mean()
+        ix = np.searchsorted(close_t, t, side="right") - 1
+        ok = ix >= 0
+        jx = np.clip(ix, 0, None)
+        for q, v in enumerate((tk, kj, sa, sb)):
+            KL[i, q] = np.where(ok, v.values[jx], np.nan)
+        KLC[i] = np.where(ok, cc.values[jx], np.nan)
+        KLA[i] = np.where(ok, at.values[jx], np.nan)
+        KLB[i] = np.searchsorted(r.index.values, t, side="right") - 1
+        KLE[i] = close_t[np.clip(KLB[i], 0, None)].astype("datetime64[m]").astype(np.int64)   # bar end, minutes
+    return KL, KLC, KLA, KLB, KLE
+
+
+@njit(cache=True)
+def kl_next(KL, k, i0, d, floor):
+    """The nearest key line at or beyond the profit floor in the trade's direction (long: the lowest
+    line >= floor; short: the highest <= floor), over the TFs i0..6. Returns (value, TF index) or (nan, -1)."""
+    best = np.nan; bi = -1
+    for i in range(i0, 7):
+        for q in range(4):
+            v = KL[i, q, k]
+            if not (v > 0):
+                continue
+            if d == 1:
+                if v >= floor and (bi < 0 or v < best):
+                    best = v; bi = i
+            elif v <= floor and (bi < 0 or v > best):
+                best = v; bi = i
+    return best, bi
+
+
+@njit(cache=True)
+def kl_near(KL, k, i0, px, tol):
+    """The key line over the TFs i0..6 closest to px, if within tol. Returns (value, TF index) or (nan, -1)."""
+    best = np.nan; bi = -1; bd = tol
+    for i in range(i0, 7):
+        for q in range(4):
+            v = KL[i, q, k]
+            if not (v > 0):
+                continue
+            dd = abs(v - px)
+            if dd <= bd:
+                best = v; bi = i; bd = dd
+    return best, bi
+
+
+@njit(cache=True)
+def kl_conf(KL, KLA, k, px, tol):
+    """An H4 line and a D1, W1 or MN1 line both within tol x ATR(H4) of px."""
+    t = tol * KLA[3, k]
+    h4 = False; d1 = False
+    for q in range(4):
+        if abs(KL[3, q, k] - px) <= t:
+            h4 = True
+        for i in range(4, 7):
+            if abs(KL[i, q, k] - px) <= t:
+                d1 = True
+    return h4 and d1
+
+
 # ------------------------------------------------------------------ the EA
 @njit(cache=True)
 def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0, k1, start_eq, risk, lev,
         disaster_mult, m5tier, contract, lotmin, lotstep,
         one_pos, cloud_size, peak_entry, arm_peak, realign, minlot_gate, daily_loss,
         weekly_loss, max_open_risk, fri_stop, fri_flat, q_from, q_to, streak_n, pause_min,
-        dd_at, dd_factor, exit_max_spread, max_spread):
+        dd_at, dd_factor, exit_max_spread, max_spread,
+        kl, KL, KLC, KLA, KLB, KLE, late_min, kl_min_i, kl_floor, kl_conf_tol, re_mode, re_scope, breach_lvltf, breach_buf,
+        rev, rev_tol, rev_stop, rev_risk, rev_min_rr, rev_min_lv, rev_max_lv):
     # Review-fix switches (notes §73), all False / 0 = the live build:
     #   one_pos     #1  a running tier blocks itself and every smaller tier
     #   cloud_size  #2  size on max(2 ATR, distance to the tier cloud), capped at the disaster stop
@@ -163,6 +256,26 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
     #   dd_at, dd_factor      risk x dd_factor while equity is dd_at % or more below its high-water mark
     #   exit_max_spread  the kumo-touch exit waits while the spread is above this (§73 #6)
     #   max_spread       the live entry gate InpMaxSpreadPoints (0.60); inert at the default 0.30 spread
+    # Higher-timeframe key levels (notes §75), all off = the live build:
+    #   kl           take profit at the nearest key line (tenkan, kijun, Span A, Span B) of a TF above the
+    #                tier, M30..MN1, that lies at least kl_floor x ATR(tier) beyond the entry; a broker TP,
+    #                refreshed each minute; a line that jumps onto the price closes the trade at market
+    #   late_min     > 0: a touch inside the last late_min minutes of the line's own TF bar does not take
+    #                profit; the trade is held and closed at market when that bar closes (reason 12)
+    #   kl_min_i     lowest key-level TF index (0 M15 .. 6 MN1); a tier never targets its own TF or below
+    #   kl_conf_tol  > 0: an exit at a level with an H4 line AND a D1/W1/MN1 line within this x ATR(H4)
+    #                blocks every new trend entry until the next H4 bar opens
+    #   re_mode      after a key-level TP, a same-direction re-entry waits for: 0 nothing, 1 the TP tier's
+    #                chain to break and re-form, 2 a close beyond the level, 3 whichever comes first
+    #   re_scope     0 the lock covers the TP tier and smaller, 1 every tier
+    #   breach_lvltf the close in re_mode 2/3 is on the level's TF (else the tier's TF), beyond the level
+    #                by breach_buf x ATR of that TF
+    #   rev          an entry signal (every gate passed) whose price sits within rev_tol x ATR(tier) of a key
+    #                line of a TF above the tier opens the opposite trade instead: stop rev_stop x ATR(tier)
+    #                beyond the line, TP at the tier's kijun, lots as the trend trade's (x rev_risk); skipped when the
+    #                reward/risk is below rev_min_rr. Tiers rev_min_lv..rev_max_lv. Every tier that signals in
+    #                the same minute opens its own reversal (one per tier), no trend trade opens that minute,
+    #                and every open reversal takes profit at the kijun of the LOWEST tier with one open.
     NL = 5
     st = np.zeros(NL, np.int64); lots = np.zeros(NL); ent = np.zeros(NL); sl = np.zeros(NL)
     pkH = np.zeros(NL); pkL = np.zeros(NL); be = np.zeros(NL, np.bool_); topen = np.zeros(NL, np.int64)
@@ -175,6 +288,11 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
     needR = np.zeros(NL, np.int64); dsl = np.zeros(NL)
     day = -1; day_eq = start_eq
     week = -1; week_eq = start_eq; hwm = start_eq; streak = 0; pause_until = -1
+    tpv = np.zeros(NL); kfl = np.zeros(NL)                 # §75 key-level TP and its profit floor
+    pend = -np.ones(NL, np.int64); pend_i = np.zeros(NL, np.int64); pend_L = np.zeros(NL)   # held to HTF close
+    lock_d = 0; lock_lv = 0; lock_L = 0.0; lock_i = 0; lock_bar = 0; hold_bar = -1
+    rst = np.zeros(NL, np.int64); rlots = np.zeros(NL); rent = np.zeros(NL); rsl = np.zeros(NL)
+    rtp = np.zeros(NL); rko = np.zeros(NL, np.int64)       # §75 reversal trades, one slot per tier
     for k in range(k0, k1):
         spread = SPR[k]
         bid = o[k]; ask = o[k] + spread
@@ -183,6 +301,31 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                 lastbid[j] = BID[j, k]; runH[j] = bid; runL[j] = bid
             else:
                 runH[j] = max(runH[j], h[k - 1], bid); runL[j] = min(runL[j], l[k - 1], bid)
+        # ---- §75 reversal trades: weekend flat; the lowest open tier's kijun is every reversal's TP,
+        #      and a kijun at or past the price closes them at market
+        rlo = -1
+        for lv in range(NL):
+            if rst[lv] != 0:
+                rlo = lv
+                break
+        kj = KL[rlo - 1, 1, k] if rlo >= 1 else np.nan
+        for lv in range(NL):
+            if rst[lv] == 0:
+                continue
+            px = bid if rst[lv] == 1 else ask
+            why = -1
+            if fri_flat >= 0 and DOW[k] == 4 and TOD[k] >= fri_flat * 60:
+                why = 5
+            elif kj > 0:
+                if (px - kj) * rst[lv] >= 0:
+                    why = 11
+                else:
+                    rtp[lv] = kj
+            if why >= 0:
+                pnl = (px - rent[lv]) * rst[lv] * rlots[lv] * contract
+                bal += pnl
+                trades.append((5 + lv, rst[lv], rko[lv], k, rlots[lv], pnl, why, 0.0))
+                rst[lv] = 0
         # ---- exits and protection at the open of k
         for lv in range(NL):
             if st[lv] == 0:
@@ -216,6 +359,47 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                 else:
                     streak = 0
                 continue
+            if kl:                                      # §75: key line at or past the price -> exit at market
+                px = bid if d == 1 else ask
+                go = False; why = 6
+                if pend[lv] >= 0:                       # held for the line's TF bar to close
+                    L = pend_L[lv]; li = pend_i[lv]
+                    if KLB[li, k] != pend[lv]:
+                        go = True; why = 12
+                    tpv[lv] = 0.0
+                else:
+                    L, li = kl_next(KL, k, max(tf - 1, kl_min_i), d, kfl[lv])
+                    if li >= 0:
+                        late = late_min > 0 and KLE[li, k] - TMIN[k] <= late_min
+                        touched = (px - L) * d >= 0
+                        if late and not touched and k - 1 >= topen[lv]:
+                            touched = (d == 1 and h[k - 1] >= L) or (d == -1 and l[k - 1] + SPR[k - 1] <= L)
+                        if touched and late:
+                            pend[lv] = KLB[li, k]; pend_i[lv] = li; pend_L[lv] = L
+                            tpv[lv] = 0.0
+                        elif touched:
+                            go = True
+                        else:
+                            tpv[lv] = 0.0 if late else L
+                    else:
+                        tpv[lv] = 0.0
+                if go:
+                    pnl = (px - ent[lv]) * d * lots[lv] * contract
+                    bal += pnl
+                    conf = kl_conf_tol > 0 and kl_conf(KL, KLA, k, px, kl_conf_tol)
+                    trades.append((lv, d, topen[lv], k, lots[lv], pnl, 7 if (conf and why == 6) else why, 0.0))
+                    st[lv] = 0
+                    if pnl < 0:
+                        streak += 1
+                    else:
+                        streak = 0
+                    if conf:
+                        hold_bar = KLB[3, k]
+                    if re_mode > 0:
+                        lock_d = d; lock_lv = lv; lock_L = L
+                        lock_i = li if breach_lvltf else max(0, tf - 2)
+                        lock_bar = KLB[lock_i, k]
+                    continue
             a = ATR[tf, k]
             if not (a > 0):
                 continue
@@ -251,6 +435,10 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                 px = bid if st[lv] == 1 else ask
                 fl += (px - ent[lv]) * st[lv] * lots[lv] * contract
                 used += lots[lv] * contract * bid / lev
+        for lv in range(NL):
+            if rst[lv] != 0:
+                fl += ((bid if rst[lv] == 1 else ask) - rent[lv]) * rst[lv] * rlots[lv] * contract
+                used += rlots[lv] * contract * bid / lev
         eq = bal + fl
         if ruined < 0 and (eq <= 0 or (used > 0 and eq / used < 0.2)):
             ruined = k
@@ -261,6 +449,12 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     bal += pnl
                     trades.append((lv, st[lv], topen[lv], k, lots[lv], pnl, 3, 0.0))
                     st[lv] = 0
+            for lv in range(NL):
+                if rst[lv] != 0:
+                    pnl = ((bid if rst[lv] == 1 else ask) - rent[lv]) * rst[lv] * rlots[lv] * contract
+                    bal += pnl
+                    trades.append((5 + lv, rst[lv], rko[lv], k, rlots[lv], pnl, 3, 0.0))
+                    rst[lv] = 0
             eqc[k - k0:] = bal
             break
         # ---- entries: largest aligned tier, H4 down
@@ -288,6 +482,25 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
         if max_spread > 0 and spread > max_spread:
             blocked = True
         rscale = dd_factor if (dd_at > 0 and eq <= hwm * (1.0 - dd_at / 100.0)) else 1.0
+        hold = False
+        if kl:                                          # §75 H4+D1 hold and the re-entry lock
+            if hold_bar >= 0:
+                if KLB[3, k] == hold_bar:
+                    hold = True
+                else:
+                    hold_bar = -1
+            if lock_d != 0:
+                rel = False
+                if re_mode == 1 or re_mode == 3:
+                    for j in range(0, lock_lv + 2):
+                        if A[j, k] != lock_d:
+                            rel = True; break
+                if (re_mode == 2 or re_mode == 3) and KLB[lock_i, k] - 1 >= lock_bar and \
+                        (KLC[lock_i, k] - lock_L) * lock_d > breach_buf * KLA[lock_i, k]:
+                    rel = True
+                if rel:
+                    lock_d = 0
+        rfired = False
         for lv in range(NL - 1, -1, -1):
             if blocked:
                 break
@@ -325,6 +538,38 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     continue
             if lv == 4 and A[6, k] != d:
                 continue
+            if kl and rev and rst[lv] == 0 and lv >= rev_min_lv and lv <= rev_max_lv and ATR[tf, k] > 0 and eq > 0:
+                ra = ATR[tf, k]
+                pxa = ask if d == 1 else bid                # where the trend trade would have filled
+                L, li = kl_near(KL, k, max(tf - 1, kl_min_i), pxa, rev_tol * ra)
+                kj = KL[tf - 2, 1, k]
+                if li >= 0 and kj > 0:
+                    r = -d
+                    rp = ask if r == 1 else bid
+                    rs = (min(L, bid) - rev_stop * ra) if r == 1 else (max(L, ask) + rev_stop * ra)
+                    sd = (rp - rs) * r
+                    gain = (kj - rp) * r
+                    if sd > 0 and gain > 0 and gain >= rev_min_rr * sd:
+                        rt = 2 if eq >= 13000 else (1 if eq >= 7000 else 0)
+                        # the same lot the trend trade would get: the tier's % against 2 x ATR (user, 2026-11-27)
+                        lt = eq * risk[rt, lv] * rev_risk * rscale / 100.0 / (2.0 * ra * contract)
+                        lt = max(lotmin, np.floor(lt / lotstep + 1e-9) * lotstep)
+                        m1lot = contract * rp / lev
+                        maxl = max(lotmin, np.floor(((eq - used) * 0.8 / m1lot) / lotstep + 1e-9) * lotstep)
+                        if lt > maxl:
+                            lt = maxl
+                        rst[lv] = r; rlots[lv] = lt; rent[lv] = rp; rsl[lv] = rs; rtp[lv] = kj; rko[lv] = k
+                        used += lt * contract * rp / lev
+                        trades.append((5 + lv, r, k, -1, lt, 0.0, 9, eq))
+                        rfired = True
+                        continue                        # the smaller tiers may fade too; no trend trade
+            if rfired:
+                continue
+            if kl:
+                if hold:
+                    break
+                if lock_d == d and (re_scope == 1 or lv <= lock_lv):
+                    continue
             a = ATR[tf, k]
             if not (a > 0 and eq > 0):
                 top = lv; tdir = d; tlots = -1.0      # as before: picked, supersedes, opens nothing
@@ -355,6 +600,17 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     lt = maxl
             top = lv; tdir = d; tlots = lt
             break
+        if rfired:
+            rlo = -1
+            for lv in range(NL):
+                if rst[lv] != 0:
+                    rlo = lv
+                    break
+            kj = KL[rlo - 1, 1, k]
+            if kj > 0:
+                for lv in range(NL):
+                    if rst[lv] != 0:
+                        rtp[lv] = kj
         if top >= 0:
             for lv in range(top):
                 if st[lv] != 0:
@@ -387,6 +643,7 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     lt = maxl
                 st[top] = tdir; lots[top] = lt; ent[top] = price; topen[top] = k
                 sl[top] = price - tdir * disaster_mult * a; dsl[top] = sl[top]
+                tpv[top] = 0.0; kfl[top] = price + tdir * kl_floor * a; pend[top] = -1
                 pkH[top] = price; pkL[top] = price; be[top] = False
                 trades.append((top, tdir, k, -1, lt, 0.0, 9, eq))
         # ---- broker stops inside bar k
@@ -394,11 +651,14 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
             if st[lv] == 0:
                 continue
             d = st[lv]
+            why = 1 if (be[lv] or sl[lv] != dsl[lv]) else 4
             if d == 1:
                 if o[k] <= sl[lv] and not (topen[lv] == k):
                     px = o[k]
                 elif l[k] <= sl[lv]:
                     px = sl[lv]
+                elif kl and tpv[lv] > 0 and h[k] >= tpv[lv]:
+                    px = tpv[lv]; why = 6
                 else:
                     continue
             else:
@@ -406,11 +666,22 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     px = o[k] + spread
                 elif h[k] + spread >= sl[lv]:
                     px = sl[lv]
+                elif kl and tpv[lv] > 0 and l[k] + spread <= tpv[lv]:
+                    px = tpv[lv]; why = 6
                 else:
                     continue
             pnl = (px - ent[lv]) * d * lots[lv] * contract
             bal += pnl
-            trades.append((lv, d, topen[lv], k, lots[lv], pnl, 1 if (be[lv] or sl[lv] != dsl[lv]) else 4, 0.0))
+            if why == 6:
+                L, li = kl_next(KL, k, max(lv - 0, kl_min_i), d, kfl[lv])   # the line the TP sat on
+                if kl_conf_tol > 0 and kl_conf(KL, KLA, k, px, kl_conf_tol):
+                    why = 7; hold_bar = KLB[3, k]
+                if re_mode > 0:
+                    lock_d = d; lock_lv = lv; lock_L = px
+                    lock_i = li if (breach_lvltf and li >= 0) else max(0, lv - 1)
+                    lock_bar = KLB[lock_i, k]
+                tpv[lv] = 0.0
+            trades.append((lv, d, topen[lv], k, lots[lv], pnl, why, 0.0))
             st[lv] = 0
             if pnl < 0:
                 streak += 1
@@ -418,9 +689,35 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     pause_until = TMIN[k] + pause_min
             else:
                 streak = 0
-            if realign:
+            if realign and why != 6 and why != 7:
                 needR[lv] = d
+        for lv in range(NL):                            # §75 reversals: broker stop first, then the TP
+            if rst[lv] == 0 or rko[lv] == k:
+                continue
+            px = -1.0; why = 10
+            if rst[lv] == 1:
+                if o[k] <= rsl[lv]:
+                    px = o[k]
+                elif l[k] <= rsl[lv]:
+                    px = rsl[lv]
+                elif h[k] >= rtp[lv]:
+                    px = rtp[lv]; why = 8
+            else:
+                if o[k] + spread >= rsl[lv]:
+                    px = o[k] + spread
+                elif h[k] + spread >= rsl[lv]:
+                    px = rsl[lv]
+                elif l[k] + spread <= rtp[lv]:
+                    px = rtp[lv]; why = 8
+            if px > 0:
+                pnl = (px - rent[lv]) * rst[lv] * rlots[lv] * contract
+                bal += pnl
+                trades.append((5 + lv, rst[lv], rko[lv], k, rlots[lv], pnl, why, 0.0))
+                rst[lv] = 0
         fl = 0.0
+        for lv in range(NL):
+            if rst[lv] != 0:
+                fl += ((c[k] if rst[lv] == 1 else c[k] + spread) - rent[lv]) * rst[lv] * rlots[lv] * contract
         for lv in range(NL):
             if st[lv] != 0:
                 px = c[k] if st[lv] == 1 else c[k] + spread
@@ -435,11 +732,15 @@ class Sim:
     OFF = dict(one_pos=False, cloud_size=False, peak_entry=False, arm_peak=False, realign=False, minlot_gate=0.0,
                daily_loss=0.0, weekly_loss=0.0, max_open_risk=0.0, fri_stop=-1, fri_flat=-1, q_from=0, q_to=0,
                streak_n=0, pause_min=0, dd_at=0.0, dd_factor=1.0, exit_max_spread=0.0, max_spread=0.60,
-               roll_spread=0.0)
+               roll_spread=0.0,
+               kl=False, late_min=0, kl_min_i=0, kl_floor=1.0, kl_conf_tol=0.0, re_mode=0, re_scope=1,
+               breach_lvltf=False, breach_buf=0.0, rev=False, rev_tol=0.25, rev_stop=1.0, rev_risk=1.0,
+               rev_min_rr=0.0, rev_min_lv=1, rev_max_lv=3)
 
     def __init__(self, pair="XAUUSD", spread=0.30, risk=RISK_LIVE, lev=1000.0, disaster=8.0, m5=False,
                  contract=1.0, lotmin=0.1, lotstep=0.01, **switches):
         self.df = load(pair)
+        self.pair = pair
         self.P = build(self.df)
         ix = self.df.index
         self.day = (ix.values.astype("datetime64[D]").astype(np.int64))
@@ -461,8 +762,20 @@ class Sim:
             spr[(self.tod >= 23 * 60 + 55) | (self.tod < 75)] = roll_spread
         return spr
 
+    def klarrays(self, on):
+        """§75 key-level arrays, built on first use; tiny placeholders while the switch is off."""
+        if not on:
+            return (np.zeros((7, 4, 1)), np.zeros((7, 1)), np.zeros((7, 1)), np.zeros((7, 1), np.int64),
+                    np.zeros((7, 1), np.int64))
+        if not hasattr(self, "_kl"):
+            self._kl = keylevels(self.df.index, self.pair)
+        return self._kl
+
     def run(self, start, end, start_eq=100.0, **over):
         cf = {**self.cfg, **over}
+        bad = set(over) - set(self.cfg)
+        if bad:
+            raise TypeError(f"unknown switch: {sorted(bad)}")
         t = self.df.index
         k0 = max(1, int(np.searchsorted(t, pd.Timestamp(start))))
         k1 = int(np.searchsorted(t, pd.Timestamp(end)))
@@ -474,7 +787,12 @@ class Sim:
                                    float(cf["weekly_loss"]), float(cf["max_open_risk"]), int(cf["fri_stop"]),
                                    int(cf["fri_flat"]), int(cf["q_from"]), int(cf["q_to"]), int(cf["streak_n"]),
                                    int(cf["pause_min"]), float(cf["dd_at"]), float(cf["dd_factor"]),
-                                   float(cf["exit_max_spread"]), float(cf["max_spread"]))
+                                   float(cf["exit_max_spread"]), float(cf["max_spread"]),
+                                   bool(cf["kl"]), *self.klarrays(cf["kl"]), int(cf["late_min"]), int(cf["kl_min_i"]),
+                                   float(cf["kl_floor"]), float(cf["kl_conf_tol"]), int(cf["re_mode"]),
+                                   int(cf["re_scope"]), bool(cf["breach_lvltf"]), float(cf["breach_buf"]),
+                                   bool(cf["rev"]), float(cf["rev_tol"]), float(cf["rev_stop"]), float(cf["rev_risk"]),
+                                   float(cf["rev_min_rr"]), int(cf["rev_min_lv"]), int(cf["rev_max_lv"]))
         ent_eq = {(r[0], r[2]): r[7] for r in tr if r[6] == 9}
         T = pd.DataFrame([r[:7] for r in tr if r[6] != 9], columns=["lvl", "d", "ko", "kc", "lots", "pnl", "why"])
         T["tier"] = T.lvl.map(lambda v: TIER[v]); T["reason"] = T.why.map(REASON)
