@@ -9001,3 +9001,22 @@ The fixed-lot tables above do not change: every trade there is at 0.1 lot.
   they are not a quarter of anything. From $10,000, 8% are lifted. The
   quarter is real only once the trend lots are well above 0.4 lot.
 
+### Sixth revision: reversals at half the trend risk (same day)
+
+After comparing sizes, the user chose half: `InpRevLotMult` is now 0.5.
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $10,000: median / median DD | §74 × 0.5, $100: below start / median | §74 × 0.5, $1,000: below start / median / median DD |
+|---|---|---|---|---|
+| trend part only | 24% / 51% / $96 | $23,845 / 41% | 0% / $191 | 0% / $1,918 / 23% |
+| reversal at 1/4 lots | 24% / 49% / $103 | $24,548 / 39% | 0% / $203 | 0% / $2,010 / 23% |
+| **reversal at 1/2 lots (EA default)** | 22% / 47% / $142 | $24,278 / 40% | 0% / $203 | 0% / $2,064 / 24% |
+| reversal at full lots | 21% / 49% / $124 | $24,129 / 41% | 1% / $210 | 1% / $2,104 / 25% |
+
+- **Half keeps more of the reversals' profit than a quarter**, for one point
+  more median drawdown. On the §74 base, no account is ruined or ends below
+  its start.
+- **The gaps between 1/4, 1/2 and full are one or two accounts in 68.**
+  That is within the noise; the size of a thin edge changes little.
+- **The minimum lot still lifts most of them on a small account.** At half,
+  75% of the reversals from $100 and 42% from $1,000 trade 0.1 lot.
+

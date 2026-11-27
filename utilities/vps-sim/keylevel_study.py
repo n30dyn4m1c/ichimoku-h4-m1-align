@@ -29,7 +29,7 @@ KL = dict(kl=True)
 OFFTP = dict(kl=True, kl_floor=1e9)        # key-level arrays on, but no line is ever a target
 TREND = dict(KL, kl_min_i=3, late_min=10, kl_conf_tol=0.25, re_mode=2, breach_lvltf=True)
 EA = dict(TREND, rev=True, rev_first=True, rev_touch=1, rev_tol=0.0, rev_once=True, rev_newline=1.0,
-          rev_risk=0.25)   # the .mq5 defaults
+          rev_risk=0.5)   # the .mq5 defaults
 CONFIGS = {
     "live": {},
     "TP floor 0.5": dict(KL, kl_floor=0.5),
@@ -55,6 +55,7 @@ CONFIGS = {
     "trend part + reversal on a real M1 touch, any touch": dict(TREND, rev=True, rev_touch=1, rev_tol=0.0),
     "trend part + reversal on a real M1 touch, first touch (repeat fades allowed)": dict(EA, rev_once=False),
     "EA default: trend part + reversal on a real touch, first touch, once per line": EA,
+    "EA default, reversal at 1/4 trend lots": dict(EA, rev_risk=0.25),
     "EA default, reversal at full trend lots": dict(EA, rev_risk=1.0),
     "EA default, new line at 0.5 ATR": dict(EA, rev_newline=0.5),
     "EA default, new line at 2.0 ATR": dict(EA, rev_newline=2.0),
@@ -69,7 +70,7 @@ CONFIGS = {
 ROLL = ["live", "TP floor 1.0", "TP + lock: realign", "TP + lock: level-TF close beyond",
         "trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock", "trend part with M30+ lines",
         "trend part + reversal within 0.25 ATR, first touch", "EA default: trend part + reversal on a real touch, first touch, once per line",
-        "EA default, reversal at full trend lots", "EA default, D1+ lines", "EA, touch = the line's own candle (InpRevTouchMode 2), first touch",
+        "EA default, reversal at 1/4 trend lots", "EA default, reversal at full trend lots", "EA default, D1+ lines", "EA, touch = the line's own candle (InpRevTouchMode 2), first touch",
         "D1+ lines + level-TF lock"]
 FIXED = np.zeros((3, 5))
 

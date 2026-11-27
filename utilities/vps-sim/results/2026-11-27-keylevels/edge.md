@@ -26,6 +26,7 @@
 | trend part + reversal on a real M1 touch, any touch | 1.03 | 1.10 | 1.41 | 1.61 | 1.38 | +7,801 | 5134 |
 | trend part + reversal on a real M1 touch, first touch (repeat fades allowed) | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | +8,023 | 4919 |
 | EA default: trend part + reversal on a real touch, first touch, once per line | 1.01 | 1.10 | 1.44 | 1.73 | 1.43 | +7,986 | 4784 |
+| EA default, reversal at 1/4 trend lots | 1.01 | 1.10 | 1.44 | 1.73 | 1.43 | +7,986 | 4784 |
 | EA default, reversal at full trend lots | 1.01 | 1.10 | 1.44 | 1.73 | 1.43 | +7,986 | 4784 |
 | EA default, new line at 0.5 ATR | 1.04 | 1.10 | 1.43 | 1.72 | 1.43 | +8,065 | 4837 |
 | EA default, new line at 2.0 ATR | 1.02 | 1.09 | 1.46 | 1.71 | 1.43 | +7,906 | 4720 |
@@ -65,6 +66,7 @@
 | trend part + reversal on a real M1 touch, any touch | 1.72 (773, +1,991) | 2.53 (197, +2,098) | 1.23 (2148, +1,568) | 1.32 (1410, +1,976) | 1.43 (68, +192) | 1.01 (296, +12) | 0.97 (242, -36) |
 | trend part + reversal on a real M1 touch, first touch (repeat fades allowed) | 1.72 (775, +1,988) | 2.53 (197, +2,098) | 1.24 (2150, +1,605) | 1.32 (1412, +1,970) | 1.38 (40, +119) | 1.12 (184, +112) | 1.13 (161, +132) |
 | EA default: trend part + reversal on a real touch, first touch, once per line | 1.72 (775, +1,988) | 2.53 (197, +2,098) | 1.23 (2150, +1,594) | 1.32 (1411, +1,985) | 1.54 (22, +83) | 1.20 (120, +132) | 1.15 (109, +106) |
+| EA default, reversal at 1/4 trend lots | 1.72 (775, +1,988) | 2.53 (197, +2,098) | 1.23 (2150, +1,594) | 1.32 (1411, +1,985) | 1.54 (22, +83) | 1.20 (120, +132) | 1.15 (109, +106) |
 | EA default, reversal at full trend lots | 1.72 (775, +1,988) | 2.53 (197, +2,098) | 1.23 (2150, +1,594) | 1.32 (1411, +1,985) | 1.54 (22, +83) | 1.20 (120, +132) | 1.15 (109, +106) |
 | EA default, new line at 0.5 ATR | 1.72 (775, +1,988) | 2.53 (197, +2,098) | 1.24 (2150, +1,604) | 1.32 (1412, +1,973) | 2.02 (28, +170) | 1.14 (144, +104) | 1.16 (131, +129) |
 | EA default, new line at 2.0 ATR | 1.72 (775, +1,988) | 2.53 (197, +2,098) | 1.23 (2149, +1,593) | 1.32 (1412, +1,969) | 1.55 (18, +80) | 1.28 (86, +139) | 1.06 (83, +38) |
