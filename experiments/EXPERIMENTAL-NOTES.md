@@ -8980,3 +8980,24 @@ repeats allowed there were 385.
 - **D1+ lines are again the strongest**, with reversal PFs of 1.5–1.8, on
   under 60 trades per tier.
 
+### Fifth revision: reversals at a quarter of the trend risk (same day)
+
+User instruction: a reversal risks a quarter of what the trend trade on that
+tier would. `InpRevLotMult` is now 0.25. The lot is the trend trade's
+`RiskLots` × 0.25, floored to the lot step and lifted to the broker minimum.
+The fixed-lot tables above do not change: every trade there is at 0.1 lot.
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $1,000 | Live bands $10,000: below start / median / median DD | §74 × 0.5, $100 | §74 × 0.5, $1,000 |
+|---|---|---|---|---|---|
+| trend part only | 24% / 51% / $96 | 1% / 40% / $7,981 | 6% / $23,845 / 41% | 0% / 0% / $191 | 0% / 0% / $1,918 |
+| reversal at full trend lots | 21% / 49% / $124 | 1% / 37% / $11,269 | 4% / $24,129 / 41% | 0% / 1% / $210 | 0% / 1% / $2,104 |
+| **reversal at 1/4 lots (EA default)** | 24% / 49% / $103 | 1% / 40% / $8,001 | 4% / $24,548 / 39% | 0% / 0% / $203 | 0% / 0% / $2,010 |
+
+- **As expected, it sits between no reversal and full-size reversals.** It
+  keeps a little of their gain, with a slightly lower drawdown. On the §74
+  base, no account ends below its start.
+- **On a small account the minimum lot overrides it.** 94% of the reversals
+  from $100 and 65% from $1,000 are lifted to the 0.1-lot minimum, so there
+  they are not a quarter of anything. From $10,000, 8% are lifted. The
+  quarter is real only once the trend lots are well above 0.4 lot.
+

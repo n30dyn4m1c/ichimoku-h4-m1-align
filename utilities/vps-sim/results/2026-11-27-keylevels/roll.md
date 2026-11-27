@@ -9,9 +9,10 @@
 | trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock | 24% | 51% | $0 / $96 / $21,034 | 99% | 100% |
 | trend part with M30+ lines | 26% | 53% | $-0 / $84 / $21,543 | 99% | 100% |
 | trend part + reversal within 0.25 ATR, first touch | 24% | 49% | $0 / $127 / $21,419 | 99% | 100% |
-| EA default: trend part + reversal on a real touch, first touch, once per line | 21% | 49% | $0 / $124 / $21,098 | 99% | 100% |
-| EA default, D1+ lines | 15% | 37% | $0 / $464 / $24,137 | 97% | 100% |
-| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 26% | 46% | $0 / $220 / $21,253 | 99% | 100% |
+| EA default: trend part + reversal on a real touch, first touch, once per line | 24% | 49% | $-0 / $103 / $21,042 | 99% | 100% |
+| EA default, reversal at full trend lots | 21% | 49% | $0 / $124 / $21,098 | 99% | 100% |
+| EA default, D1+ lines | 13% | 38% | $0 / $533 / $22,777 | 98% | 100% |
+| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 21% | 43% | $0 / $229 / $20,769 | 99% | 100% |
 | D1+ lines + level-TF lock | 13% | 37% | $0 / $625 / $22,913 | 98% | 100% |
 
 ### Live bands: 68 accounts, 12 months each, from $1,000
@@ -25,9 +26,10 @@
 | trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock | 1% | 40% | $116 / $7,981 / $27,178 | 96% | 99% |
 | trend part with M30+ lines | 1% | 40% | $110 / $7,916 / $28,317 | 96% | 99% |
 | trend part + reversal within 0.25 ATR, first touch | 1% | 35% | $124 / $11,731 / $26,989 | 96% | 99% |
-| EA default: trend part + reversal on a real touch, first touch, once per line | 1% | 37% | $124 / $11,269 / $28,050 | 96% | 99% |
-| EA default, D1+ lines | 1% | 28% | $210 / $14,952 / $31,213 | 95% | 99% |
-| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 1% | 32% | $100 / $12,508 / $26,842 | 96% | 99% |
+| EA default: trend part + reversal on a real touch, first touch, once per line | 1% | 40% | $123 / $8,001 / $27,487 | 96% | 99% |
+| EA default, reversal at full trend lots | 1% | 37% | $124 / $11,269 / $28,050 | 96% | 99% |
+| EA default, D1+ lines | 1% | 31% | $190 / $15,540 / $30,055 | 94% | 99% |
+| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 1% | 35% | $122 / $11,445 / $27,961 | 96% | 99% |
 | D1+ lines + level-TF lock | 1% | 31% | $183 / $15,264 / $29,746 | 94% | 99% |
 
 ### §74 recommended, bands x 0.5: 68 accounts, 12 months each, from $100
@@ -41,9 +43,10 @@
 | trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock | 0% | 0% | $127 / $191 / $324 | 27% | 31% |
 | trend part with M30+ lines | 0% | 0% | $131 / $202 / $323 | 27% | 29% |
 | trend part + reversal within 0.25 ATR, first touch | 0% | 0% | $129 / $212 / $293 | 28% | 33% |
-| EA default: trend part + reversal on a real touch, first touch, once per line | 0% | 1% | $135 / $210 / $367 | 27% | 33% |
-| EA default, D1+ lines | 0% | 0% | $160 / $248 / $416 | 22% | 30% |
-| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 0% | 3% | $113 / $193 / $291 | 29% | 34% |
+| EA default: trend part + reversal on a real touch, first touch, once per line | 0% | 0% | $131 / $203 / $354 | 27% | 31% |
+| EA default, reversal at full trend lots | 0% | 1% | $135 / $210 / $367 | 27% | 33% |
+| EA default, D1+ lines | 0% | 0% | $145 / $234 / $384 | 22% | 29% |
+| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 0% | 0% | $128 / $190 / $277 | 27% | 33% |
 | D1+ lines + level-TF lock | 0% | 0% | $134 / $226 / $346 | 25% | 29% |
 
 ### §74 recommended, bands x 0.5: 68 accounts, 12 months each, from $1,000
@@ -57,7 +60,8 @@
 | trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock | 0% | 0% | $1,300 / $1,918 / $3,097 | 23% | 29% |
 | trend part with M30+ lines | 0% | 0% | $1,276 / $1,926 / $3,111 | 23% | 30% |
 | trend part + reversal within 0.25 ATR, first touch | 0% | 0% | $1,290 / $1,944 / $2,761 | 28% | 29% |
-| EA default: trend part + reversal on a real touch, first touch, once per line | 0% | 1% | $1,363 / $2,104 / $3,007 | 25% | 27% |
-| EA default, D1+ lines | 0% | 0% | $1,597 / $2,441 / $3,204 | 22% | 25% |
-| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 0% | 0% | $1,242 / $2,075 / $2,854 | 26% | 28% |
+| EA default: trend part + reversal on a real touch, first touch, once per line | 0% | 0% | $1,276 / $2,010 / $3,023 | 23% | 27% |
+| EA default, reversal at full trend lots | 0% | 1% | $1,363 / $2,104 / $3,007 | 25% | 27% |
+| EA default, D1+ lines | 0% | 0% | $1,414 / $2,306 / $3,270 | 21% | 24% |
+| EA, touch = the line's own candle (InpRevTouchMode 2), first touch | 0% | 0% | $1,328 / $2,013 / $2,948 | 24% | 29% |
 | D1+ lines + level-TF lock | 0% | 0% | $1,329 / $2,278 / $3,221 | 22% | 27% |

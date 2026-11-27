@@ -28,8 +28,9 @@
 //|     bar's range reaches that TF's line; InpRevTouchMode 2 uses the|
 //|     line's own candle instead) opens the opposite trade, one per  |
 //|     signalling tier, every reversal taking                        |
-//|     profit at the kijun of the LOWEST tier with one open, lots as |
-//|     the trend trade's risk rule, stop beyond the line. Only a     |
+//|     profit at the kijun of the LOWEST tier with one open, at a    |
+//|     QUARTER of the trend trade's lots (InpRevLotMult 0.25, never  |
+//|     below the broker minimum), stop beyond the line. Only a       |
 //|     line's FIRST touch is faded; a second touch is disregarded,   |
 //|     and a line once faded is never faded again until it moves to  |
 //|     a new level (InpRevNewLineATR x ATR of its TF). Kept in       |
@@ -283,7 +284,7 @@ input ENUM_REV_TOUCH InpRevTouchMode = REVT_PRICE; // 1 = price touches the line
 input double InpRevTolATR       = 0.0;      // Widen the touching range by this x ATR(tier) (0 = a real touch)
 input double InpRevStopATR      = 1.0;      // Stop this x ATR(tier) beyond the line
 input double InpRevMinRR        = 0.0;      // Skip when (distance to the kijun) / (distance to the stop) is below this
-input double InpRevLotMult      = 1.0;      // x the trend trade's lots (the same risk rule)
+input double InpRevLotMult      = 0.25;     // x the trend trade's lots: a quarter of the trend risk (user, 2026-11-27)
 input int    InpRevMinTier      = 1;        // Lowest tier that may fade (0=M5 1=M15 2=M30 3=H1 4=H4)
 input int    InpRevMaxTier      = 3;        // Highest tier that may fade
 input bool   InpRevFirstTouch   = true;     // Fade only a line's FIRST touch; a second touch is disregarded
