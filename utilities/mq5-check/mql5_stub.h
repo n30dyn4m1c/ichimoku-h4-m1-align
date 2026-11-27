@@ -40,6 +40,8 @@ int iIchimoku(string, ENUM_TIMEFRAMES, int, int, int);
 int iATR(string, ENUM_TIMEFRAMES, int);
 datetime iTime(string, ENUM_TIMEFRAMES, int);
 double iClose(string, ENUM_TIMEFRAMES, int);
+double iHigh(string, ENUM_TIMEFRAMES, int);
+double iLow(string, ENUM_TIMEFRAMES, int);
 int iBarShift(string, ENUM_TIMEFRAMES, datetime, bool = false);
 int PeriodSeconds(ENUM_TIMEFRAMES);
 datetime StructToTime(MqlDateTime &);

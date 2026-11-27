@@ -27,7 +27,8 @@ YEARS = [("2023", "2023-04-15", "2024-01-01"), ("2024", "2024-01-01", "2025-01-0
 
 KL = dict(kl=True)
 OFFTP = dict(kl=True, kl_floor=1e9)        # key-level arrays on, but no line is ever a target
-EA = dict(KL, kl_min_i=3, late_min=10, kl_conf_tol=0.25, re_mode=2, breach_lvltf=True)   # the .mq5 defaults
+TREND = dict(KL, kl_min_i=3, late_min=10, kl_conf_tol=0.25, re_mode=2, breach_lvltf=True)
+EA = dict(TREND, rev=True, rev_first=True, rev_touch=1, rev_tol=0.0)   # the .mq5 defaults
 CONFIGS = {
     "live": {},
     "TP floor 0.5": dict(KL, kl_floor=0.5),
@@ -45,20 +46,26 @@ CONFIGS = {
     "TP + lock: level-TF close, TP tier and below": dict(KL, re_mode=2, breach_lvltf=True, re_scope=0),
     "TP + lock: level-TF close or realign": dict(KL, re_mode=3, breach_lvltf=True),
     "D1+ lines + level-TF lock": dict(KL, kl_min_i=4, re_mode=2, breach_lvltf=True),
-    "EA default: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock": EA,
-    "EA default with M30+ lines": dict(EA, kl_min_i=0),
-    "reversal only (no TP)": dict(OFFTP, rev=True),
-    "reversal only, M15 tier": dict(OFFTP, rev=True, rev_max_lv=1),
-    "reversal only, R:R >= 1": dict(OFFTP, rev=True, rev_min_rr=1.0),
-    "EA default + reversal, any touch": dict(EA, rev=True),
-    "EA default + reversal, first touch only": dict(EA, rev=True, rev_first=True),
-    "EA default + reversal, first touch, stop 2 ATR": dict(EA, rev=True, rev_first=True, rev_stop=2.0),
-    "EA default + reversal, first touch, D1+ lines": dict(EA, kl_min_i=4, rev=True, rev_first=True),
-    "EA M30+ lines + reversal, any touch": dict(EA, kl_min_i=0, rev=True),
+    "trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock": TREND,
+    "trend part with M30+ lines": dict(TREND, kl_min_i=0),
+    "reversal only (no TP), within 0.25 ATR": dict(OFFTP, kl_min_i=3, rev=True),
+    "trend part + reversal within 0.25 ATR, any touch": dict(TREND, rev=True),
+    "trend part + reversal within 0.25 ATR, first touch": dict(TREND, rev=True, rev_first=True),
+    "trend part + reversal on a real M1 touch, any touch": dict(TREND, rev=True, rev_touch=1, rev_tol=0.0),
+    "EA default: trend part + reversal on a real M1 touch, first touch": EA,
+    "EA default, reversal stop 2 ATR": dict(EA, rev_stop=2.0),
+    "EA default, reversal R:R >= 1": dict(EA, rev_min_rr=1.0),
+    "EA default, reversal M15 only": dict(EA, rev_max_lv=1),
+    "EA default, D1+ lines": dict(EA, kl_min_i=4),
+    "EA, touch = the line's own candle (InpRevTouchMode 2), first touch": dict(EA, rev_touch=2),
+    "EA, touch = the line's own candle, any touch": dict(EA, rev_touch=2, rev_first=False),
+    "EA, touch = the line's own candle, first touch, D1+ lines": dict(EA, rev_touch=2, kl_min_i=4),
 }
 ROLL = ["live", "TP floor 1.0", "TP + lock: realign", "TP + lock: level-TF close beyond",
-        "EA default: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock", "EA default with M30+ lines",
-        "EA default + reversal, first touch only", "D1+ lines + level-TF lock"]
+        "trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock", "trend part with M30+ lines",
+        "trend part + reversal within 0.25 ATR, first touch", "EA default: trend part + reversal on a real M1 touch, first touch",
+        "EA default, D1+ lines", "EA, touch = the line's own candle (InpRevTouchMode 2), first touch",
+        "D1+ lines + level-TF lock"]
 FIXED = np.zeros((3, 5))
 
 
@@ -176,7 +183,8 @@ def placebo(s):
     real = s.klarrays(True)
     keep = dict(CONFIGS)
     names = ["live", "TP floor 1.0", "TP + lock: level-TF close beyond", "D1+ lines + level-TF lock",
-             "EA default: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock"]
+             "trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock",
+             "EA default: trend part + reversal on a real M1 touch, first touch"]
     t = ""
     for tag, mult in (("real lines", 1.0), ("every line x 1.01", 1.01), ("every line x 0.99", 0.99)):
         s._kl = (real[0] * mult,) + real[1:]

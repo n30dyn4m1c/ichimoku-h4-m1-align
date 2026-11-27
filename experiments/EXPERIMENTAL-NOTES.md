@@ -8632,9 +8632,10 @@ the trading logic is the live build's.
    the exit must have closed. Mode 1 waits instead for the TP tier's chain to
    break and re-form; mode 3 takes whichever comes first.
    `InpKLLockAllTiers` (on) applies the lock to every tier.
-5. **Reversal** (`InpRevEnabled`, **off**). A tier whose every entry gate
-   passes, with price within 0.25 × ATR(tier) of a line above the tier, opens
-   the opposite trade instead:
+5. **Reversal** (`InpRevEnabled`, **on** since the second revision below). A
+   tier whose every entry gate passes, on a closed M1 bar whose range touched
+   a line above the tier (first version: price within 0.25 × ATR(tier) of
+   it), opens the opposite trade instead:
    - The stop is 1 × ATR(tier) beyond the line.
    - The lots are the trend trade's (`RiskLots`, the tier's % against
      2 × ATR).
@@ -8645,7 +8646,7 @@ the trading logic is the live build's.
    - Reversals carry their own comment (`Exp RevSell M15`), so the sync and
      the R2 unknown-position guard know them.
    - **First touch only** (`InpRevFirstTouch`, on). A touch is a closed M1
-     bar within 0.1 × ATR(H4) of the line. It ends once price is
+     bar whose range reaches the line (first revision: within 0.1 × ATR(H4)). It ends once price is
      0.5 × ATR(H4) away, and the next touch of that line is a second touch,
      which is disregarded. A line whose value moves 0.5 × ATR(H4) from its
      first-touch value counts as a new line. The count is kept in memory.
@@ -8826,4 +8827,96 @@ real lines.
   on every tier. On D1+ lines the first-touch reversals are about break-even
   (rM15 1.13, rM30 1.03), too few trades to separate from luck. The
   reversal stays off.
+
+### Second revision: the reversal on a real M1 touch (same day)
+
+The user asked for the reversal to need a real touch. The last closed M1
+bar's range must reach the H4, D1, W1 or MN1 tenkan, kijun, Span A or Span
+B, instead of price coming within 0.25 × ATR(tier) of it. The first-touch
+count uses the same bare range. `InpRevTolATR` is now 0 (it widens the range)
+and the reversal is **on** by default.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| live | 0.95 | 1.05 | 1.41 | 1.35 | 1.28 | +6,917 | 5,701 |
+| trend part only (H4+ lines, TP, holds, lock) | 0.99 | 1.09 | 1.49 | 1.81 | 1.45 | +7,673 | 4,531 |
+| + reversal within 0.25 ATR, first touch (previous) | 0.99 | 1.10 | 1.42 | 1.59 | 1.37 | +7,321 | 4,911 |
+| + reversal on a real touch, any touch | 1.03 | 1.10 | 1.41 | 1.61 | 1.38 | +7,801 | 5,134 |
+| **+ reversal on a real touch, first touch (EA default)** | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | **+8,023** | 4,919 |
+| same, D1+ lines | 0.99 | 1.14 | 1.63 | 1.82 | 1.53 | +9,112 | 4,664 |
+
+| Reversal trades, EA default | rM15 | rM30 | rH1 |
+|---|---|---|---|
+| PF (trades) | 1.12 (184) | 1.13 (161) | 1.38 (40) |
+| TP / kijun cross / stop | 58 / 10 / 116 | 56 / 11 / 94 | 18 / 3 / 19 |
+
+All reversals together by year: 2023 PF 1.56 (62 trades), 2024 1.15 (105),
+2025 0.96 (105), 2026 1.22 (113).
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $1,000 | §74 × 0.5, $1,000 |
+|---|---|---|---|
+| live | 59% / 60% / $0 | 10% / 51% / $469 | 0% / 16% / $1,719 |
+| trend part only | 24% / 51% / $96 | 1% / 40% / $7,981 | 0% / 0% / $1,918 |
+| **EA default (+ real-touch reversal)** | **18%** / 46% / $162 | 1% / 38% / $8,262 | 0% / 0% / $2,005 |
+| EA default, D1+ lines | 16% / 38% / $386 | 1% / 29% / $14,646 | 0% / 0% / $2,285 |
+
+- **The touch is what makes the fade work.** The same reversal, the same
+  stop and the same kijun TP turn from losing (rM15 0.83, rM30 0.88) to
+  winning (1.12, 1.13) when price must actually reach the line. The likely
+  reason, not measured separately: within 0.25 ATR, many fades opened before
+  the line had been tested, and price then ran on to the line and through
+  the stop.
+- **First touch still matters.** On a real touch, fading every touch gives
+  rM15 1.01 and rM30 0.97; the first touch only gives 1.12 and 1.13.
+- **The edge is thin.** PF 1.1–1.4 on 385 trades, with 2025 below 1. The
+  stop is still hit about twice as often as the TP. The money comes from
+  the TP being further away (the kijun) than the stop (1 ATR beyond the
+  line). A 2 ATR stop was worse (rM15 0.88). An R:R ≥ 1 gate changed
+  nothing, because nearly every fade already has it.
+- **The account figures improve.** Ruin from $100 falls 24% → 18%, the
+  median end rises, and $/oz rises. The account PF dips (1.45 → 1.41)
+  because the reversals' edge is thinner than the trend trades'. Run it in
+  the tester with the reversal on and off (`InpRevEnabled`) before trusting
+  either.
+
+### Third revision: whose price touches the line (same day)
+
+The user clarified that the touch is the price of the line's own timeframe:
+H4 price touching the H4 kijun, D1 price touching the D1 tenkan. That can
+be read two ways, and both are in the EA (`InpRevTouchMode`):
+
+1. **`REVT_PRICE` (default).** Price reaches the H4, D1, W1 or MN1 line now:
+   the last closed M1 bar's range reaches it. That is the moment the H4
+   candle touches the H4 line. This is the second revision above, unchanged.
+   M1 Ichimoku lines are never used.
+2. **`REVT_TF_BAR`.** The line's own candle has reached the line at any time
+   since it opened: the H4 candle's range for an H4 line, the D1 candle's
+   for a D1 line. A first touch is then the first candle of that TF to touch
+   the line. It ends once a whole candle closes without touching, and a line
+   that moves 0.5 × ATR(its TF) from its first-touch value is a new line.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| trend part only | 0.99 | 1.09 | 1.49 | 1.81 | 1.45 | +7,673 | 4,531 |
+| + reversal, price touch (mode 1, default) | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | +8,023 | 4,919 |
+| + reversal, own candle touch (mode 2) | 0.93 | 1.04 | 1.35 | 1.33 | 1.25 | +7,568 | 7,326 |
+| + reversal, mode 2, any touch | 0.91 | 1.05 | 1.30 | 1.22 | 1.19 | +6,524 | 8,087 |
+| + reversal, mode 2, D1+ lines | 0.92 | 1.04 | 1.56 | 1.42 | 1.32 | +8,773 | 6,796 |
+
+| Reversal trades | rM15 | rM30 | rH1 | Ruined from $100 (live bands) |
+|---|---|---|---|---|
+| mode 1, price touch | 1.12 (184) | 1.13 (161) | 1.38 (40) | 18% |
+| mode 2, own candle touch | 0.98 (1,460) | 0.90 (1,037) | 0.91 (361) | 37% |
+
+By year, the mode 2 reversals scored 0.86, 0.95, 1.02 and 0.92. On the §74
+base from $1,000, 26% of accounts ended below their start, against 0% in
+mode 1.
+
+- **Mode 2 fades breakouts.** Once the H4 candle has touched the H4 kijun,
+  the line stays "touched" for the rest of those four hours. A buy signal
+  later in that candle, with price already well past the line, still opens
+  a sell. The reversal count rises from 385 to 2,858, and they lose on
+  every tier.
+- **Mode 1 is the touch that works**: the fade opens while price is at the
+  line. It stays the default. Mode 2 is there to compare in the MT5 tester.
 

@@ -23,9 +23,11 @@
 //|     same direction until a bar of the level's own TF closes       |
 //|     beyond the line (default), or the TP tier's chain breaks and  |
 //|     re-forms, or either (InpKLReentry).                           |
-//|  5. REVERSAL (off by default — it lost in simulation): an entry   |
-//|     signal whose price sits at a key line opens the opposite      |
-//|     trade instead, one per signalling tier, every reversal taking |
+//|  5. REVERSAL (on): an entry signal when price TOUCHES an H4, D1,  |
+//|     W1 or MN1 tenkan, kijun, Span A or Span B (the last closed M1 |
+//|     bar's range reaches that TF's line; InpRevTouchMode 2 uses the|
+//|     line's own candle instead) opens the opposite trade, one per  |
+//|     signalling tier, every reversal taking                        |
 //|     profit at the kijun of the LOWEST tier with one open, lots as |
 //|     the trend trade's risk rule, stop beyond the line. Only a     |
 //|     line's FIRST touch is faded; a second touch is disregarded.   |
@@ -253,6 +255,12 @@ input double InpRejClosePct   = 0.35;   // Close must sit in the outermost this 
 // §75 key-level TFs. A tier only ever uses lines of TFs ABOVE its own.
 enum ENUM_KL_TF { KLTF_M15 = 0, KLTF_M30 = 1, KLTF_H1 = 2, KLTF_H4 = 3, KLTF_D1 = 4, KLTF_W1 = 5, KLTF_MN1 = 6 };
 enum ENUM_KL_REENTRY { KLRE_NONE = 0, KLRE_REALIGN = 1, KLRE_BREACH = 2, KLRE_EITHER = 3 };
+// What counts as a touch of an H4/D1/W1/MN1 line for the reversal:
+//   REVT_PRICE   : price reaches the line now — the last closed M1 bar's range reaches it
+//   REVT_TF_BAR  : the line's own candle (the H4 candle for an H4 line) has reached it at any time since
+//                  it opened; a first touch is then the first candle to touch, and it ends when a whole
+//                  candle closes without touching (simulated: lost — it keeps firing after a breakout)
+enum ENUM_REV_TOUCH { REVT_PRICE = 1, REVT_TF_BAR = 2 };
 
 input group  "HTF Key-Level TP (notes §75)"
 input bool   InpKLTP            = true;     // TP at the nearest tenkan/kijun/Span A/Span B of a TF above the tier
@@ -266,9 +274,10 @@ input bool   InpKLBreachLevelTF = true;     // The close beyond is on the line's
 input double InpKLBreachBufATR  = 0.0;      // ... beyond the line by this x ATR of that TF
 input bool   InpKLLockAllTiers  = true;     // The lock covers every tier (false = the TP tier and smaller only)
 
-input group  "Reversal at a key level (notes §75 — lost in simulation, off)"
-input bool   InpRevEnabled      = false;    // Entry signal at a key line opens the opposite trade instead
-input double InpRevTolATR       = 0.25;     // Price within this x ATR(tier) of a line of a TF above the tier
+input group  "Reversal at a key level (notes §75)"
+input bool   InpRevEnabled      = true;     // Entry signal at a key line the last M1 bar TOUCHED opens the opposite trade instead
+input ENUM_REV_TOUCH InpRevTouchMode = REVT_PRICE; // 1 = price touches the line now, 2 = the line's own candle touched it
+input double InpRevTolATR       = 0.0;      // Widen the touching range by this x ATR(tier) (0 = a real touch)
 input double InpRevStopATR      = 1.0;      // Stop this x ATR(tier) beyond the line
 input double InpRevMinRR        = 0.0;      // Skip when (distance to the kijun) / (distance to the stop) is below this
 input double InpRevLotMult      = 1.0;      // x the trend trade's lots (the same risk rule)
@@ -330,12 +339,14 @@ double   lockLine[MAX_SYMS];
 int      lockLi[MAX_SYMS];              // TF index the close beyond is read on
 datetime lockBar[MAX_SYMS];             // open time of that TF's bar holding the exit
 int      revState[MAX_SYMS][LEVELS];    // reversal trade per tier: 0 / 1 / -1
-// First-touch count per key line (TF i, line q). A touch is a closed M1 bar within 0.1 x ATR(H4) of
-// the line; it ends once price is 0.5 x ATR(H4) away. A line whose value moves 0.5 x ATR(H4) from its
+// First-touch count per key line (TF i, line q). A touch is a closed M1 bar whose range reaches the
+// line; it ends once price is 0.5 x ATR(H4) away. A line whose value moves 0.5 x ATR(H4) from its
 // first-touch value counts as a new line. In memory only.
 int      tchN[MAX_SYMS][KLN][4];
 double   tchV[MAX_SYMS][KLN][4];
 bool     tchIn[MAX_SYMS][KLN][4];
+datetime tchBar[MAX_SYMS][KLN][4];      // REVT_TF_BAR: the line-TF candle being watched
+bool     tchBarHit[MAX_SYMS][KLN][4];   // ... and whether it has touched the line
 
 int MAGIC = 20260895;   // §75 HTF key-level TP experiment (the live VPS build runs 20260858)
 
@@ -402,7 +413,11 @@ int OnInit()
       holdUntil[s] = 0; lockDir[s] = 0; lockTier[s] = 0; lockLine[s] = 0.0; lockLi[s] = 0; lockBar[s] = 0;
       for(int l = 0; l < LEVELS; l++) ResetKLMemory(s, l);
       for(int i = 0; i < KLN; i++)
-         for(int q = 0; q < 4; q++) { tchN[s][i][q] = 0; tchV[s][i][q] = 0.0; tchIn[s][i][q] = false; }
+         for(int q = 0; q < 4; q++)
+         {
+            tchN[s][i][q] = 0; tchV[s][i][q] = 0.0; tchIn[s][i][q] = false;
+            tchBar[s][i][q] = 0; tchBarHit[s][i][q] = false;
+         }
       for(int i = 0; i < KLN; i++)
       {
          klIch[s][i] = iIchimoku(syms[s], klTf[i], Tenkan, Kijun, SenkouB);
@@ -1345,26 +1360,90 @@ bool KLNext(int s, int lvl, int dir, double floorPx, double &L, int &li)
    return li >= 0;
 }
 
-// The line above tier lvl closest to px, if within tol (with InpRevFirstTouch: only a line on
-// its first touch, or not yet touched).
-bool KLNear(int s, int lvl, double px, double tol, double &L, int &li)
+// The range a touch is tested on for key TF i: the last closed M1 bar (REVT_PRICE) or the line-TF
+// candle holding it, from its open (REVT_TF_BAR).
+bool KLTouchRange(int s, int i, double &lo, double &hi, datetime &bar)
+{
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 1, 1, m1) != 1) return false;
+   lo = m1[0].low; hi = m1[0].high; bar = m1[0].time;
+   if(InpRevTouchMode != REVT_TF_BAR) return true;
+   int sh = iBarShift(syms[s], klTf[i], m1[0].time);
+   if(sh < 0) return false;
+   bar = iTime(syms[s], klTf[i], sh);
+   hi  = iHigh(syms[s], klTf[i], sh);
+   lo  = iLow(syms[s], klTf[i], sh);
+   if(sh == 0)                       // forming candle: only up to the last closed M1 bar
+   {
+      MqlRates r[];
+      int n = CopyRates(syms[s], PERIOD_M1, bar, m1[0].time, r);
+      if(n <= 0) return false;
+      hi = r[0].high; lo = r[0].low;
+      for(int b = 1; b < n; b++) { if(r[b].high > hi) hi = r[b].high; if(r[b].low < lo) lo = r[b].low; }
+   }
+   return true;
+}
+
+// The line above tier lvl that the last closed M1 bar TOUCHED (its low..high, widened by tol,
+// reaches the line), the one nearest px if several; with InpRevFirstTouch only a line on its first touch.
+bool KLTouched(int s, int lvl, double px, double tol, double &L, int &li)
 {
    li = -1; L = 0.0;
-   double best = tol;
+   double best = 0.0;
    for(int i = KLFirst(lvl); i < KLN; i++)
+   {
+      double lo, hi; datetime bar;
+      if(!KLTouchRange(s, i, lo, hi, bar)) continue;
       for(int q = 0; q < 4; q++)
       {
          double v;
          if(!KLLine(s, i, q, v)) continue;
          if(InpRevFirstTouch && tchN[s][i][q] > 1) continue;
-         if(MathAbs(v - px) <= best) { best = MathAbs(v - px); L = v; li = i; }
+         if(v < lo - tol || v > hi + tol) continue;
+         if(li < 0 || MathAbs(v - px) < best) { best = MathAbs(v - px); L = v; li = i; }
       }
+   }
    return li >= 0;
 }
 
 // Count the touches of every key line from the last closed M1 bar (for the first-touch rule).
 void KLUpdateTouches(int s)
 {
+   if(InpRevTouchMode == REVT_TF_BAR)
+   {
+      // A touch is a line-TF candle reaching the line; it ends once a whole candle closes without
+      // touching; a line that moves 0.5 x ATR(its TF) from its first-touch value is a new line.
+      for(int i = 0; i < KLN; i++)
+      {
+         double lo, hi, ai[1]; datetime bar;
+         if(!KLTouchRange(s, i, lo, hi, bar)) continue;
+         if(CopyBuffer(klAtr[s][i], 0, 1, 1, ai) <= 0 || ai[0] <= 0) continue;
+         for(int q = 0; q < 4; q++)
+         {
+            double v;
+            if(!KLLine(s, i, q, v)) continue;
+            if(tchN[s][i][q] > 0 && MathAbs(v - tchV[s][i][q]) > 0.5 * ai[0])
+            {
+               tchN[s][i][q] = 0; tchIn[s][i][q] = false;
+            }
+            if(bar != tchBar[s][i][q])
+            {
+               if(tchBar[s][i][q] != 0 && !tchBarHit[s][i][q]) tchIn[s][i][q] = false;
+               tchBar[s][i][q] = bar; tchBarHit[s][i][q] = false;
+            }
+            if(lo <= v && hi >= v)
+            {
+               tchBarHit[s][i][q] = true;
+               if(!tchIn[s][i][q])
+               {
+                  tchN[s][i][q]++; tchIn[s][i][q] = true;
+                  if(tchN[s][i][q] == 1) tchV[s][i][q] = v;
+               }
+            }
+         }
+      }
+      return;
+   }
    double a4[1];
    if(CopyBuffer(klAtr[s][KL_H4], 0, 1, 1, a4) <= 0 || a4[0] <= 0) return;
    MqlRates m1[];
@@ -1379,7 +1458,7 @@ void KLUpdateTouches(int s)
          {
             tchN[s][i][q] = 0; tchIn[s][i][q] = false;              // the line moved: a new line
          }
-         bool nearL = m1[0].low <= v + 0.1 * a4[0] && m1[0].high >= v - 0.1 * a4[0];
+         bool nearL = m1[0].low <= v && m1[0].high >= v;                // the M1 bar touched the line
          if(nearL && !tchIn[s][i][q])
          {
             tchN[s][i][q]++; tchIn[s][i][q] = true;
@@ -1635,7 +1714,7 @@ bool TryReversal(int s, int lvl, int dir)
    double ra  = a[0];
    double bid = SymbolInfoDouble(sym, SYMBOL_BID), ask = SymbolInfoDouble(sym, SYMBOL_ASK);
    double L; int li;
-   if(!KLNear(s, lvl, (dir == 1) ? ask : bid, InpRevTolATR * ra, L, li)) return false;
+   if(!KLTouched(s, lvl, (dir == 1) ? ask : bid, InpRevTolATR * ra, L, li)) return false;
    double kj[1];
    if(CopyBuffer(ich[s][lvl + 1], 1, 1, 1, kj) <= 0 || kj[0] <= 0) return false;
    int    r  = -dir;
