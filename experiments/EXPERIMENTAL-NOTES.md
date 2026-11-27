@@ -8563,3 +8563,460 @@ Everything else stays off.
 - **Finding 3b** rests on the documented `CopyRates` behaviour.
 - **2026 as a compounded account.** The simulator does not reproduce MT5's
   2026 figure at the live bands (§69), so the 2026 columns are the weakest.
+
+## 75. HTF key-level TP — take profit on a higher timeframe's lines, then wait for a close beyond
+
+**File:** `experimental-htf-keylevel-tp-vps-ea.mq5`
+**Magic number:** `20260895`
+**Simulator:** `utilities/vps-sim/vpssim.py` (new `kl`/`rev` switches) and `utilities/vps-sim/keylevel_study.py`
+**Raw output:** `utilities/vps-sim/results/2026-11-27-keylevels/`
+
+User request (2026-11-27), built on the live VPS EA only. A trend trade runs
+toward a line of a higher timeframe — a tenkan, kijun, Span A or Span B of M30,
+H1, H4, D1, W1 or MN1 — and should take profit there, since a retrace is
+expected after the touch. Analyse it, and work out how re-entries should be
+handled: after a breach and continuation, or by waiting for alignment again.
+Added in the same request:
+- If the touched level is both an H4 and a D1 line, wait at least for the next
+  H4 bar before any new trade, even with M1, M5 and M15 aligned.
+- Fade the alignment at the level: a buy signal there opens a sell, with TP at
+  the tier's kijun.
+- If several tiers fade together (M15, M30, H1), every reversal takes profit
+  at the lowest tier's kijun.
+- Reversal lots follow the same risk rule as the trend trade.
+- A touch in the last 10 minutes of the line's own candle is held, and the
+  trade closes at that candle's close.
+
+The live file `ichimoku-h4-m1-vps-ea.mq5` was not touched.
+
+### Status
+
+- **Not compiled in MetaEditor and not run in the MT5 tester.** Parsed and
+  type-checked with `utilities/mq5-check/mq5check.py` (the stub gained W1, MN1,
+  `iBarShift`, `iClose`, `PeriodSeconds`, `StructToTime`, `POSITION_TP`,
+  `POSITION_IDENTIFIER`, `HistorySelectByPosition` and the deal reason/price).
+- Every figure below is a simulation on HistData XAUUSD M1 bid bars,
+  2023-04-15 to 2026-11-13, constant $0.30 spread, no swaps, no slippage. The
+  key lines are computed on a second file from 2015 (`download.py --from-year
+  2015 --out XAUUSD-long`): the MN1 cloud needs 78 months of history.
+- With every new switch off, `vpssim.py` gives the same trade list and equity
+  curve as before (checked from $100 and $10,000 and on a §74 switch set). It
+  still reproduces its MT5 calibration.
+
+### What the EA does
+
+All of it sits behind inputs; with `InpKLTP = false` and `InpRevEnabled = false`
+the trading logic is the live build's.
+
+1. **Key-level TP** (`InpKLTP`, on). A tier targets only the lines of TFs
+   above its own, and by default only those of H4, D1, W1 and MN1
+   (`InpKLMinTF = KLTF_H4`, user, after the first results): M15, M30 and H1
+   target H4..MN1, and H4 targets D1, W1 and MN1. The
+   target is the nearest line at least `InpKLFloorATR` (1.0) × ATR(tier)
+   beyond the entry. It is sent as a broker TP and refreshed every closed M1
+   bar. A line that moves onto the price closes the trade at market. Lines
+   are read on each TF's last closed bar (shift 1), so they do not move
+   inside a bar; the spans are the cloud drawn under that bar. The kumo-touch
+   exit, break-even, the chandelier and the disaster stop are unchanged, and
+   every stop modify now keeps the TP.
+2. **Late-candle hold** (`InpKLLateMin`, 10). A touch inside the last 10
+   minutes of the line's own candle does not take profit. The TP is removed
+   and the trade is closed at market when that candle closes.
+3. **H4+D1 hold** (`InpKLConfHold`, on, `InpKLConfTolATR` 0.25). This applies
+   when a key-level exit has an H4 line and a D1, W1 or MN1 line within
+   0.25 × ATR(H4) of the exit price. Every new trend entry, on every tier and
+   in both directions, is then blocked until the next H4 bar opens.
+4. **Re-entry lock** (`InpKLReentry`, default 2 = close beyond). After a
+   key-level exit, no tier re-enters the same direction until a bar of the
+   line's own TF (`InpKLBreachLevelTF`) closes beyond the line. The bar holding
+   the exit must have closed. Mode 1 waits instead for the TP tier's chain to
+   break and re-form; mode 3 takes whichever comes first.
+   `InpKLLockAllTiers` (on) applies the lock to every tier.
+5. **Reversal** (`InpRevEnabled`, **on** since the second revision below). A
+   tier whose every entry gate passes, on a closed M1 bar whose range touched
+   a line above the tier (first version: price within 0.25 × ATR(tier) of
+   it), opens the opposite trade instead:
+   - The stop is 1 × ATR(tier) beyond the line.
+   - The lots are the trend trade's (`RiskLots`, the tier's % against
+     2 × ATR).
+   - Every smaller tier that signals in the same minute fades too, and no
+     trend trade opens that minute.
+   - All open reversals take profit at the kijun of the lowest tier with
+     one open; that kijun reaching the price closes them.
+   - Reversals carry their own comment (`Exp RevSell M15`), so the sync and
+     the R2 unknown-position guard know them.
+   - **First touch only** (`InpRevFirstTouch`, on). A touch is a closed M1
+     bar whose range reaches the line (first revision: within 0.1 × ATR(H4)). It ends once price is
+     0.5 × ATR(H4) away, and the next touch of that line is a second touch,
+     which is disregarded. A line whose value moves 0.5 × ATR(H4) from its
+     first-touch value counts as a new line. The count is kept in memory.
+
+A key-level TP that the broker fills is read back from the deal history
+(`DEAL_REASON_TP`), so the hold and the lock apply to it as well. **The hold and
+the lock are kept in memory only: a restart clears them.**
+
+### What price does after a touch
+
+The 410 key-level TPs of the plain TP run, by the TF of the line touched. The
+move is in ATR(tier) from the line; "run" is further in the trade's direction,
+"retrace" is back against it (`events.md`):
+
+| Line TF | Touches | Median run, 4 bars | Median retrace, 4 bars | Retrace > run | Median net after 16 bars | Line-TF bar closed beyond |
+|---|---|---|---|---|---|---|
+| M30 | 25 | 4.24 | −1.44 | 8% | +3.07 | 92% |
+| H1 | 26 | 3.32 | −1.26 | 19% | +1.59 | 85% |
+| H4 | 99 | 1.06 | 1.28 | 58% | −0.48 | 40% |
+| D1 | 153 | 0.97 | 1.18 | 54% | +0.30 | 49% |
+| W1 | 88 | 0.65 | 1.38 | 64% | −0.91 | 40% |
+| MN1 | 19 | 1.48 | 0.97 | 47% | +0.63 | 32% |
+
+- **M30 and H1 lines do not stop the move.** Price closed beyond them 85–92%
+  of the time and kept going. Taking profit there gives the trend away.
+- **H4, D1 and W1 lines do.** Retrace beat continuation 54–64% of the time,
+  and after 16 tier bars the price was back behind an H4 or W1 line more
+  often than not. These are the levels the idea is about.
+- About half of all touches end with the line-TF bar closing beyond the line.
+  So whether the level holds is decided at that close, which is what the
+  re-entry lock waits for.
+
+### Results
+
+**Edge at a fixed 0.1 lot**, PF per oz (`edge.md` has every row and tier):
+
+| Config | 2023 | 2024 | 2025 | 2026 | 2023–26 | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| live | 0.95 | 1.05 | 1.41 | 1.35 | 1.28 | +6,917 | 5,701 |
+| TP only, floor 1 ATR | 0.96 | 1.06 | 1.43 | 1.34 | 1.28 | +7,240 | 5,845 |
+| TP only, D1+ lines | 0.96 | 1.06 | 1.43 | 1.39 | 1.30 | +7,625 | 5,788 |
+| TP + late hold 10 min | 0.96 | 1.06 | 1.43 | 1.33 | 1.28 | +7,166 | 5,845 |
+| TP + H4+D1 hold | 0.96 | 1.06 | 1.42 | 1.32 | 1.27 | +6,855 | 5,812 |
+| TP + lock: realign | 0.97 | 1.09 | 1.40 | 1.38 | 1.30 | +7,578 | 5,791 |
+| TP + lock: tier-TF close beyond | 0.95 | 1.10 | 1.40 | 1.40 | 1.31 | +7,228 | 5,432 |
+| **TP + lock: line-TF close beyond** | 0.99 | 1.09 | 1.48 | 1.83 | **1.48** | +8,338 | 4,555 |
+| TP + lock: line-TF close or realign | 0.97 | 1.09 | 1.40 | 1.38 | 1.30 | +7,573 | 5,790 |
+| D1+ lines + line-TF lock | 0.97 | 1.14 | 1.67 | 1.95 | 1.56 | +8,757 | 4,395 |
+| **EA default** (TP + late 10 + H4+D1 hold + line-TF lock) | 0.99 | 1.09 | 1.48 | 1.83 | 1.48 | +8,336 | 4,554 |
+| reversal only (no TP) | 0.95 | 1.06 | 1.36 | 1.28 | 1.24 | +6,299 | 6,045 |
+| EA default + reversal | 0.98 | 1.11 | 1.39 | 1.55 | 1.37 | +7,868 | 5,276 |
+
+The reversal trades themselves, EA default + reversal: rM15 PF 0.89 (369
+trades), rM30 0.77 (282), rH1 1.06 (82). Stop distance 2 ATR, an R:R ≥ 1 gate
+and M15-only fades did not change the picture. With D1+ lines only, rH1 made
+PF 1.42 on 84 trades, too few to trust.
+
+**67 accounts, 12 months each, every two weeks** (`roll.md`):
+
+| Config | Live bands $100: ruined / below start / median end | Live bands $1,000 | §74 recommended × 0.5, $100 | §74 recommended × 0.5, $1,000 |
+|---|---|---|---|---|
+| live | 59% / 60% / $0 | 10% / 51% / $469 | 0% / 12% / $176 | 0% / 16% / $1,719 |
+| TP only | 59% / 59% / $0 | 13% / 51% / $466 | 0% / 13% / $193 | 0% / 16% / $1,770 |
+| TP + lock: realign | 56% / 59% / $0 | 9% / 51% / $742 | 0% / 10% / $199 | 0% / 16% / $1,858 |
+| **EA default** | **26%** / 53% / $84 | **1%** / 40% / $7,916 | 0% / **0%** / $202 | 0% / **0%** / $1,926 |
+| EA default + reversal | 21% / 44% / $197 | 1% / 32% / $11,258 | 0% / 0% / $206 | 0% / 0% / $1,962 |
+| D1+ lines + line-TF lock | 13% / 37% / $625 | 1% / 31% / $15,264 | 0% / 0% / $226 | 0% / 0% / $2,278 |
+
+**Placebo** (`placebo.md`): every key line moved 1% away (about one to two
+H4 ATRs), so the "levels" no longer mean anything:
+
+| Config | Real lines | Lines × 1.01 | Lines × 0.99 |
+|---|---|---|---|
+| TP + line-TF lock: PF / $/oz | 1.48 / +8,338 | 1.36 / +6,050 | 1.42 / +6,924 |
+| D1+ lines + line-TF lock | 1.56 / +8,757 | 1.42 / +6,844 | 1.47 / +8,136 |
+| EA default | 1.48 / +8,336 | 1.38 / +6,263 | 1.41 / +6,822 |
+
+### Reading
+
+- **Taking profit at the line alone changes almost nothing.** PF 1.28 →
+  1.28, ruin unchanged. Price either retraces from the line (H4/D1/W1) or
+  runs through it (M30/H1). A trade that would have ridden through loses
+  about what a retraced one saves.
+- **The gain is in the re-entry rule.** Without a lock, the same tier
+  re-opens the next minute at the line, which buys the touch. A lock that
+  waits for **a close of the line's own TF beyond the line** lifts PF from
+  1.28 to 1.48 in every year, cuts live-band ruin from $100 from 59% to 26%
+  and from $1,000 from 10% to 1%, and removes every below-start account on
+  the §74 base.
+- **Waiting for alignment again is not enough.** The realign lock (1.30) and
+  "close or realign" (1.30) release in minutes: the M1–M15 chain flickers.
+  A close on the tier's TF (1.31) is also too quick. The close has to be on
+  the line's own TF: an H4 close beyond an H4 kijun, a D1 close beyond a D1
+  kijun.
+- **The placebo shows that most of the gain is the waiting, not the line.**
+  Lines moved 1% away still lift PF to 1.36–1.47. The real lines add about
+  +0.06 to +0.12 PF and $1,400–2,300 per oz on top, in every comparison.
+  Treat the lock as a pause-after-a-run rule that real levels make better, not
+  as proof that these levels hold.
+- **The H4+D1 hold and the late-candle hold are neutral.** The lock already
+  blocks the trend direction, and the hold only adds a short block on the
+  other side. Both are kept on because they were asked for and cost nothing.
+- **The reversal does not work as a fade at these settings.** The M15 and
+  M30 fades lose at a fixed lot, and the stop is hit about twice as often as
+  the kijun TP. At the live bands it improved the rolling-account figures,
+  but the fixed-lot edge says that is path luck, not edge. Off by default.
+- **D1+ lines only is the strongest variant** (PF 1.56, live-band ruin 13%).
+  It is a tuned choice, chosen after seeing the table. `InpKLMinTF = KLTF_D1`
+  is the switch to try in the tester.
+
+### Answers to the re-entry questions
+
+- **After a key-level TP, when to re-enter the same way?** When a bar of the
+  touched line's own TF closes beyond it. A tier-TF close, or the chain
+  re-aligning, comes too early and gives back most of the gain.
+- **On a breach with continuation, how to re-enter properly?** The release
+  is that close beyond the line. The next aligned tier then enters through
+  the normal gates, and its TP becomes the next line beyond. The breached line
+  is now behind the price, so it is no longer a target. A buffer of
+  0.25 × ATR on the close (`InpKLBreachBufATR`) did a little better (PF 1.53)
+  but is a tuned value. It is left at 0.
+- **Is it better to wait until alignment happens again?** Alignment alone is
+  not a strong enough condition after a key-level touch (realign lock PF 1.30
+  against 1.48). Alignment is still required for the re-entry; it is just not
+  what releases the lock.
+
+### Not verified
+
+- **MetaEditor compile and every MT5 tester run.** The broker TP, the
+  deal-history read of a TP fill, the late-candle hold and the reversal
+  comments were read, not run.
+- **Hold and lock across a restart.** They are not persisted.
+- **XM's MN1/W1 history depth.** A line that cannot be computed is skipped.
+- **The simulator's intrabar order.** When a stop and a TP sit inside one M1
+  bar, the stop is taken first.
+- **One feed, constant spread, no swaps.** As in §69 and §74.
+
+### Revision: H4+ lines and first-touch reversals (same day)
+
+After reading the results, the user asked for two changes. TPs now go only on
+H4, D1, W1 and MN1 lines, since M30 and H1 lines do not stop the move. A
+reversal now opens only on a line's first touch; a second touch is
+disregarded. Both are now EA defaults (the reversal itself stays off). The
+tables above keep the M30+ figures for comparison; the files in
+`results/2026-11-27-keylevels/` are the re-run with these defaults.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| live | 0.95 | 1.05 | 1.41 | 1.35 | 1.28 | +6,917 | 5,701 |
+| EA default, M30+ lines (first version) | 0.99 | 1.09 | 1.48 | 1.83 | 1.48 | +8,336 | 4,554 |
+| **EA default, H4+ lines** | 0.99 | 1.09 | 1.49 | 1.81 | **1.45** | +7,673 | 4,531 |
+| + reversal, any touch | 0.98 | 1.12 | 1.41 | 1.54 | 1.35 | +7,420 | 5,199 |
+| + reversal, first touch only | 0.99 | 1.10 | 1.42 | 1.59 | 1.37 | +7,321 | 4,911 |
+| + reversal, first touch, D1+ lines | 0.96 | 1.14 | 1.62 | 1.79 | 1.51 | +8,814 | 4,657 |
+
+The first-touch reversal trades themselves: rM15 PF 0.83 (181 trades), rM30
+0.88 (158) and rH1 0.89 (43). With D1+ lines: rM15 1.13 (117), rM30 1.03
+(104) and rH1 0.89 (42).
+
+| Rolling accounts | Live bands $100: ruined / below start | Live bands $1,000 | §74 × 0.5, $100 | §74 × 0.5, $1,000 |
+|---|---|---|---|---|
+| live | 59% / 60% | 10% / 51% | 0% / 12% | 0% / 16% |
+| EA default, M30+ lines | 26% / 53% | 1% / 40% | 0% / 0% | 0% / 0% |
+| **EA default, H4+ lines** | **24%** / 51% | **1%** / 40% | 0% / **0%** | 0% / **0%** |
+| + reversal, first touch only | 24% / 49% | 1% / 35% | 0% / 0% | 0% / 0% |
+
+Placebo for the new default (lines moved 1%): PF 1.42 against 1.45 for the
+real lines.
+
+- **H4+ lines cost almost nothing against M30+.** PF 1.45 against 1.48, and
+  ruin from $100 is 24% against 26%. Taking profit at an M30 or H1 line gave
+  up the M15 tier's continuation (M15 PF 1.29 → 1.24).
+- **The re-entry lock still carries the result.** With H4+ lines, lines
+  moved 1% away do almost as well as the real ones (1.42 against 1.45). The
+  edge is the pause until a close confirms the breakout, not the exact line.
+- **First touch is the right filter for a fade, but not enough.** It cut the
+  reversal count by 44% and their total loss by about a third. They still lose
+  on every tier. On D1+ lines the first-touch reversals are about break-even
+  (rM15 1.13, rM30 1.03), too few trades to separate from luck. The
+  reversal stays off.
+
+### Second revision: the reversal on a real M1 touch (same day)
+
+The user asked for the reversal to need a real touch. The last closed M1
+bar's range must reach the H4, D1, W1 or MN1 tenkan, kijun, Span A or Span
+B, instead of price coming within 0.25 × ATR(tier) of it. The first-touch
+count uses the same bare range. `InpRevTolATR` is now 0 (it widens the range)
+and the reversal is **on** by default.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| live | 0.95 | 1.05 | 1.41 | 1.35 | 1.28 | +6,917 | 5,701 |
+| trend part only (H4+ lines, TP, holds, lock) | 0.99 | 1.09 | 1.49 | 1.81 | 1.45 | +7,673 | 4,531 |
+| + reversal within 0.25 ATR, first touch (previous) | 0.99 | 1.10 | 1.42 | 1.59 | 1.37 | +7,321 | 4,911 |
+| + reversal on a real touch, any touch | 1.03 | 1.10 | 1.41 | 1.61 | 1.38 | +7,801 | 5,134 |
+| **+ reversal on a real touch, first touch (EA default)** | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | **+8,023** | 4,919 |
+| same, D1+ lines | 0.99 | 1.14 | 1.63 | 1.82 | 1.53 | +9,112 | 4,664 |
+
+| Reversal trades, EA default | rM15 | rM30 | rH1 |
+|---|---|---|---|
+| PF (trades) | 1.12 (184) | 1.13 (161) | 1.38 (40) |
+| TP / kijun cross / stop | 58 / 10 / 116 | 56 / 11 / 94 | 18 / 3 / 19 |
+
+All reversals together by year: 2023 PF 1.56 (62 trades), 2024 1.15 (105),
+2025 0.96 (105), 2026 1.22 (113).
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $1,000 | §74 × 0.5, $1,000 |
+|---|---|---|---|
+| live | 59% / 60% / $0 | 10% / 51% / $469 | 0% / 16% / $1,719 |
+| trend part only | 24% / 51% / $96 | 1% / 40% / $7,981 | 0% / 0% / $1,918 |
+| **EA default (+ real-touch reversal)** | **18%** / 46% / $162 | 1% / 38% / $8,262 | 0% / 0% / $2,005 |
+| EA default, D1+ lines | 16% / 38% / $386 | 1% / 29% / $14,646 | 0% / 0% / $2,285 |
+
+- **The touch is what makes the fade work.** The same reversal, the same
+  stop and the same kijun TP turn from losing (rM15 0.83, rM30 0.88) to
+  winning (1.12, 1.13) when price must actually reach the line. The likely
+  reason, not measured separately: within 0.25 ATR, many fades opened before
+  the line had been tested, and price then ran on to the line and through
+  the stop.
+- **First touch still matters.** On a real touch, fading every touch gives
+  rM15 1.01 and rM30 0.97; the first touch only gives 1.12 and 1.13.
+- **The edge is thin.** PF 1.1–1.4 on 385 trades, with 2025 below 1. The
+  stop is still hit about twice as often as the TP. The money comes from
+  the TP being further away (the kijun) than the stop (1 ATR beyond the
+  line). A 2 ATR stop was worse (rM15 0.88). An R:R ≥ 1 gate changed
+  nothing, because nearly every fade already has it.
+- **The account figures improve.** Ruin from $100 falls 24% → 18%, the
+  median end rises, and $/oz rises. The account PF dips (1.45 → 1.41)
+  because the reversals' edge is thinner than the trend trades'. Run it in
+  the tester with the reversal on and off (`InpRevEnabled`) before trusting
+  either.
+
+### Third revision: whose price touches the line (same day)
+
+The user clarified that the touch is the price of the line's own timeframe:
+H4 price touching the H4 kijun, D1 price touching the D1 tenkan. That can
+be read two ways, and both are in the EA (`InpRevTouchMode`):
+
+1. **`REVT_PRICE` (default).** Price reaches the H4, D1, W1 or MN1 line now:
+   the last closed M1 bar's range reaches it. That is the moment the H4
+   candle touches the H4 line. This is the second revision above, unchanged.
+   M1 Ichimoku lines are never used.
+2. **`REVT_TF_BAR`.** The line's own candle has reached the line at any time
+   since it opened: the H4 candle's range for an H4 line, the D1 candle's
+   for a D1 line. A first touch is then the first candle of that TF to touch
+   the line. It ends once a whole candle closes without touching, and a line
+   that moves 0.5 × ATR(its TF) from its first-touch value is a new line.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| trend part only | 0.99 | 1.09 | 1.49 | 1.81 | 1.45 | +7,673 | 4,531 |
+| + reversal, price touch (mode 1, default) | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | +8,023 | 4,919 |
+| + reversal, own candle touch (mode 2) | 0.93 | 1.04 | 1.35 | 1.33 | 1.25 | +7,568 | 7,326 |
+| + reversal, mode 2, any touch | 0.91 | 1.05 | 1.30 | 1.22 | 1.19 | +6,524 | 8,087 |
+| + reversal, mode 2, D1+ lines | 0.92 | 1.04 | 1.56 | 1.42 | 1.32 | +8,773 | 6,796 |
+
+| Reversal trades | rM15 | rM30 | rH1 | Ruined from $100 (live bands) |
+|---|---|---|---|---|
+| mode 1, price touch | 1.12 (184) | 1.13 (161) | 1.38 (40) | 18% |
+| mode 2, own candle touch | 0.98 (1,460) | 0.90 (1,037) | 0.91 (361) | 37% |
+
+By year, the mode 2 reversals scored 0.86, 0.95, 1.02 and 0.92. On the §74
+base from $1,000, 26% of accounts ended below their start, against 0% in
+mode 1.
+
+- **Mode 2 fades breakouts.** Once the H4 candle has touched the H4 kijun,
+  the line stays "touched" for the rest of those four hours. A buy signal
+  later in that candle, with price already well past the line, still opens
+  a sell. The reversal count rises from 385 to 2,858, and they lose on
+  every tier.
+- **Mode 1 is the touch that works**: the fade opens while price is at the
+  line. It stays the default. Mode 2 is there to compare in the MT5 tester.
+
+### Fourth revision: one reversal per line (same day)
+
+The user's rule: deal only with the first touch. Once a line has been faded
+(say the H4 kijun), it is never faded again, whether the next touch comes in
+the same H4 candle, the next one or later. The next reversal has to come
+from a different line on its own first touch (say the SSB), and then that
+line is used up too.
+
+What changed (`InpRevOncePerLine`, on):
+- **Used up.** The first-touch rule alone still allowed several reversals
+  during that first touch: a second tier a few minutes later, or a new
+  reversal after the first one closed. Now a line that has been faded is
+  never faded again. Every tier that fades in the same minute still opens,
+  as in the multi-tier rule.
+- **New line.** A line is new again only once its value has moved
+  `InpRevNewLineATR` (1.0) × ATR(its own TF) from the faded value, as when
+  the H4 kijun steps to a new level. The same distance resets the
+  first-touch count of a line touched without a trade.
+- **Saved across restarts.** The touch counts and the faded lines are kept
+  in terminal global variables (`KL20260895_<symbol>_<TF>_<line>_N/V/U/UV`),
+  so a restart does not forget them.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| trend part only | 0.99 | 1.09 | 1.49 | 1.81 | 1.45 | +7,673 | 4,531 |
+| + reversal, first touch, repeats allowed (third revision) | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | +8,023 | 4,919 |
+| **+ reversal, once per line (EA default)** | 1.01 | 1.10 | 1.44 | 1.73 | **1.43** | +7,986 | 4,784 |
+| same, new line at 0.5 ATR | 1.04 | 1.10 | 1.43 | 1.72 | 1.43 | +8,065 | 4,837 |
+| same, new line at 2.0 ATR | 1.02 | 1.09 | 1.46 | 1.71 | 1.43 | +7,906 | 4,720 |
+| same, D1+ lines | 0.99 | 1.16 | 1.65 | 1.90 | 1.57 | +9,257 | 4,535 |
+
+| Reversal trades | rM15 | rM30 | rH1 | All, by year |
+|---|---|---|---|---|
+| repeats allowed | 1.12 (184) | 1.13 (161) | 1.38 (40) | 1.56 / 1.15 / 0.96 / 1.22 |
+| **once per line** | **1.20 (120)** | **1.15 (109)** | **1.54 (22)** | 1.45 / 1.20 / 0.86 / 1.41 |
+| once per line, D1+ lines | 1.81 (59) | 1.52 (58) | 1.65 (23) | — |
+
+Once per line, the 251 reversals came from 132 separate events. With
+repeats allowed there were 385.
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $1,000 | §74 × 0.5, $1,000 |
+|---|---|---|---|
+| trend part only | 24% / 51% / $96 | 1% / 40% / $7,981 | 0% / 0% / $1,918 |
+| repeats allowed | 18% / 46% / $162 | 1% / 38% / $8,262 | 0% / 0% / $2,005 |
+| **once per line** | 21% / 49% / $124 | 1% / 37% / $11,269 | 0% / 1% / $2,104 |
+
+- **Each fade is better, and there are a third fewer.** The repeat fades
+  were the weaker ones: the profit factor of the reversals rose on every
+  tier.
+- **The new-line distance does not matter much.** Moving it from 0.5 to
+  2.0 ATR changes the account PF by nothing (1.43 throughout). The rule
+  is not tuned on it.
+- **The account totals hardly move.** $/oz is about the same as with
+  repeats allowed. Ruin from $100 is 21% against 18%, with three accounts
+  in 68 deciding the difference. The case for the rule is the per-trade
+  quality, not the total.
+- **2025 is still the weak year** for the fades (PF 0.86).
+- **D1+ lines are again the strongest**, with reversal PFs of 1.5–1.8, on
+  under 60 trades per tier.
+
+### Fifth revision: reversals at a quarter of the trend risk (same day)
+
+User instruction: a reversal risks a quarter of what the trend trade on that
+tier would. `InpRevLotMult` is now 0.25. The lot is the trend trade's
+`RiskLots` × 0.25, floored to the lot step and lifted to the broker minimum.
+The fixed-lot tables above do not change: every trade there is at 0.1 lot.
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $1,000 | Live bands $10,000: below start / median / median DD | §74 × 0.5, $100 | §74 × 0.5, $1,000 |
+|---|---|---|---|---|---|
+| trend part only | 24% / 51% / $96 | 1% / 40% / $7,981 | 6% / $23,845 / 41% | 0% / 0% / $191 | 0% / 0% / $1,918 |
+| reversal at full trend lots | 21% / 49% / $124 | 1% / 37% / $11,269 | 4% / $24,129 / 41% | 0% / 1% / $210 | 0% / 1% / $2,104 |
+| **reversal at 1/4 lots (EA default)** | 24% / 49% / $103 | 1% / 40% / $8,001 | 4% / $24,548 / 39% | 0% / 0% / $203 | 0% / 0% / $2,010 |
+
+- **As expected, it sits between no reversal and full-size reversals.** It
+  keeps a little of their gain, with a slightly lower drawdown. On the §74
+  base, no account ends below its start.
+- **On a small account the minimum lot overrides it.** 94% of the reversals
+  from $100 and 65% from $1,000 are lifted to the 0.1-lot minimum, so there
+  they are not a quarter of anything. From $10,000, 8% are lifted. The
+  quarter is real only once the trend lots are well above 0.4 lot.
+
+### Sixth revision: reversals at half the trend risk (same day)
+
+After comparing sizes, the user chose half: `InpRevLotMult` is now 0.5.
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $10,000: median / median DD | §74 × 0.5, $100: below start / median | §74 × 0.5, $1,000: below start / median / median DD |
+|---|---|---|---|---|
+| trend part only | 24% / 51% / $96 | $23,845 / 41% | 0% / $191 | 0% / $1,918 / 23% |
+| reversal at 1/4 lots | 24% / 49% / $103 | $24,548 / 39% | 0% / $203 | 0% / $2,010 / 23% |
+| **reversal at 1/2 lots (EA default)** | 22% / 47% / $142 | $24,278 / 40% | 0% / $203 | 0% / $2,064 / 24% |
+| reversal at full lots | 21% / 49% / $124 | $24,129 / 41% | 1% / $210 | 1% / $2,104 / 25% |
+
+- **Half keeps more of the reversals' profit than a quarter**, for one point
+  more median drawdown. On the §74 base, no account is ruined or ends below
+  its start.
+- **The gaps between 1/4, 1/2 and full are one or two accounts in 68.**
+  That is within the noise; the size of a thin edge changes little.
+- **The minimum lot still lifts most of them on a small account.** At half,
+  75% of the reversals from $100 and 42% from $1,000 trade 0.1 lot.
+

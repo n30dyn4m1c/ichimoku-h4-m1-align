@@ -8,20 +8,23 @@ typedef std::string string;
 typedef long long datetime;
 // ulong and uint come from <sys/types.h>
 
-enum ENUM_TIMEFRAMES { PERIOD_M1, PERIOD_M2, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1 };
+enum ENUM_TIMEFRAMES { PERIOD_M1, PERIOD_M2, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1,
+                       PERIOD_W1, PERIOD_MN1 };
 enum { INIT_SUCCEEDED = 0, INIT_FAILED = 1, INVALID_HANDLE = -1 };
 enum ENUM_SYM_D { SYMBOL_BID, SYMBOL_ASK, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_TRADE_TICK_SIZE,
                   SYMBOL_VOLUME_STEP, SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_MAX };
 enum ENUM_SYM_I { SYMBOL_SPREAD, SYMBOL_TRADE_STOPS_LEVEL, SYMBOL_DIGITS };
 enum ENUM_ACC_D { ACCOUNT_EQUITY, ACCOUNT_MARGIN_FREE, ACCOUNT_BALANCE };
 enum ENUM_POS_S { POSITION_SYMBOL, POSITION_COMMENT };
-enum ENUM_POS_I { POSITION_MAGIC, POSITION_TYPE, POSITION_TIME };
-enum ENUM_POS_D { POSITION_SL, POSITION_PRICE_OPEN, POSITION_PRICE_CURRENT, POSITION_VOLUME };
+enum ENUM_POS_I { POSITION_MAGIC, POSITION_TYPE, POSITION_TIME, POSITION_IDENTIFIER };
+enum ENUM_POS_D { POSITION_SL, POSITION_TP, POSITION_PRICE_OPEN, POSITION_PRICE_CURRENT, POSITION_VOLUME };
 enum { POSITION_TYPE_BUY, POSITION_TYPE_SELL };
 enum ENUM_ORDER_TYPE { ORDER_TYPE_BUY, ORDER_TYPE_SELL };
-enum ENUM_DEAL_I { DEAL_MAGIC, DEAL_ENTRY, DEAL_TIME };
-enum ENUM_DEAL_D { DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION };
+enum ENUM_DEAL_I { DEAL_MAGIC, DEAL_ENTRY, DEAL_TIME, DEAL_REASON, DEAL_POSITION_ID };
+enum ENUM_DEAL_D { DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION, DEAL_PRICE };
 enum { DEAL_ENTRY_IN, DEAL_ENTRY_OUT };
+enum { DEAL_REASON_CLIENT, DEAL_REASON_EXPERT, DEAL_REASON_SL, DEAL_REASON_TP, DEAL_REASON_SO };
+const double EMPTY_VALUE = 1.7976931348623157e308;
 
 struct MqlRates { datetime time; double open, high, low, close; long tick_volume; int spread; long real_volume; };
 struct MqlDateTime { int year, mon, day, hour, min, sec, day_of_week, day_of_year; };
@@ -36,6 +39,12 @@ template <class A> int ArraySize(A &);
 int iIchimoku(string, ENUM_TIMEFRAMES, int, int, int);
 int iATR(string, ENUM_TIMEFRAMES, int);
 datetime iTime(string, ENUM_TIMEFRAMES, int);
+double iClose(string, ENUM_TIMEFRAMES, int);
+double iHigh(string, ENUM_TIMEFRAMES, int);
+double iLow(string, ENUM_TIMEFRAMES, int);
+int iBarShift(string, ENUM_TIMEFRAMES, datetime, bool = false);
+int PeriodSeconds(ENUM_TIMEFRAMES);
+datetime StructToTime(MqlDateTime &);
 bool IndicatorRelease(int);
 bool SymbolSelect(string, bool);
 double SymbolInfoDouble(string, ENUM_SYM_D);
@@ -49,6 +58,7 @@ long PositionGetInteger(ENUM_POS_I);
 double PositionGetDouble(ENUM_POS_D);
 bool OrderCalcMargin(ENUM_ORDER_TYPE, string, double, double, double &);
 bool HistorySelect(datetime, datetime);
+bool HistorySelectByPosition(long);
 int HistoryDealsTotal();
 ulong HistoryDealGetTicket(int);
 long HistoryDealGetInteger(ulong, ENUM_DEAL_I);

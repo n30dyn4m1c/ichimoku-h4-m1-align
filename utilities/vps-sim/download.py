@@ -16,6 +16,7 @@ Usage:
     python3 utilities/vps-sim/download.py                    # XAUUSD, 2023 to now
     python3 utilities/vps-sim/download.py --from-year 2022
     python3 utilities/vps-sim/download.py --pair EURUSD
+    python3 utilities/vps-sim/download.py --from-year 2015 --out XAUUSD-long   # key-level study (§75)
 """
 import argparse
 import datetime as dt
@@ -59,6 +60,7 @@ def main():
     ap.add_argument("--pair", default="XAUUSD")
     ap.add_argument("--from-year", type=int, default=2023)
     ap.add_argument("--passes", type=int, default=4, help="retry passes over missing chunks")
+    ap.add_argument("--out", default=None, help="output name in data/ (default: the pair), e.g. XAUUSD-long")
     a = ap.parse_args()
     os.makedirs(RAW, exist_ok=True)
 
@@ -86,7 +88,7 @@ def main():
     df = pd.concat([pd.read_pickle(f) for f in have])
     df["t"] = pd.to_datetime(df.t.astype(str), format="%Y%m%d %H%M%S")    # naive New York local time
     df = df.drop(columns="v").drop_duplicates("t").sort_values("t").reset_index(drop=True)
-    out = os.path.join(DATA, f"{a.pair}.pkl")
+    out = os.path.join(DATA, f"{a.out or a.pair}.pkl")
     df.to_pickle(out)
     print(f"wrote {out}: {len(df):,} bars, {df.t.iloc[0]} .. {df.t.iloc[-1]} (New York time)")
 

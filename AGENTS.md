@@ -105,5 +105,5 @@ grep -hoE '^(int|input +int|const +int) +MAGIC[A-Z_0-9]* *= *[0-9]+' \
   *.mq5 experiments/*.mq5 | grep -oE '[0-9]+$' | sort | uniq -c | sort -rn
 ```
 
-The highest number in use is `20260894` (the VPS revamp, §74). This line goes stale every time an
+The highest number in use is `20260895` (the HTF key-level TP experiment, §75). This line goes stale every time an
 experiment is added — re-run the command above rather than trusting it.
