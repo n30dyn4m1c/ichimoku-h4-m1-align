@@ -3,9 +3,10 @@
 //| A copy of the live VPS build ichimoku-h4-m1-vps-ea.mq5 (which is  |
 //| NOT changed) with five additions, each behind an input:           |
 //|  1. KEY-LEVEL TP: every trend trade takes profit at the nearest   |
-//|     tenkan, kijun, Span A or Span B of a timeframe ABOVE its tier |
-//|     (M15 tier: M30, H1, H4, D1, W1, MN1 lines; H4 tier: D1, W1,   |
-//|     MN1), at least InpKLFloorATR x ATR(tier) beyond the entry.    |
+//|     tenkan, kijun, Span A or Span B of H4, D1, W1 or MN1 above    |
+//|     its tier (InpKLMinTF; M30/H1 lines are not targets — price    |
+//|     ran through them 85-92% of the time; the H4 tier uses D1+),   |
+//|     at least InpKLFloorATR x ATR(tier) beyond the entry.          |
 //|     It is a broker TP, refreshed every closed M1 bar; a line that |
 //|     moves onto the price closes the trade at market. Lines are    |
 //|     read on each TF's last closed bar (shift 1), the spans being  |
@@ -26,7 +27,8 @@
 //|     signal whose price sits at a key line opens the opposite      |
 //|     trade instead, one per signalling tier, every reversal taking |
 //|     profit at the kijun of the LOWEST tier with one open, lots as |
-//|     the trend trade's risk rule, stop beyond the line.            |
+//|     the trend trade's risk rule, stop beyond the line. Only a     |
+//|     line's FIRST touch is faded; a second touch is disregarded.   |
 //| Hold and lock live in memory only: a restart clears them.         |
 //| Everything else is the live build, byte for byte where possible.  |
 //+------------------------------------------------------------------+
@@ -254,7 +256,7 @@ enum ENUM_KL_REENTRY { KLRE_NONE = 0, KLRE_REALIGN = 1, KLRE_BREACH = 2, KLRE_EI
 
 input group  "HTF Key-Level TP (notes §75)"
 input bool   InpKLTP            = true;     // TP at the nearest tenkan/kijun/Span A/Span B of a TF above the tier
-input ENUM_KL_TF InpKLMinTF     = KLTF_M15; // Lowest TF whose lines count (a tier never uses its own TF or below)
+input ENUM_KL_TF InpKLMinTF     = KLTF_H4;  // Lowest TF whose lines count: H4, D1, W1, MN1 (user, 2026-11-27); a tier never uses its own TF or below
 input double InpKLFloorATR      = 1.0;      // A line must be at least this x ATR(tier) beyond the entry to be a target
 input int    InpKLLateMin       = 10;       // Touch in the last N minutes of the line's TF bar: hold, close at its close (0 = off)
 input bool   InpKLConfHold      = true;     // H4 + D1/W1/MN1 line at the exit: no new trend entries until the next H4 bar
@@ -272,6 +274,7 @@ input double InpRevMinRR        = 0.0;      // Skip when (distance to the kijun)
 input double InpRevLotMult      = 1.0;      // x the trend trade's lots (the same risk rule)
 input int    InpRevMinTier      = 1;        // Lowest tier that may fade (0=M5 1=M15 2=M30 3=H1 4=H4)
 input int    InpRevMaxTier      = 3;        // Highest tier that may fade
+input bool   InpRevFirstTouch   = true;     // Fade only a line's FIRST touch; a second touch is disregarded
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -327,6 +330,12 @@ double   lockLine[MAX_SYMS];
 int      lockLi[MAX_SYMS];              // TF index the close beyond is read on
 datetime lockBar[MAX_SYMS];             // open time of that TF's bar holding the exit
 int      revState[MAX_SYMS][LEVELS];    // reversal trade per tier: 0 / 1 / -1
+// First-touch count per key line (TF i, line q). A touch is a closed M1 bar within 0.1 x ATR(H4) of
+// the line; it ends once price is 0.5 x ATR(H4) away. A line whose value moves 0.5 x ATR(H4) from its
+// first-touch value counts as a new line. In memory only.
+int      tchN[MAX_SYMS][KLN][4];
+double   tchV[MAX_SYMS][KLN][4];
+bool     tchIn[MAX_SYMS][KLN][4];
 
 int MAGIC = 20260895;   // §75 HTF key-level TP experiment (the live VPS build runs 20260858)
 
@@ -392,6 +401,8 @@ int OnInit()
       // §75 key-level handles and memory
       holdUntil[s] = 0; lockDir[s] = 0; lockTier[s] = 0; lockLine[s] = 0.0; lockLi[s] = 0; lockBar[s] = 0;
       for(int l = 0; l < LEVELS; l++) ResetKLMemory(s, l);
+      for(int i = 0; i < KLN; i++)
+         for(int q = 0; q < 4; q++) { tchN[s][i][q] = 0; tchV[s][i][q] = 0.0; tchIn[s][i][q] = false; }
       for(int i = 0; i < KLN; i++)
       {
          klIch[s][i] = iIchimoku(syms[s], klTf[i], Tenkan, Kijun, SenkouB);
@@ -1334,7 +1345,8 @@ bool KLNext(int s, int lvl, int dir, double floorPx, double &L, int &li)
    return li >= 0;
 }
 
-// The line above tier lvl closest to px, if within tol.
+// The line above tier lvl closest to px, if within tol (with InpRevFirstTouch: only a line on
+// its first touch, or not yet touched).
 bool KLNear(int s, int lvl, double px, double tol, double &L, int &li)
 {
    li = -1; L = 0.0;
@@ -1344,9 +1356,38 @@ bool KLNear(int s, int lvl, double px, double tol, double &L, int &li)
       {
          double v;
          if(!KLLine(s, i, q, v)) continue;
+         if(InpRevFirstTouch && tchN[s][i][q] > 1) continue;
          if(MathAbs(v - px) <= best) { best = MathAbs(v - px); L = v; li = i; }
       }
    return li >= 0;
+}
+
+// Count the touches of every key line from the last closed M1 bar (for the first-touch rule).
+void KLUpdateTouches(int s)
+{
+   double a4[1];
+   if(CopyBuffer(klAtr[s][KL_H4], 0, 1, 1, a4) <= 0 || a4[0] <= 0) return;
+   MqlRates m1[];
+   if(CopyRates(syms[s], PERIOD_M1, 1, 1, m1) != 1) return;
+   double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
+   for(int i = 0; i < KLN; i++)
+      for(int q = 0; q < 4; q++)
+      {
+         double v;
+         if(!KLLine(s, i, q, v)) continue;
+         if(tchN[s][i][q] > 0 && MathAbs(v - tchV[s][i][q]) > 0.5 * a4[0])
+         {
+            tchN[s][i][q] = 0; tchIn[s][i][q] = false;              // the line moved: a new line
+         }
+         bool nearL = m1[0].low <= v + 0.1 * a4[0] && m1[0].high >= v - 0.1 * a4[0];
+         if(nearL && !tchIn[s][i][q])
+         {
+            tchN[s][i][q]++; tchIn[s][i][q] = true;
+            if(tchN[s][i][q] == 1) tchV[s][i][q] = v;
+         }
+         else if(tchIn[s][i][q] && MathAbs(bid - v) > 0.5 * a4[0])
+            tchIn[s][i][q] = false;
+      }
 }
 
 // An H4 line and a D1/W1/MN1 line both within InpKLConfTolATR x ATR(H4) of px.
@@ -1704,7 +1745,8 @@ void OnTick()
          if(state[s][l] != 0) ManageLevelProtection(s, l);
       }
 
-      // §75: reversal TPs, and the re-entry lock
+      // §75: reversal TPs, the first-touch count and the re-entry lock
+      if(InpRevEnabled && InpRevFirstTouch) KLUpdateTouches(s);
       ManageReversals(s);
       KLReleaseLock(s);
       bool klHold  = InpKLTP && TimeCurrent() < holdUntil[s];

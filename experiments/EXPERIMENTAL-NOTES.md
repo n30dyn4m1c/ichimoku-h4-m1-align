@@ -8609,7 +8609,9 @@ All of it sits behind inputs; with `InpKLTP = false` and `InpRevEnabled = false`
 the trading logic is the live build's.
 
 1. **Key-level TP** (`InpKLTP`, on). A tier targets only the lines of TFs
-   above its own: M15 targets M30..MN1, and H4 targets D1, W1 and MN1. The
+   above its own, and by default only those of H4, D1, W1 and MN1
+   (`InpKLMinTF = KLTF_H4`, user, after the first results): M15, M30 and H1
+   target H4..MN1, and H4 targets D1, W1 and MN1. The
    target is the nearest line at least `InpKLFloorATR` (1.0) × ATR(tier)
    beyond the entry. It is sent as a broker TP and refreshed every closed M1
    bar. A line that moves onto the price closes the trade at market. Lines
@@ -8642,6 +8644,11 @@ the trading logic is the live build's.
      one open; that kijun reaching the price closes them.
    - Reversals carry their own comment (`Exp RevSell M15`), so the sync and
      the R2 unknown-position guard know them.
+   - **First touch only** (`InpRevFirstTouch`, on). A touch is a closed M1
+     bar within 0.1 × ATR(H4) of the line. It ends once price is
+     0.5 × ATR(H4) away, and the next touch of that line is a second touch,
+     which is disregarded. A line whose value moves 0.5 × ATR(H4) from its
+     first-touch value counts as a new line. The count is kept in memory.
 
 A key-level TP that the broker fills is read back from the deal history
 (`DEAL_REASON_TP`), so the hold and the lock apply to it as well. **The hold and
@@ -8746,9 +8753,8 @@ H4 ATRs), so the "levels" no longer mean anything:
   the kijun TP. At the live bands it improved the rolling-account figures,
   but the fixed-lot edge says that is path luck, not edge. Off by default.
 - **D1+ lines only is the strongest variant** (PF 1.56, live-band ruin 13%).
-  It is a tuned choice, chosen after seeing the table, so the EA keeps the
-  requested M30..MN1 set. `InpKLMinTF = KLTF_D1` is the switch to try in the
-  tester.
+  It is a tuned choice, chosen after seeing the table. `InpKLMinTF = KLTF_D1`
+  is the switch to try in the tester.
 
 ### Answers to the re-entry questions
 
@@ -8776,3 +8782,48 @@ H4 ATRs), so the "levels" no longer mean anything:
 - **The simulator's intrabar order.** When a stop and a TP sit inside one M1
   bar, the stop is taken first.
 - **One feed, constant spread, no swaps.** As in §69 and §74.
+
+### Revision: H4+ lines and first-touch reversals (same day)
+
+After reading the results, the user asked for two changes. TPs now go only on
+H4, D1, W1 and MN1 lines, since M30 and H1 lines do not stop the move. A
+reversal now opens only on a line's first touch; a second touch is
+disregarded. Both are now EA defaults (the reversal itself stays off). The
+tables above keep the M30+ figures for comparison; the files in
+`results/2026-11-27-keylevels/` are the re-run with these defaults.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| live | 0.95 | 1.05 | 1.41 | 1.35 | 1.28 | +6,917 | 5,701 |
+| EA default, M30+ lines (first version) | 0.99 | 1.09 | 1.48 | 1.83 | 1.48 | +8,336 | 4,554 |
+| **EA default, H4+ lines** | 0.99 | 1.09 | 1.49 | 1.81 | **1.45** | +7,673 | 4,531 |
+| + reversal, any touch | 0.98 | 1.12 | 1.41 | 1.54 | 1.35 | +7,420 | 5,199 |
+| + reversal, first touch only | 0.99 | 1.10 | 1.42 | 1.59 | 1.37 | +7,321 | 4,911 |
+| + reversal, first touch, D1+ lines | 0.96 | 1.14 | 1.62 | 1.79 | 1.51 | +8,814 | 4,657 |
+
+The first-touch reversal trades themselves: rM15 PF 0.83 (181 trades), rM30
+0.88 (158) and rH1 0.89 (43). With D1+ lines: rM15 1.13 (117), rM30 1.03
+(104) and rH1 0.89 (42).
+
+| Rolling accounts | Live bands $100: ruined / below start | Live bands $1,000 | §74 × 0.5, $100 | §74 × 0.5, $1,000 |
+|---|---|---|---|---|
+| live | 59% / 60% | 10% / 51% | 0% / 12% | 0% / 16% |
+| EA default, M30+ lines | 26% / 53% | 1% / 40% | 0% / 0% | 0% / 0% |
+| **EA default, H4+ lines** | **24%** / 51% | **1%** / 40% | 0% / **0%** | 0% / **0%** |
+| + reversal, first touch only | 24% / 49% | 1% / 35% | 0% / 0% | 0% / 0% |
+
+Placebo for the new default (lines moved 1%): PF 1.42 against 1.45 for the
+real lines.
+
+- **H4+ lines cost almost nothing against M30+.** PF 1.45 against 1.48, and
+  ruin from $100 is 24% against 26%. Taking profit at an M30 or H1 line gave
+  up the M15 tier's continuation (M15 PF 1.29 → 1.24).
+- **The re-entry lock still carries the result.** With H4+ lines, lines
+  moved 1% away do almost as well as the real ones (1.42 against 1.45). The
+  edge is the pause until a close confirms the breakout, not the exact line.
+- **First touch is the right filter for a fade, but not enough.** It cut the
+  reversal count by 44% and their total loss by about a third. They still lose
+  on every tier. On D1+ lines the first-touch reversals are about break-even
+  (rM15 1.13, rM30 1.03), too few trades to separate from luck. The
+  reversal stays off.
+
