@@ -205,17 +205,19 @@ def kl_next(KL, k, i0, d, floor):
 
 
 @njit(cache=True)
-def kl_near(KL, k, i0, px, tol, first, TN, touch, lo, hi, KRH, KRL):
+def kl_near(KL, k, i0, px, tol, first, TN, touch, lo, hi, KRH, KRL, RU):
     """The key line over the TFs i0..6 closest to px, if within tol of px; with touch, a line inside the
     M1 bar's range lo..hi (widened by tol) instead. With first, only a line that has had at most one touch
-    (TN <= 1). Returns (value, TF index) or (nan, -1)."""
-    best = np.nan; bi = -1; bd = 1e300
+    (TN <= 1) and never one already faded (RU). Returns (value, TF index, line index) or (nan, -1, -1)."""
+    best = np.nan; bi = -1; bq = -1; bd = 1e300
     for i in range(i0, 7):
         for q in range(4):
             v = KL[i, q, k]
             if not (v > 0):
                 continue
             if first and TN[i, q] > 1:
+                continue
+            if RU[i, q]:
                 continue
             if touch == 2:                              # the line's own TF bar touched it
                 if not (KRL[i, k] - tol <= v and KRH[i, k] + tol >= v):
@@ -227,8 +229,8 @@ def kl_near(KL, k, i0, px, tol, first, TN, touch, lo, hi, KRH, KRL):
                 continue
             dd = abs(v - px)
             if dd < bd:
-                best = v; bi = i; bd = dd
-    return best, bi
+                best = v; bi = i; bq = q; bd = dd
+    return best, bi, bq
 
 
 @njit(cache=True)
@@ -253,7 +255,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
         weekly_loss, max_open_risk, fri_stop, fri_flat, q_from, q_to, streak_n, pause_min,
         dd_at, dd_factor, exit_max_spread, max_spread,
         kl, KL, KLC, KLA, KLB, KLE, KRH, KRL, late_min, kl_min_i, kl_floor, kl_conf_tol, re_mode, re_scope, breach_lvltf, breach_buf,
-        rev, rev_tol, rev_stop, rev_risk, rev_min_rr, rev_min_lv, rev_max_lv, rev_first, rev_touch):
+        rev, rev_tol, rev_stop, rev_risk, rev_min_rr, rev_min_lv, rev_max_lv, rev_first, rev_touch, rev_once,
+        rev_newline):
     # Review-fix switches (notes §73), all False / 0 = the live build:
     #   one_pos     #1  a running tier blocks itself and every smaller tier
     #   cloud_size  #2  size on max(2 ATR, distance to the tier cloud), capped at the disaster stop
@@ -301,6 +304,9 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
     #                its open through the last closed M1 bar) reaches it. With 2 a first touch is the first TF bar
     #                to touch the line; it ends once a whole TF bar closes without touching, and a line whose value
     #                moves 0.5 x ATR(its TF) from the first-touch value is a new line
+    #   rev_once     a line that has been faded is never faded again, however often it is touched, until its
+    #                value moves rev_newline x ATR(its TF) from the faded value (a new line); the same rule
+    #                resets the first-touch count. Every tier that fades in the same minute still opens.
     NL = 5
     st = np.zeros(NL, np.int64); lots = np.zeros(NL); ent = np.zeros(NL); sl = np.zeros(NL)
     pkH = np.zeros(NL); pkL = np.zeros(NL); be = np.zeros(NL, np.bool_); topen = np.zeros(NL, np.int64)
@@ -318,6 +324,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
     lock_d = 0; lock_lv = 0; lock_L = 0.0; lock_i = 0; lock_bar = 0; hold_bar = -1
     TN = np.zeros((7, 4), np.int64); TV = np.zeros((7, 4)); TIN = np.zeros((7, 4), np.bool_)   # touches
     TB = -np.ones((7, 4), np.int64); TBT = np.zeros((7, 4), np.bool_)    # rev_touch 2: current TF bar, touched
+    RU = np.zeros((7, 4), np.bool_); RUV = np.zeros((7, 4))              # rev_once: line faded, at this value
+    FI = -np.ones(NL, np.int64); FQ = -np.ones(NL, np.int64)              # lines faded this minute
     rst = np.zeros(NL, np.int64); rlots = np.zeros(NL); rent = np.zeros(NL); rsl = np.zeros(NL)
     rtp = np.zeros(NL); rko = np.zeros(NL, np.int64)       # §75 reversal trades, one slot per tier
     for k in range(k0, k1):
@@ -328,6 +336,11 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                 lastbid[j] = BID[j, k]; runH[j] = bid; runL[j] = bid
             else:
                 runH[j] = max(runH[j], h[k - 1], bid); runL[j] = min(runL[j], l[k - 1], bid)
+        if rev and rev_once:                              # §75 a faded line becomes new once its value moves
+            for i in range(7):
+                for q in range(4):
+                    if RU[i, q] and KLA[i, k] > 0 and abs(KL[i, q, k] - RUV[i, q]) > rev_newline * KLA[i, k]:
+                        RU[i, q] = False; TN[i, q] = 0; TIN[i, q] = False
         if rev and rev_first and rev_touch == 2:          # §75 touch count per line, by the line's own TF bar
             for i in range(7):
                 b = KLB[i, k - 1]
@@ -335,7 +348,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     v = KL[i, q, k]
                     if not (v > 0) or not (KLA[i, k] > 0):
                         continue
-                    if TN[i, q] > 0 and abs(v - TV[i, q]) > 0.5 * KLA[i, k]:
+                    rd = (rev_newline if rev_once else 0.5) * KLA[i, k]
+                    if TN[i, q] > 0 and not RU[i, q] and abs(v - TV[i, q]) > rd:
                         TN[i, q] = 0; TIN[i, q] = False   # the line moved: a new line
                     if b != TB[i, q]:
                         if TB[i, q] >= 0 and not TBT[i, q]:
@@ -354,7 +368,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                     v = KL[i, q, k]
                     if not (v > 0):
                         continue
-                    if TN[i, q] > 0 and abs(v - TV[i, q]) > 0.5 * a4:
+                    rd = rev_newline * KLA[i, k] if rev_once else 0.5 * a4
+                    if TN[i, q] > 0 and not RU[i, q] and abs(v - TV[i, q]) > rd:
                         TN[i, q] = 0; TIN[i, q] = False   # the line moved: a new line
                     tt = 0.0 if rev_touch == 1 else 0.1 * a4
                     near = l[k - 1] <= v + tt and h[k - 1] >= v - tt
@@ -604,8 +619,8 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
             if kl and rev and rst[lv] == 0 and lv >= rev_min_lv and lv <= rev_max_lv and ATR[tf, k] > 0 and eq > 0:
                 ra = ATR[tf, k]
                 pxa = ask if d == 1 else bid                # where the trend trade would have filled
-                L, li = kl_near(KL, k, max(tf - 1, kl_min_i), pxa, rev_tol * ra, rev_first, TN, rev_touch,
-                                l[k - 1], h[k - 1], KRH, KRL)
+                L, li, lq = kl_near(KL, k, max(tf - 1, kl_min_i), pxa, rev_tol * ra, rev_first, TN, rev_touch,
+                                    l[k - 1], h[k - 1], KRH, KRL, RU)
                 kj = KL[tf - 2, 1, k]
                 if li >= 0 and kj > 0:
                     r = -d
@@ -625,6 +640,7 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
                         rst[lv] = r; rlots[lv] = lt; rent[lv] = rp; rsl[lv] = rs; rtp[lv] = kj; rko[lv] = k
                         used += lt * contract * rp / lev
                         trades.append((5 + lv, r, k, -1, lt, 0.0, 9, eq))
+                        FI[lv] = li; FQ[lv] = lq
                         rfired = True
                         continue                        # the smaller tiers may fade too; no trend trade
             if rfired:
@@ -665,6 +681,11 @@ def sim(o, h, l, c, A, FAR, NOW, CT, CB, ATR, BID, DAY, TOD, DOW, TMIN, SPR, k0,
             top = lv; tdir = d; tlots = lt
             break
         if rfired:
+            if rev_once:                                # the faded lines are used up
+                for lv in range(NL):
+                    if FI[lv] >= 0:
+                        RU[FI[lv], FQ[lv]] = True; RUV[FI[lv], FQ[lv]] = KL[FI[lv], FQ[lv], k]
+                        FI[lv] = -1; FQ[lv] = -1
             rlo = -1
             for lv in range(NL):
                 if rst[lv] != 0:
@@ -799,7 +820,7 @@ class Sim:
                roll_spread=0.0,
                kl=False, late_min=0, kl_min_i=0, kl_floor=1.0, kl_conf_tol=0.0, re_mode=0, re_scope=1,
                breach_lvltf=False, breach_buf=0.0, rev=False, rev_tol=0.25, rev_stop=1.0, rev_risk=1.0,
-               rev_min_rr=0.0, rev_min_lv=1, rev_max_lv=3, rev_first=False, rev_touch=0)
+               rev_min_rr=0.0, rev_min_lv=1, rev_max_lv=3, rev_first=False, rev_touch=0, rev_once=False, rev_newline=1.0)
 
     def __init__(self, pair="XAUUSD", spread=0.30, risk=RISK_LIVE, lev=1000.0, disaster=8.0, m5=False,
                  contract=1.0, lotmin=0.1, lotstep=0.01, **switches):
@@ -857,7 +878,8 @@ class Sim:
                                    int(cf["re_scope"]), bool(cf["breach_lvltf"]), float(cf["breach_buf"]),
                                    bool(cf["rev"]), float(cf["rev_tol"]), float(cf["rev_stop"]), float(cf["rev_risk"]),
                                    float(cf["rev_min_rr"]), int(cf["rev_min_lv"]), int(cf["rev_max_lv"]),
-                                   bool(cf["rev_first"]), int(cf["rev_touch"]))
+                                   bool(cf["rev_first"]), int(cf["rev_touch"]),
+                                   bool(cf["rev_once"]), float(cf["rev_newline"]))
         ent_eq = {(r[0], r[2]): r[7] for r in tr if r[6] == 9}
         T = pd.DataFrame([r[:7] for r in tr if r[6] != 9], columns=["lvl", "d", "ko", "kc", "lots", "pnl", "why"])
         T["tier"] = T.lvl.map(lambda v: TIER[v]); T["reason"] = T.why.map(REASON)

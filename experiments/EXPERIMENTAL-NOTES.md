@@ -8920,3 +8920,63 @@ mode 1.
 - **Mode 1 is the touch that works**: the fade opens while price is at the
   line. It stays the default. Mode 2 is there to compare in the MT5 tester.
 
+### Fourth revision: one reversal per line (same day)
+
+The user's rule: deal only with the first touch. Once a line has been faded
+(say the H4 kijun), it is never faded again, whether the next touch comes in
+the same H4 candle, the next one or later. The next reversal has to come
+from a different line on its own first touch (say the SSB), and then that
+line is used up too.
+
+What changed (`InpRevOncePerLine`, on):
+- **Used up.** The first-touch rule alone still allowed several reversals
+  during that first touch: a second tier a few minutes later, or a new
+  reversal after the first one closed. Now a line that has been faded is
+  never faded again. Every tier that fades in the same minute still opens,
+  as in the multi-tier rule.
+- **New line.** A line is new again only once its value has moved
+  `InpRevNewLineATR` (1.0) × ATR(its own TF) from the faded value, as when
+  the H4 kijun steps to a new level. The same distance resets the
+  first-touch count of a line touched without a trade.
+- **Saved across restarts.** The touch counts and the faded lines are kept
+  in terminal global variables (`KL20260895_<symbol>_<TF>_<line>_N/V/U/UV`),
+  so a restart does not forget them.
+
+| Config, fixed 0.1 lot | 2023 | 2024 | 2025 | 2026 | 2023–26 PF | $/oz | Trades |
+|---|---|---|---|---|---|---|---|
+| trend part only | 0.99 | 1.09 | 1.49 | 1.81 | 1.45 | +7,673 | 4,531 |
+| + reversal, first touch, repeats allowed (third revision) | 1.02 | 1.10 | 1.44 | 1.67 | 1.41 | +8,023 | 4,919 |
+| **+ reversal, once per line (EA default)** | 1.01 | 1.10 | 1.44 | 1.73 | **1.43** | +7,986 | 4,784 |
+| same, new line at 0.5 ATR | 1.04 | 1.10 | 1.43 | 1.72 | 1.43 | +8,065 | 4,837 |
+| same, new line at 2.0 ATR | 1.02 | 1.09 | 1.46 | 1.71 | 1.43 | +7,906 | 4,720 |
+| same, D1+ lines | 0.99 | 1.16 | 1.65 | 1.90 | 1.57 | +9,257 | 4,535 |
+
+| Reversal trades | rM15 | rM30 | rH1 | All, by year |
+|---|---|---|---|---|
+| repeats allowed | 1.12 (184) | 1.13 (161) | 1.38 (40) | 1.56 / 1.15 / 0.96 / 1.22 |
+| **once per line** | **1.20 (120)** | **1.15 (109)** | **1.54 (22)** | 1.45 / 1.20 / 0.86 / 1.41 |
+| once per line, D1+ lines | 1.81 (59) | 1.52 (58) | 1.65 (23) | — |
+
+Once per line, the 251 reversals came from 132 separate events. With
+repeats allowed there were 385.
+
+| Rolling accounts | Live bands $100: ruined / below start / median | Live bands $1,000 | §74 × 0.5, $1,000 |
+|---|---|---|---|
+| trend part only | 24% / 51% / $96 | 1% / 40% / $7,981 | 0% / 0% / $1,918 |
+| repeats allowed | 18% / 46% / $162 | 1% / 38% / $8,262 | 0% / 0% / $2,005 |
+| **once per line** | 21% / 49% / $124 | 1% / 37% / $11,269 | 0% / 1% / $2,104 |
+
+- **Each fade is better, and there are a third fewer.** The repeat fades
+  were the weaker ones: the profit factor of the reversals rose on every
+  tier.
+- **The new-line distance does not matter much.** Moving it from 0.5 to
+  2.0 ATR changes the account PF by nothing (1.43 throughout). The rule
+  is not tuned on it.
+- **The account totals hardly move.** $/oz is about the same as with
+  repeats allowed. Ruin from $100 is 21% against 18%, with three accounts
+  in 68 deciding the difference. The case for the rule is the per-trade
+  quality, not the total.
+- **2025 is still the weak year** for the fades (PF 0.86).
+- **D1+ lines are again the strongest**, with reversal PFs of 1.5–1.8, on
+  under 60 trades per tier.
+

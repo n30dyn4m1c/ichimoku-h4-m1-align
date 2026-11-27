@@ -30,7 +30,10 @@
 //|     signalling tier, every reversal taking                        |
 //|     profit at the kijun of the LOWEST tier with one open, lots as |
 //|     the trend trade's risk rule, stop beyond the line. Only a     |
-//|     line's FIRST touch is faded; a second touch is disregarded.   |
+//|     line's FIRST touch is faded; a second touch is disregarded,   |
+//|     and a line once faded is never faded again until it moves to  |
+//|     a new level (InpRevNewLineATR x ATR of its TF). Kept in       |
+//|     terminal global variables, so a restart remembers it.         |
 //| Hold and lock live in memory only: a restart clears them.         |
 //| Everything else is the live build, byte for byte where possible.  |
 //+------------------------------------------------------------------+
@@ -284,6 +287,8 @@ input double InpRevLotMult      = 1.0;      // x the trend trade's lots (the sam
 input int    InpRevMinTier      = 1;        // Lowest tier that may fade (0=M5 1=M15 2=M30 3=H1 4=H4)
 input int    InpRevMaxTier      = 3;        // Highest tier that may fade
 input bool   InpRevFirstTouch   = true;     // Fade only a line's FIRST touch; a second touch is disregarded
+input bool   InpRevOncePerLine  = true;     // A line that has been faded is never faded again (any later touch is ignored)
+input double InpRevNewLineATR   = 1.0;      // ... until its value moves this x ATR(its TF) from the faded value (a new line)
 
 //--- Constants and Global Variables ---
 #define MAX_SYMS 60
@@ -345,6 +350,11 @@ int      revState[MAX_SYMS][LEVELS];    // reversal trade per tier: 0 / 1 / -1
 int      tchN[MAX_SYMS][KLN][4];
 double   tchV[MAX_SYMS][KLN][4];
 bool     tchIn[MAX_SYMS][KLN][4];
+bool     revUsed[MAX_SYMS][KLN][4];     // InpRevOncePerLine: the line has been faded ...
+double   revUsedV[MAX_SYMS][KLN][4];    // ... at this value
+int      revFiredI[MAX_SYMS][LEVELS];   // lines faded in the current minute, marked used after the scan
+int      revFiredQ[MAX_SYMS][LEVELS];
+string   klLineName[4] = { "tenkan", "kijun", "SSA", "SSB" };
 datetime tchBar[MAX_SYMS][KLN][4];      // REVT_TF_BAR: the line-TF candle being watched
 bool     tchBarHit[MAX_SYMS][KLN][4];   // ... and whether it has touched the line
 
@@ -417,7 +427,10 @@ int OnInit()
          {
             tchN[s][i][q] = 0; tchV[s][i][q] = 0.0; tchIn[s][i][q] = false;
             tchBar[s][i][q] = 0; tchBarHit[s][i][q] = false;
+            revUsed[s][i][q] = false; revUsedV[s][i][q] = 0.0;
+            KLLoadLine(s, i, q);                     // survive a restart
          }
+      for(int l = 0; l < LEVELS; l++) { revFiredI[s][l] = -1; revFiredQ[s][l] = -1; }
       for(int i = 0; i < KLN; i++)
       {
          klIch[s][i] = iIchimoku(syms[s], klTf[i], Tenkan, Kijun, SenkouB);
@@ -1385,10 +1398,11 @@ bool KLTouchRange(int s, int i, double &lo, double &hi, datetime &bar)
 }
 
 // The line above tier lvl that the last closed M1 bar TOUCHED (its low..high, widened by tol,
-// reaches the line), the one nearest px if several; with InpRevFirstTouch only a line on its first touch.
-bool KLTouched(int s, int lvl, double px, double tol, double &L, int &li)
+// reaches the line), the one nearest px if several; with InpRevFirstTouch only a line on its first touch,
+// with InpRevOncePerLine never a line already faded.
+bool KLTouched(int s, int lvl, double px, double tol, double &L, int &li, int &lq)
 {
-   li = -1; L = 0.0;
+   li = -1; lq = -1; L = 0.0;
    double best = 0.0;
    for(int i = KLFirst(lvl); i < KLN; i++)
    {
@@ -1399,16 +1413,78 @@ bool KLTouched(int s, int lvl, double px, double tol, double &L, int &li)
          double v;
          if(!KLLine(s, i, q, v)) continue;
          if(InpRevFirstTouch && tchN[s][i][q] > 1) continue;
+         if(InpRevOncePerLine && revUsed[s][i][q]) continue;
          if(v < lo - tol || v > hi + tol) continue;
-         if(li < 0 || MathAbs(v - px) < best) { best = MathAbs(v - px); L = v; li = i; }
+         if(li < 0 || MathAbs(v - px) < best) { best = MathAbs(v - px); L = v; li = i; lq = q; }
       }
    }
    return li >= 0;
 }
 
-// Count the touches of every key line from the last closed M1 bar (for the first-touch rule).
+// Terminal global variables keep the touch count and the faded-line memory across a restart.
+string KLGVName(int s, int i, int q, string f)
+{
+   return "KL" + IntegerToString(MAGIC) + "_" + syms[s] + "_" + klName[i] + "_" + klLineName[q] + "_" + f;
+}
+
+void KLSaveLine(int s, int i, int q)
+{
+   GlobalVariableSet(KLGVName(s, i, q, "N"), tchN[s][i][q]);
+   GlobalVariableSet(KLGVName(s, i, q, "V"), tchV[s][i][q]);
+   GlobalVariableSet(KLGVName(s, i, q, "U"), revUsed[s][i][q] ? 1.0 : 0.0);
+   GlobalVariableSet(KLGVName(s, i, q, "UV"), revUsedV[s][i][q]);
+}
+
+void KLLoadLine(int s, int i, int q)
+{
+   if(!GlobalVariableCheck(KLGVName(s, i, q, "N"))) return;
+   tchN[s][i][q]     = (int)GlobalVariableGet(KLGVName(s, i, q, "N"));
+   tchV[s][i][q]     = GlobalVariableGet(KLGVName(s, i, q, "V"));
+   revUsed[s][i][q]  = GlobalVariableGet(KLGVName(s, i, q, "U")) > 0.5;
+   revUsedV[s][i][q] = GlobalVariableGet(KLGVName(s, i, q, "UV"));
+   tchIn[s][i][q]    = false;
+}
+
+// After a reversal scan: every line faded this minute is used up (all tiers of one event fade together).
+void KLMarkFired(int s)
+{
+   for(int l = 0; l < LEVELS; l++)
+   {
+      int i = revFiredI[s][l], q = revFiredQ[s][l];
+      revFiredI[s][l] = -1; revFiredQ[s][l] = -1;
+      if(i < 0 || q < 0 || !InpRevOncePerLine) continue;
+      double v;
+      if(!KLLine(s, i, q, v)) continue;
+      if(!revUsed[s][i][q])
+         Print(PCTime() + " | " + syms[s] + " " + klName[i] + " " + klLineName[q] + " " + DoubleToString(v, 2) +
+               " faded once: no more reversals on it until it moves to a new level");
+      revUsed[s][i][q] = true; revUsedV[s][i][q] = v;
+      if(tchN[s][i][q] == 0) { tchN[s][i][q] = 1; tchV[s][i][q] = v; }
+      KLSaveLine(s, i, q);
+   }
+}
+
+// Count the touches of every key line from the last closed M1 bar (for the first-touch rule), and free
+// a faded line once its value has moved InpRevNewLineATR x ATR(its TF) away (a new line).
 void KLUpdateTouches(int s)
 {
+   for(int i = 0; i < KLN; i++)
+   {
+      double ai[1];
+      if(CopyBuffer(klAtr[s][i], 0, 1, 1, ai) <= 0 || ai[0] <= 0) continue;
+      for(int q = 0; q < 4; q++)
+      {
+         double v;
+         if(!revUsed[s][i][q] || !KLLine(s, i, q, v)) continue;
+         if(MathAbs(v - revUsedV[s][i][q]) > InpRevNewLineATR * ai[0])
+         {
+            revUsed[s][i][q] = false; tchN[s][i][q] = 0; tchIn[s][i][q] = false;
+            KLSaveLine(s, i, q);
+         }
+      }
+   }
+   if(!InpRevFirstTouch) return;
+
    if(InpRevTouchMode == REVT_TF_BAR)
    {
       // A touch is a line-TF candle reaching the line; it ends once a whole candle closes without
@@ -1422,9 +1498,11 @@ void KLUpdateTouches(int s)
          {
             double v;
             if(!KLLine(s, i, q, v)) continue;
-            if(tchN[s][i][q] > 0 && MathAbs(v - tchV[s][i][q]) > 0.5 * ai[0])
+            double rd = (InpRevOncePerLine ? InpRevNewLineATR : 0.5) * ai[0];
+            if(tchN[s][i][q] > 0 && !revUsed[s][i][q] && MathAbs(v - tchV[s][i][q]) > rd)
             {
                tchN[s][i][q] = 0; tchIn[s][i][q] = false;
+               KLSaveLine(s, i, q);
             }
             if(bar != tchBar[s][i][q])
             {
@@ -1438,6 +1516,7 @@ void KLUpdateTouches(int s)
                {
                   tchN[s][i][q]++; tchIn[s][i][q] = true;
                   if(tchN[s][i][q] == 1) tchV[s][i][q] = v;
+                  KLSaveLine(s, i, q);
                }
             }
          }
@@ -1450,23 +1529,30 @@ void KLUpdateTouches(int s)
    if(CopyRates(syms[s], PERIOD_M1, 1, 1, m1) != 1) return;
    double bid = SymbolInfoDouble(syms[s], SYMBOL_BID);
    for(int i = 0; i < KLN; i++)
+   {
+      double ai[1];
+      if(CopyBuffer(klAtr[s][i], 0, 1, 1, ai) <= 0 || ai[0] <= 0) continue;
+      double rd = InpRevOncePerLine ? InpRevNewLineATR * ai[0] : 0.5 * a4[0];
       for(int q = 0; q < 4; q++)
       {
          double v;
          if(!KLLine(s, i, q, v)) continue;
-         if(tchN[s][i][q] > 0 && MathAbs(v - tchV[s][i][q]) > 0.5 * a4[0])
+         if(tchN[s][i][q] > 0 && !revUsed[s][i][q] && MathAbs(v - tchV[s][i][q]) > rd)
          {
             tchN[s][i][q] = 0; tchIn[s][i][q] = false;              // the line moved: a new line
+            KLSaveLine(s, i, q);
          }
          bool nearL = m1[0].low <= v && m1[0].high >= v;                // the M1 bar touched the line
          if(nearL && !tchIn[s][i][q])
          {
             tchN[s][i][q]++; tchIn[s][i][q] = true;
             if(tchN[s][i][q] == 1) tchV[s][i][q] = v;
+            KLSaveLine(s, i, q);
          }
          else if(tchIn[s][i][q] && MathAbs(bid - v) > 0.5 * a4[0])
             tchIn[s][i][q] = false;
       }
+   }
 }
 
 // An H4 line and a D1/W1/MN1 line both within InpKLConfTolATR x ATR(H4) of px.
@@ -1713,8 +1799,8 @@ bool TryReversal(int s, int lvl, int dir)
    if(CopyBuffer(atr[s][lvl], 0, 1, 1, a) <= 0 || a[0] <= 0) return false;
    double ra  = a[0];
    double bid = SymbolInfoDouble(sym, SYMBOL_BID), ask = SymbolInfoDouble(sym, SYMBOL_ASK);
-   double L; int li;
-   if(!KLTouched(s, lvl, (dir == 1) ? ask : bid, InpRevTolATR * ra, L, li)) return false;
+   double L; int li, lq;
+   if(!KLTouched(s, lvl, (dir == 1) ? ask : bid, InpRevTolATR * ra, L, li, lq)) return false;
    double kj[1];
    if(CopyBuffer(ich[s][lvl + 1], 1, 1, 1, kj) <= 0 || kj[0] <= 0) return false;
    int    r  = -dir;
@@ -1743,9 +1829,11 @@ bool TryReversal(int s, int lvl, int dir)
    if(ok)
    {
       revState[s][lvl] = r;
+      revFiredI[s][lvl] = li; revFiredQ[s][lvl] = lq;
       string msg = PCTime() + " | " + (r == 1 ? "Buy" : "Sell") + " " + sym + " reversal " + tfName[lvl + 1] +
                    " @ " + DoubleToString(lots, 2) + " (" + tfName[lvl + 1] + " " + (dir == 1 ? "buy" : "sell") +
-                   " signal at the " + klName[li] + " key level " + DoubleToString(L, 2) + ")";
+                   " signal at the first touch of the " + klName[li] + " " + klLineName[lq] + " " +
+                   DoubleToString(L, 2) + ")";
       Print(msg); SendNotification(msg);
    }
    else
@@ -1825,7 +1913,7 @@ void OnTick()
       }
 
       // §75: reversal TPs, the first-touch count and the re-entry lock
-      if(InpRevEnabled && InpRevFirstTouch) KLUpdateTouches(s);
+      if(InpRevEnabled && (InpRevFirstTouch || InpRevOncePerLine)) KLUpdateTouches(s);
       ManageReversals(s);
       KLReleaseLock(s);
       bool klHold  = InpKLTP && TimeCurrent() < holdUntil[s];
@@ -1881,7 +1969,11 @@ void OnTick()
          }
       }
 
-      if(revFired) ManageReversals(s);   // §75: all reversals to the lowest tier's kijun
+      if(revFired)
+      {
+         KLMarkFired(s);                  // §75: every line faded this minute is used up
+         ManageReversals(s);              // all reversals to the lowest tier's kijun
+      }
 
       if(topTier >= 0)
       {

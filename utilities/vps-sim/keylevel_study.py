@@ -28,7 +28,7 @@ YEARS = [("2023", "2023-04-15", "2024-01-01"), ("2024", "2024-01-01", "2025-01-0
 KL = dict(kl=True)
 OFFTP = dict(kl=True, kl_floor=1e9)        # key-level arrays on, but no line is ever a target
 TREND = dict(KL, kl_min_i=3, late_min=10, kl_conf_tol=0.25, re_mode=2, breach_lvltf=True)
-EA = dict(TREND, rev=True, rev_first=True, rev_touch=1, rev_tol=0.0)   # the .mq5 defaults
+EA = dict(TREND, rev=True, rev_first=True, rev_touch=1, rev_tol=0.0, rev_once=True, rev_newline=1.0)   # the .mq5 defaults
 CONFIGS = {
     "live": {},
     "TP floor 0.5": dict(KL, kl_floor=0.5),
@@ -52,7 +52,10 @@ CONFIGS = {
     "trend part + reversal within 0.25 ATR, any touch": dict(TREND, rev=True),
     "trend part + reversal within 0.25 ATR, first touch": dict(TREND, rev=True, rev_first=True),
     "trend part + reversal on a real M1 touch, any touch": dict(TREND, rev=True, rev_touch=1, rev_tol=0.0),
-    "EA default: trend part + reversal on a real M1 touch, first touch": EA,
+    "trend part + reversal on a real M1 touch, first touch (repeat fades allowed)": dict(EA, rev_once=False),
+    "EA default: trend part + reversal on a real touch, first touch, once per line": EA,
+    "EA default, new line at 0.5 ATR": dict(EA, rev_newline=0.5),
+    "EA default, new line at 2.0 ATR": dict(EA, rev_newline=2.0),
     "EA default, reversal stop 2 ATR": dict(EA, rev_stop=2.0),
     "EA default, reversal R:R >= 1": dict(EA, rev_min_rr=1.0),
     "EA default, reversal M15 only": dict(EA, rev_max_lv=1),
@@ -63,7 +66,7 @@ CONFIGS = {
 }
 ROLL = ["live", "TP floor 1.0", "TP + lock: realign", "TP + lock: level-TF close beyond",
         "trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock", "trend part with M30+ lines",
-        "trend part + reversal within 0.25 ATR, first touch", "EA default: trend part + reversal on a real M1 touch, first touch",
+        "trend part + reversal within 0.25 ATR, first touch", "EA default: trend part + reversal on a real touch, first touch, once per line",
         "EA default, D1+ lines", "EA, touch = the line's own candle (InpRevTouchMode 2), first touch",
         "D1+ lines + level-TF lock"]
 FIXED = np.zeros((3, 5))
@@ -124,7 +127,7 @@ def events(s):
     """Every key-level TP of the 'TP floor 1.0' run at a fixed lot: which TF's line it was, and what price did
     next, in ATR(tier) units: the further run in the trade's direction and the retrace against it, over the
     next 4 and 16 tier bars, and how often the level TF's next closed bar ended beyond the line."""
-    KLv, KLC, KLA, KLB, KLE = s.klarrays(True)
+    KLv, KLC, KLA, KLB = s.klarrays(True)[:4]
     T, _, _ = s.run(START, END, 100000.0, risk=FIXED, kl=True, kl_floor=1.0)
     T = T[T.reason == "key-level TP"]
     h, l, c = s.h, s.l, s.c
@@ -184,7 +187,7 @@ def placebo(s):
     keep = dict(CONFIGS)
     names = ["live", "TP floor 1.0", "TP + lock: level-TF close beyond", "D1+ lines + level-TF lock",
              "trend part only: H4+ lines, TP + late 10 + H4+D1 hold + level-TF lock",
-             "EA default: trend part + reversal on a real M1 touch, first touch"]
+             "EA default: trend part + reversal on a real touch, first touch, once per line"]
     t = ""
     for tag, mult in (("real lines", 1.0), ("every line x 1.01", 1.01), ("every line x 0.99", 0.99)):
         s._kl = (real[0] * mult,) + real[1:]
